@@ -21,6 +21,8 @@ const boot = () => {
       app.updateSessions(sessionsCache, null, new Set([id]));
       client.send({ type: "selectSession", sessionId: id });
     },
+    onRename: (id: SessionId) => client.send({ type: "renameSession", sessionId: id }),
+    onResume: (id: SessionId) => client.send({ type: "resumeSession", sessionId: id }),
   });
 
   const appHost = document.getElementById("app");

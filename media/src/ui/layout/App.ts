@@ -15,6 +15,8 @@ import { renderEmptyState } from "./Empty.js";
 
 export interface AppHandlers {
   onSelect(id: SessionId): void;
+  onRename(id: SessionId): void;
+  onResume(id: SessionId): void;
 }
 
 interface SectionSignatures {
@@ -34,7 +36,7 @@ export class App {
   private readonly detailRoot: HTMLElement;
   private readonly emptyHost: HTMLElement;
 
-  private readonly detailHeader = new DetailHeaderView();
+  private readonly detailHeader: DetailHeaderView;
   private readonly summaryCards = new SummaryCardsView();
   private readonly chartsRow = new ChartsRowView();
   private readonly costChart = new CostChartView();
@@ -49,6 +51,15 @@ export class App {
     this.root = h("div", { className: "app-shell" });
     this.sidebar = new Sidebar(store, { onSelect: handlers.onSelect });
     this.sidebar.mount(this.root);
+
+    this.detailHeader = new DetailHeaderView({
+      onRename: () => {
+        if (this.currentDetail) handlers.onRename(this.currentDetail.session_id);
+      },
+      onResume: () => {
+        if (this.currentDetail) handlers.onResume(this.currentDetail.session_id);
+      },
+    });
 
     this.timeline = new Timeline(store, () => {
       if (this.currentDetail) this.timeline.update(this.currentDetail);

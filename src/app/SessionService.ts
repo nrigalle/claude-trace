@@ -15,10 +15,17 @@ import {
 } from "../infra/fs/SessionFileReader";
 import { discoverSessionRefs, type SessionRef } from "../infra/fs/paths";
 
+export interface SessionTitleOverrides {
+  get(id: SessionId): string | null;
+}
+
 export class SessionService {
   private refs: Map<SessionId, SessionRef> = new Map();
 
-  constructor(private readonly reader: SessionFileReader) {}
+  constructor(
+    private readonly reader: SessionFileReader,
+    private readonly overrides?: SessionTitleOverrides,
+  ) {}
 
   invalidate(id: SessionId): void {
     this.reader.invalidate(id);
@@ -27,6 +34,10 @@ export class SessionService {
   invalidateAll(): void {
     this.reader.invalidateAll();
     this.refs.clear();
+  }
+
+  cwdFor(id: SessionId): string | null {
+    return this.refs.get(id)?.filePath ? this.detail(id)?.cwd ?? null : null;
   }
 
   list(): SessionSummary[] {
@@ -39,8 +50,7 @@ export class SessionService {
       const stats = this.reader.statSafe(ref);
       if (!stats) continue;
       const events = this.reader.read(ref, stats);
-      const title = this.reader.getTitle(ref.sessionId);
-      summaries.push(summarize(ref.sessionId, events, stats.mtime, { title }));
+      summaries.push(summarize(ref.sessionId, events, stats.mtime, { title: this.titleFor(ref.sessionId) }));
     }
 
     summaries.sort((a, b) => sortKey(b) - sortKey(a));
@@ -53,8 +63,7 @@ export class SessionService {
     const stats = this.reader.statSafe(ref);
     if (!stats) return null;
     const events = this.reader.read(ref, stats);
-    const title = this.reader.getTitle(id);
-    const summary = summarize(id, events, stats.mtime, { title });
+    const summary = summarize(id, events, stats.mtime, { title: this.titleFor(id) });
     return {
       ...summary,
       events,
@@ -66,6 +75,10 @@ export class SessionService {
 
   stats(sessions: readonly SessionSummary[]): GlobalStats {
     return computeStats(sessions);
+  }
+
+  private titleFor(id: SessionId): string | null {
+    return this.overrides?.get(id) ?? this.reader.getTitle(id);
   }
 }
 

@@ -1,5 +1,11 @@
 import type { SessionDetail } from "../../../../src/domain/types";
 import { h } from "../h.js";
+import { icon } from "../icons.js";
+
+export interface DetailHeaderActions {
+  onRename(): void;
+  onResume(): void;
+}
 
 export class DetailHeaderView {
   private readonly root: HTMLElement;
@@ -7,21 +13,54 @@ export class DetailHeaderView {
   private readonly modelBadge: HTMLSpanElement;
   private readonly subtitleEl: HTMLElement;
   private readonly pathEl: HTMLElement;
+  private readonly renameBtn: HTMLButtonElement;
+  private readonly resumeBtn: HTMLButtonElement;
+  private hasDetail = false;
 
-  constructor() {
+  constructor(private readonly actions: DetailHeaderActions) {
     this.titleEl = h("h2", {});
     this.modelBadge = h("span", { className: "model-badge" });
     this.modelBadge.hidden = true;
     this.subtitleEl = h("div", { className: "detail-subtitle" });
     this.pathEl = h("div", { className: "detail-path" });
 
+    this.renameBtn = h(
+      "button",
+      {
+        className: "detail-action-btn",
+        attrs: { type: "button", "aria-label": "Rename session" },
+        on: { click: () => this.actions.onRename() },
+      },
+      icon("edit", 14),
+      h("span", { textContent: "Rename" }),
+    );
+
+    this.resumeBtn = h(
+      "button",
+      {
+        className: "detail-action-btn primary",
+        attrs: { type: "button", "aria-label": "Resume session in a new terminal" },
+        on: { click: () => this.actions.onResume() },
+      },
+      icon("play", 14),
+      h("span", { textContent: "Resume" }),
+    );
+
+    const titleRow = h(
+      "div",
+      { className: "detail-title-row" },
+      h("div", { className: "detail-title" }, this.titleEl, this.modelBadge),
+      h("div", { className: "detail-actions" }, this.renameBtn, this.resumeBtn),
+    );
+
     this.root = h(
       "header",
       { className: "detail-header" },
-      h("div", { className: "detail-title" }, this.titleEl, this.modelBadge),
+      titleRow,
       this.subtitleEl,
       this.pathEl,
     );
+    this.setActionsEnabled(false);
   }
 
   element(): HTMLElement {
@@ -47,5 +86,15 @@ export class DetailHeaderView {
 
     const path = d.cwd ?? d.session_id;
     if (this.pathEl.textContent !== path) this.pathEl.textContent = path;
+
+    if (!this.hasDetail) {
+      this.hasDetail = true;
+      this.setActionsEnabled(true);
+    }
+  }
+
+  private setActionsEnabled(enabled: boolean): void {
+    this.renameBtn.disabled = !enabled;
+    this.resumeBtn.disabled = !enabled;
   }
 }

@@ -6,9 +6,15 @@ import type {
   WatcherChange,
 } from "../infra/fs/SessionDirectoryWatcher";
 import type { SerializedState } from "../infra/vscode/PanelSerializer";
+import type { WebviewToHost } from "../protocol";
 import { assertNever } from "../protocol";
 import type { SessionService } from "./SessionService";
 import { RefreshScheduler } from "./RefreshScheduler";
+
+export interface DashboardActions {
+  renameSession(id: SessionId): Promise<void>;
+  resumeSession(id: SessionId, cwd: string | null): void;
+}
 
 export class DashboardController {
   private readonly disposables: vscode.Disposable[] = [];
@@ -23,6 +29,7 @@ export class DashboardController {
     private readonly host: WebviewHost,
     private readonly service: SessionService,
     private readonly watcher: SessionDirectoryWatcher,
+    private readonly actions: DashboardActions,
     initialState?: SerializedState,
   ) {
     if (initialState?.selectedId) {
@@ -35,7 +42,7 @@ export class DashboardController {
     });
 
     this.disposables.push(this.watcher.onChange((c) => this.onWatcherChange(c)));
-    this.disposables.push(this.host.onMessage((msg) => this.onMessage(msg)));
+    this.disposables.push(this.host.onMessage((msg) => this.onMessage(msg as WebviewToHost)));
     this.disposables.push(this.host.onViewStateChange(() => this.onViewStateChange()));
     this.disposables.push(this.host.onDispose(() => this.dispose()));
     this.sendInitialPayload();
@@ -52,15 +59,9 @@ export class DashboardController {
   }
 
   private onWatcherChange(change: WatcherChange): void {
-    if (change.kind === "removed") {
-      this.service.invalidate(change.sessionId);
-      this.dirtySessions.add(change.sessionId);
-      this.listDirty = true;
-    } else {
-      this.service.invalidate(change.sessionId);
-      this.dirtySessions.add(change.sessionId);
-      if (change.kind === "added") this.listDirty = true;
-    }
+    this.service.invalidate(change.sessionId);
+    this.dirtySessions.add(change.sessionId);
+    if (change.kind === "added" || change.kind === "removed") this.listDirty = true;
     this.scheduler.schedule();
   }
 
@@ -69,19 +70,33 @@ export class DashboardController {
     else this.scheduler.notifyHidden();
   }
 
-  private onMessage(msg: { type: string; sessionId?: SessionId | null }): void {
+  private onMessage(msg: WebviewToHost): void {
     switch (msg.type) {
       case "ready":
         this.sendInitialPayload();
         if (this.activeSessionId) this.sendSessionDetail(this.activeSessionId);
         return;
       case "selectSession":
-        this.activeSessionId = msg.sessionId ?? null;
+        this.activeSessionId = msg.sessionId;
         if (this.activeSessionId) this.sendSessionDetail(this.activeSessionId);
         return;
-      default:
+      case "renameSession":
+        void this.handleRename(msg.sessionId);
         return;
+      case "resumeSession":
+        this.actions.resumeSession(msg.sessionId, this.service.detail(msg.sessionId)?.cwd ?? null);
+        return;
+      default:
+        return assertNever(msg);
     }
+  }
+
+  private async handleRename(id: SessionId): Promise<void> {
+    await this.actions.renameSession(id);
+    this.lastSent.delete(id);
+    this.dirtySessions.add(id);
+    this.listDirty = true;
+    if (this.host.visible) this.flush();
   }
 
   private sendInitialPayload(): void {
@@ -154,5 +169,3 @@ export class DashboardController {
     return removed;
   }
 }
-
-export const _exhaustCheck = assertNever;
