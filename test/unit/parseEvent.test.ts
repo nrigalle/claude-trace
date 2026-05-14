@@ -16,12 +16,14 @@ const assistantLine = (opts: {
   }>;
   model?: string;
   textOnly?: boolean;
+  isSidechain?: boolean;
 }) =>
   JSON.stringify({
     type: "assistant",
     timestamp: opts.ts ?? "2026-05-01T10:00:00Z",
     cwd: "/p",
     sessionId: "s",
+    isSidechain: opts.isSidechain ?? false,
     message: {
       model: opts.model ?? "claude-opus-4-7",
       content: opts.textOnly
@@ -280,6 +282,88 @@ describe("parseNativeLine — user messages", () => {
       ctx(),
     );
     expect(events[0]!.error).not.toBeNull();
+  });
+});
+
+describe("parseNativeLine — sidechain isolation", () => {
+  it("sidechain assistant turn still emits tool_use events", () => {
+    const events = parseNativeLine(
+      assistantLine({ tools: [{ name: "Read" }], isSidechain: true }),
+      ctx(),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.event).toBe("PostToolUse");
+  });
+
+  it("sidechain assistant turn does NOT emit a context_window snapshot", () => {
+    const events = parseNativeLine(
+      assistantLine({ tools: [{ name: "Read" }], isSidechain: true }),
+      ctx(),
+    );
+    expect(events[0]!.context_window).toBeNull();
+  });
+
+  it("main-thread turns continue to emit context_window snapshots", () => {
+    const events = parseNativeLine(
+      assistantLine({ tools: [{ name: "Read" }], isSidechain: false }),
+      ctx(),
+    );
+    expect(events[0]!.context_window).not.toBeNull();
+  });
+
+  it("sidechain usage still accumulates into total cost", () => {
+    const c = ctx();
+    parseNativeLine(assistantLine({ isSidechain: true, usage: { input_tokens: 1000, output_tokens: 500 } }), c);
+    expect(c.totalCostUsd).toBeGreaterThan(0);
+  });
+
+  it("sidechain usage does NOT inflate maxTotalInputTokens", () => {
+    const c = ctx();
+    parseNativeLine(
+      assistantLine({ isSidechain: true, usage: { input_tokens: 500_000 } }),
+      c,
+    );
+    expect(c.maxTotalInputTokens).toBe(0);
+  });
+});
+
+describe("parseNativeLine — line diff aggregation", () => {
+  it("Edit tool_use rolls lines into ParseContext and cost snapshot", () => {
+    const c = ctx();
+    const events = parseNativeLine(
+      assistantLine({
+        tools: [{ name: "Edit", input: { old_string: "a\nb", new_string: "x\ny\nz" } }],
+      }),
+      c,
+    );
+    expect(c.totalLinesAdded).toBe(3);
+    expect(c.totalLinesRemoved).toBe(2);
+    expect(events[0]!.cost?.total_lines_added).toBe(3);
+    expect(events[0]!.cost?.total_lines_removed).toBe(2);
+  });
+
+  it("multiple edits across turns accumulate", () => {
+    const c = ctx();
+    parseNativeLine(
+      assistantLine({ tools: [{ name: "Write", input: { content: "1\n2\n3" } }] }),
+      c,
+    );
+    parseNativeLine(
+      assistantLine({ tools: [{ name: "Edit", input: { old_string: "x", new_string: "y" } }] }),
+      c,
+    );
+    expect(c.totalLinesAdded).toBe(4);
+    expect(c.totalLinesRemoved).toBe(1);
+  });
+
+  it("Bash and Read do not contribute to line counts", () => {
+    const c = ctx();
+    parseNativeLine(
+      assistantLine({ tools: [{ name: "Bash", input: { command: "ls" } }, { name: "Read", input: { file_path: "/x" } }] }),
+      c,
+    );
+    expect(c.totalLinesAdded).toBe(0);
+    expect(c.totalLinesRemoved).toBe(0);
   });
 });
 

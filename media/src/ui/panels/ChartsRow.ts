@@ -1,22 +1,30 @@
 import type { SessionDetail, ToolStat } from "../../../../src/domain/types";
-import { renderAreaChart } from "../charts/AreaChart.js";
+import { AreaChart } from "../charts/AreaChart.js";
 import { h } from "../h.js";
 import { icon, getToolColor } from "../icons.js";
 
-const DONUT_NS = "http://www.w3.org/2000/svg";
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 export class ContextChartView {
-  private readonly root: HTMLElement;
-  private readonly canvas: HTMLCanvasElement;
-  private readonly body: HTMLElement;
+  readonly root: HTMLElement;
+  private readonly chart = new AreaChart(
+    {
+      maxYClamp: 100,
+      maxYStep: 10,
+      warnLine: 80,
+      stroke: "#d97757",
+      fillTop: "rgba(217, 119, 87, 0.25)",
+      fillBottom: "rgba(217, 119, 87, 0)",
+      yLabel: (v) => `${v}%`,
+      tooltipValue: (v) => `${Math.round(v)}%`,
+    },
+    "Context usage chart",
+  );
   private readonly empty: HTMLElement;
 
   constructor() {
-    this.canvas = h("canvas", { attrs: { role: "img", "aria-label": "Context usage chart" } });
-    this.body = h("div", { className: "chart-body" }, this.canvas);
     this.empty = h("div", { className: "no-data-msg", textContent: "Not enough context data" });
     this.empty.hidden = true;
-
     this.root = h(
       "section",
       { className: "chart-card", attrs: { "aria-label": "Context window usage over time" } },
@@ -24,7 +32,7 @@ export class ContextChartView {
         icon("cpu", 14),
         h("span", { className: "chart-title", textContent: "Context Usage" }),
       ),
-      this.body,
+      this.chart.element(),
       this.empty,
     );
   }
@@ -35,33 +43,33 @@ export class ContextChartView {
 
   update(d: SessionDetail): void {
     if (d.context_timeline.length < 2) {
-      this.body.hidden = true;
+      this.chart.element().hidden = true;
       this.empty.hidden = false;
       return;
     }
-    this.body.hidden = false;
+    this.chart.element().hidden = false;
     this.empty.hidden = true;
-    renderAreaChart(this.canvas, d.context_timeline, {
-      maxYClamp: 100,
-      maxYStep: 10,
-      warnLine: 80,
-      stroke: "#d97757",
-      fillTop: "rgba(217, 119, 87, 0.25)",
-      fillBottom: "rgba(217, 119, 87, 0)",
-      yLabel: (v) => `${v}%`,
-    });
+    this.chart.update(d.context_timeline);
   }
 }
 
 export class CostChartView {
-  private readonly root: HTMLElement;
-  private readonly canvas: HTMLCanvasElement;
-  private readonly body: HTMLElement;
+  readonly root: HTMLElement;
+  private readonly chart = new AreaChart(
+    {
+      maxYClamp: Number.POSITIVE_INFINITY,
+      maxYStep: 0.01,
+      warnLine: null,
+      stroke: "#10b981",
+      fillTop: "rgba(16, 185, 129, 0.2)",
+      fillBottom: "rgba(16, 185, 129, 0)",
+      yLabel: (v) => `$${v.toFixed(2)}`,
+      tooltipValue: (v) => `$${v.toFixed(2)}`,
+    },
+    "Cost timeline chart",
+  );
 
   constructor() {
-    this.canvas = h("canvas", { attrs: { role: "img", "aria-label": "Cost timeline chart" } });
-    this.body = h("div", { className: "chart-body" }, this.canvas);
-
     this.root = h(
       "section",
       {
@@ -73,7 +81,7 @@ export class CostChartView {
         icon("dollar", 14),
         h("span", { className: "chart-title", textContent: "Cumulative Cost" }),
       ),
-      this.body,
+      this.chart.element(),
     );
     this.root.hidden = true;
   }
@@ -88,27 +96,19 @@ export class CostChartView {
       return;
     }
     this.root.hidden = false;
-    renderAreaChart(this.canvas, d.cost_timeline, {
-      maxYClamp: Number.POSITIVE_INFINITY,
-      maxYStep: 0.01,
-      warnLine: null,
-      stroke: "#10b981",
-      fillTop: "rgba(16, 185, 129, 0.2)",
-      fillBottom: "rgba(16, 185, 129, 0)",
-      yLabel: (v) => `$${v.toFixed(2)}`,
-    });
+    this.chart.update(d.cost_timeline);
   }
 }
 
 export class DonutView {
-  private readonly root: HTMLElement;
+  readonly root: HTMLElement;
   private readonly svg: SVGSVGElement;
   private readonly legend: HTMLElement;
   private readonly empty: HTMLElement;
   private readonly distWrap: HTMLElement;
 
   constructor() {
-    this.svg = document.createElementNS(DONUT_NS, "svg");
+    this.svg = document.createElementNS(SVG_NS, "svg");
     this.svg.setAttribute("width", "140");
     this.svg.setAttribute("height", "140");
     this.svg.setAttribute("viewBox", "0 0 140 140");
@@ -152,17 +152,16 @@ export class DonutView {
 
   private renderDonut(stats: readonly ToolStat[]): void {
     while (this.svg.firstChild) this.svg.removeChild(this.svg.firstChild);
+    const totalCount = total(stats);
     const label = stats
-      .map((t) => `${t.name} ${Math.round((t.count / total(stats)) * 100)}%`)
+      .map((t) => `${t.name} ${Math.round((t.count / totalCount) * 100)}%`)
       .join(", ");
     this.svg.setAttribute("aria-label", `Tool distribution: ${label}`);
 
     const cx = 70, cy = 70, r = 48, inner = 32;
     let angle = -90;
-    const t = total(stats);
     for (const stat of stats) {
-      const pct = stat.count / t;
-      const sweep = pct * 360;
+      const sweep = (stat.count / totalCount) * 360;
       const startRad = (angle * Math.PI) / 180;
       const endRad = ((angle + sweep) * Math.PI) / 180;
       const largeArc = sweep > 180 ? 1 : 0;
@@ -175,7 +174,7 @@ export class DonutView {
       const ix2 = cx + inner * Math.cos(startRad);
       const iy2 = cy + inner * Math.sin(startRad);
 
-      const path = document.createElementNS(DONUT_NS, "path");
+      const path = document.createElementNS(SVG_NS, "path");
       path.setAttribute(
         "d",
         `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} L ${ix1} ${iy1} A ${inner} ${inner} 0 ${largeArc} 0 ${ix2} ${iy2} Z`,
@@ -189,9 +188,9 @@ export class DonutView {
 
   private renderLegend(stats: readonly ToolStat[]): void {
     while (this.legend.firstChild) this.legend.removeChild(this.legend.firstChild);
-    const t = total(stats);
+    const totalCount = total(stats);
     for (const stat of stats) {
-      const pct = ((stat.count / t) * 100).toFixed(1);
+      const pct = ((stat.count / totalCount) * 100).toFixed(1);
       this.legend.appendChild(
         h(
           "div",
@@ -220,7 +219,7 @@ export class DonutView {
 const total = (stats: readonly ToolStat[]): number => stats.reduce((s, t) => s + t.count, 0);
 
 export class ChartsRowView {
-  private readonly root: HTMLElement;
+  readonly root: HTMLElement;
   private readonly contextChart = new ContextChartView();
   private readonly donut = new DonutView();
 

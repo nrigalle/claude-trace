@@ -1,9 +1,11 @@
 import type { SessionId } from "../../../src/domain/types";
 
+export type TimelineFilter = "all" | "tools" | "errors";
+
 export interface UiState {
   selectedId: SessionId | null;
   searchQuery: string;
-  timelineFilter: "all" | "tools" | "lifecycle" | "errors";
+  timelineFilter: TimelineFilter;
   expandedEvent: number | null;
   mainScroll: number;
   timelineScroll: number;
@@ -26,6 +28,9 @@ const DEFAULTS: UiState = {
   timelineScroll: 0,
 };
 
+const normalizeFilter = (value: unknown): TimelineFilter =>
+  value === "tools" || value === "errors" ? value : "all";
+
 export class Store {
   readonly vscode: VsCodeApi;
   private current: UiState;
@@ -35,7 +40,11 @@ export class Store {
   constructor() {
     this.vscode = acquireVsCodeApi();
     const saved = this.vscode.getState() as Partial<UiState> | undefined;
-    this.current = { ...DEFAULTS, ...(saved ?? {}) };
+    this.current = {
+      ...DEFAULTS,
+      ...(saved ?? {}),
+      timelineFilter: normalizeFilter(saved?.timelineFilter),
+    };
   }
 
   get state(): Readonly<UiState> {

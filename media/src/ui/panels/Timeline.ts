@@ -7,7 +7,7 @@ import type { Store } from "../../state/Store.js";
 const ROW_HEIGHT = 56;
 const OVERSCAN = 6;
 
-export type TimelineFilter = "all" | "tools" | "lifecycle" | "errors";
+export type TimelineFilter = "all" | "tools" | "errors";
 
 export class Timeline {
   private readonly root: HTMLElement;
@@ -79,7 +79,7 @@ export class Timeline {
   update(d: SessionDetail): void {
     this.startedAt = d.started_at ?? 0;
     this.filtered = filterEvents(d.events, this.store.state.timelineFilter);
-    this.renderFilters(d.events.length);
+    this.renderFilters(visibleCount(d.events));
     this.spacer.style.height = `${this.filtered.length * ROW_HEIGHT}px`;
 
     queueMicrotask(() => {
@@ -99,7 +99,6 @@ export class Timeline {
     const filters: { value: TimelineFilter; label: string }[] = [
       { value: "all", label: `All ${totalCount}` },
       { value: "tools", label: "Tools" },
-      { value: "lifecycle", label: "Lifecycle" },
       { value: "errors", label: "Errors" },
     ];
     for (const f of filters) {
@@ -276,16 +275,16 @@ export class Timeline {
   }
 }
 
+const isVisibleEvent = (e: TraceEvent): boolean =>
+  e.event === "PostToolUse" || (e.event === "Metrics" && e.error !== null);
+
+const visibleCount = (events: readonly TraceEvent[]): number =>
+  events.reduce((n, e) => (isVisibleEvent(e) ? n + 1 : n), 0);
+
 const filterEvents = (events: readonly TraceEvent[], filter: TimelineFilter): readonly TraceEvent[] => {
-  const visible = events.filter((e) => e.event !== "Metrics" && e.event !== "PreToolUse");
-  if (filter === "all") return visible;
+  const visible = events.filter(isVisibleEvent);
   if (filter === "tools") return visible.filter((e) => e.event === "PostToolUse");
-  if (filter === "lifecycle") {
-    return visible.filter((e) =>
-      ["SessionStart", "SessionEnd", "Stop", "PreCompact", "PostCompact"].includes(e.event),
-    );
-  }
-  if (filter === "errors") return visible.filter((e) => e.event === "StopFailure" || !!e.error);
+  if (filter === "errors") return visible.filter((e) => e.error !== null);
   return visible;
 };
 

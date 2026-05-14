@@ -1,9 +1,12 @@
+import { lineDiffFromToolInput } from "./lineDiff";
 import { estimateUsageCost, type Usage } from "./pricing";
 import type { ContextSnapshot, CostSnapshot, SessionId, ToolInput, TraceEvent } from "./types";
 
 export interface ParseContext {
   sessionId: SessionId;
   totalCostUsd: number;
+  totalLinesAdded: number;
+  totalLinesRemoved: number;
   lastInputTokens: number;
   lastOutputTokens: number;
   lastCacheReadTokens: number;
@@ -17,6 +20,8 @@ export interface ParseContext {
 export const createParseContext = (sessionId: SessionId): ParseContext => ({
   sessionId,
   totalCostUsd: 0,
+  totalLinesAdded: 0,
+  totalLinesRemoved: 0,
   lastInputTokens: 0,
   lastOutputTokens: 0,
   lastCacheReadTokens: 0,
@@ -51,10 +56,11 @@ export const parseNativeLine = (line: string, ctx: ParseContext): TraceEvent[] =
   if (!Number.isFinite(ts)) return [];
 
   const cwd = typeof raw["cwd"] === "string" ? (raw["cwd"] as string) : null;
+  const isSidechain = raw["isSidechain"] === true;
   const message = raw["message"];
 
   if (type === "assistant" && isObject(message)) {
-    return parseAssistant(ts, cwd, message, ctx);
+    return parseAssistant(ts, cwd, isSidechain, message, ctx);
   }
 
   if (type === "user" && isObject(message)) {
@@ -68,6 +74,7 @@ export const parseNativeLine = (line: string, ctx: ParseContext): TraceEvent[] =
 const parseAssistant = (
   ts: number,
   cwd: string | null,
+  isSidechain: boolean,
   message: Record<string, unknown>,
   ctx: ParseContext,
 ): TraceEvent[] => {
@@ -75,7 +82,6 @@ const parseAssistant = (
   if (model) ctx.lastModel = model;
 
   const usage = isObject(message["usage"]) ? (message["usage"] as Record<string, unknown>) : null;
-  let costSnapshot: CostSnapshot | null = null;
   let contextSnapshot: ContextSnapshot | null = null;
 
   if (usage) {
@@ -91,25 +97,24 @@ const parseAssistant = (
     ctx.lastCacheReadTokens = u.cache_read_input_tokens;
     ctx.lastCacheWriteTokens = u.cache_creation_input_tokens;
 
-    const used =
-      u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens;
-    if (used > ctx.maxTotalInputTokens) ctx.maxTotalInputTokens = used;
+    if (!isSidechain) {
+      const used =
+        u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens;
+      if (used > ctx.maxTotalInputTokens) ctx.maxTotalInputTokens = used;
 
-    const contextSize = effectiveContextSize(ctx.lastModel ?? "", ctx.maxTotalInputTokens);
-    const pct = contextSize > 0 ? Math.min((used / contextSize) * 100, 100) : 0;
-    contextSnapshot = {
-      used_percentage: pct,
-      remaining_percentage: 100 - pct,
-      total_input_tokens: used,
-      total_output_tokens: u.output_tokens,
-      context_window_size: contextSize,
-    };
-    costSnapshot = { total_cost_usd: ctx.totalCostUsd };
+      const contextSize = effectiveContextSize(ctx.lastModel ?? "", ctx.maxTotalInputTokens);
+      const pct = contextSize > 0 ? Math.min((used / contextSize) * 100, 100) : 0;
+      contextSnapshot = {
+        used_percentage: pct,
+        remaining_percentage: 100 - pct,
+        total_input_tokens: used,
+        total_output_tokens: u.output_tokens,
+        context_window_size: contextSize,
+      };
+    }
   }
 
-  const modelInfo = model
-    ? { id: model, display_name: humanizeModel(model) }
-    : null;
+  const modelInfo = model ? { id: model, display_name: humanizeModel(model) } : null;
   const sessionId = ctx.sessionId;
   const content = Array.isArray(message["content"]) ? (message["content"] as unknown[]) : [];
   const toolUses: TraceEvent[] = [];
@@ -119,9 +124,12 @@ const parseAssistant = (
     if (block["type"] !== "tool_use") continue;
     const toolName = typeof block["name"] === "string" ? (block["name"] as string) : null;
     if (!toolName) continue;
-    const toolInput = isObject(block["input"])
-      ? sanitizeInput(block["input"] as Record<string, unknown>)
-      : null;
+    const rawInput = isObject(block["input"]) ? (block["input"] as Record<string, unknown>) : null;
+    if (rawInput) {
+      const diff = lineDiffFromToolInput(toolName, rawInput);
+      ctx.totalLinesAdded += diff.added;
+      ctx.totalLinesRemoved += diff.removed;
+    }
 
     toolUses.push({
       ts,
@@ -129,11 +137,11 @@ const parseAssistant = (
       session_id: sessionId,
       cwd,
       tool_name: toolName,
-      tool_input: toolInput,
+      tool_input: rawInput ? sanitizeInput(rawInput) : null,
       tool_result: null,
       stop_reason: null,
       model: modelInfo,
-      cost: costSnapshot,
+      cost: buildCostSnapshot(ctx),
       context_window: contextSnapshot,
       tokens_freed: null,
       error: null,
@@ -154,12 +162,23 @@ const parseAssistant = (
       stop_reason:
         typeof message["stop_reason"] === "string" ? (message["stop_reason"] as string) : null,
       model: modelInfo,
-      cost: costSnapshot,
+      cost: buildCostSnapshot(ctx),
       context_window: contextSnapshot,
       tokens_freed: null,
       error: null,
     },
   ];
+};
+
+const buildCostSnapshot = (ctx: ParseContext): CostSnapshot | null => {
+  if (ctx.totalCostUsd === 0 && ctx.totalLinesAdded === 0 && ctx.totalLinesRemoved === 0) {
+    return null;
+  }
+  return {
+    total_cost_usd: ctx.totalCostUsd,
+    total_lines_added: ctx.totalLinesAdded,
+    total_lines_removed: ctx.totalLinesRemoved,
+  };
 };
 
 const parseUser = (
@@ -274,4 +293,3 @@ const humanizeModel = (model: string): string => {
   }
   return model;
 };
-
