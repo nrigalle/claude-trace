@@ -367,15 +367,42 @@ body {
 
 .detail-header {
   margin-bottom: 20px;
+  padding: 18px 20px;
+  background: linear-gradient(180deg, var(--ct-bg-1), color-mix(in srgb, var(--ct-bg-1) 80%, transparent));
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius);
+  position: relative;
+  overflow: hidden;
 }
 
-.detail-title-row {
+.detail-header::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--ct-claude);
+  opacity: 0.85;
+}
+
+.detail-top-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
+}
+
+.detail-title-text {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ct-text-primary);
+  letter-spacing: -0.01em;
+  margin: 0;
+  word-break: break-word;
+  flex: 1;
+  min-width: 0;
 }
 
 .detail-actions {
@@ -431,37 +458,56 @@ body {
   height: 14px;
 }
 
-.detail-title {
+.detail-meta-row {
   display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.meta-chip {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 4px;
-}
-
-.detail-title h2 {
-  font-size: 17px;
-  font-weight: 600;
-}
-
-.model-badge {
-  font-size: 11px;
-  font-family: var(--ct-mono);
-  padding: 2px 8px;
-  border-radius: 6px;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
   background: var(--ct-bg-2);
+  border: 1px solid var(--ct-border);
+  font-size: 11px;
   color: var(--ct-text-secondary);
+  white-space: nowrap;
+  font-family: var(--ct-font);
 }
 
-.detail-subtitle {
-  font-size: 13px;
-  color: var(--ct-text-secondary);
-  margin-bottom: 2px;
+.meta-chip svg {
+  width: 11px;
+  height: 11px;
+  opacity: 0.75;
+}
+
+.meta-chip.model {
+  background: rgba(217, 119, 87, 0.12);
+  border-color: rgba(217, 119, 87, 0.28);
+  color: var(--ct-claude);
+}
+
+.meta-chip.model svg {
+  opacity: 1;
+}
+
+.meta-chip-label {
+  font-weight: 500;
 }
 
 .detail-path {
-  font-size: 12px;
+  margin-top: 8px;
+  font-size: 11px;
   font-family: var(--ct-mono);
-  color: var(--ct-text-secondary);
+  color: var(--ct-text-muted);
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Summary Cards */

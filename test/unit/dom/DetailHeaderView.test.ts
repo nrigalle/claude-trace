@@ -37,7 +37,7 @@ describe("DetailHeaderView — display", () => {
     expect(view.element().querySelector(".detail-path")).toBe(path);
   });
 
-  it("shows aiTitle when present", () => {
+  it("shows the AI title when present", () => {
     const view = new DetailHeaderView(noopActions);
     view.update(baseDetail({ title: "Plan the migration" }));
     expect(view.element().querySelector("h2")!.textContent).toBe("Plan the migration");
@@ -49,26 +49,54 @@ describe("DetailHeaderView — display", () => {
     expect(view.element().querySelector("h2")!.textContent).toContain("Session");
   });
 
-  it("hides model badge when no model present", () => {
+  it("hides model chip when no model present", () => {
     const view = new DetailHeaderView(noopActions);
     view.update(baseDetail({ model: null }));
-    const badge = view.element().querySelector(".model-badge") as HTMLElement;
-    expect(badge.hidden).toBe(true);
+    const chip = view.element().querySelector(".meta-chip.model") as HTMLElement;
+    expect(chip.hidden).toBe(true);
   });
 
-  it("shows model badge when display_name present", () => {
+  it("shows model chip with display name", () => {
     const view = new DetailHeaderView(noopActions);
     view.update(baseDetail({ model: { display_name: "Claude Opus 4.7" } }));
-    const badge = view.element().querySelector(".model-badge") as HTMLElement;
-    expect(badge.hidden).toBe(false);
-    expect(badge.textContent).toBe("Claude Opus 4.7");
+    const chip = view.element().querySelector(".meta-chip.model") as HTMLElement;
+    expect(chip.hidden).toBe(false);
+    expect(chip.querySelector(".meta-chip-label")!.textContent).toBe("Claude Opus 4.7");
   });
 
-  it("hides subtitle when no cwd", () => {
+  it("hides full path when cwd is null", () => {
     const view = new DetailHeaderView(noopActions);
     view.update(baseDetail({ cwd: null }));
-    const subtitle = view.element().querySelector(".detail-subtitle") as HTMLElement;
-    expect(subtitle.hidden).toBe(true);
+    const path = view.element().querySelector(".detail-path") as HTMLElement;
+    expect(path.hidden).toBe(true);
+  });
+
+  it("renders full path when cwd is set", () => {
+    const view = new DetailHeaderView(noopActions);
+    view.update(baseDetail({ cwd: "/home/x/p" }));
+    const path = view.element().querySelector(".detail-path") as HTMLElement;
+    expect(path.hidden).toBe(false);
+    expect(path.textContent).toBe("/home/x/p");
+  });
+});
+
+describe("DetailHeaderView — time-ago chip", () => {
+  it("shows the relative time since ended_at", () => {
+    const view = new DetailHeaderView(noopActions);
+    const fiveMinutesAgo = Date.now() - 5 * 60_000;
+    view.update(baseDetail({ ended_at: fiveMinutesAgo }));
+    const chips = view.element().querySelectorAll(".meta-chip");
+    const timeChip = chips[chips.length - 1] as HTMLElement;
+    expect(timeChip.hidden).toBe(false);
+    expect(timeChip.textContent).toContain("ago");
+  });
+
+  it("hides time chip when ended_at is null", () => {
+    const view = new DetailHeaderView(noopActions);
+    view.update(baseDetail({ ended_at: null }));
+    const chips = view.element().querySelectorAll(".meta-chip");
+    const timeChip = chips[chips.length - 1] as HTMLElement;
+    expect(timeChip.hidden).toBe(true);
   });
 });
 

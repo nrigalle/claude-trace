@@ -53,6 +53,13 @@ export const fmtRelativeDuration = (deltaMs: number): string => {
   return `${Math.round(h / 24)}d`;
 };
 
+export const fmtTimeAgo = (ts: number | null, now: number = Date.now()): string => {
+  if (!ts) return "";
+  const delta = now - ts;
+  if (delta < 60_000) return "just now";
+  return `${fmtRelativeDuration(delta)} ago`;
+};
+
 export const fmtPct = (n: number | null | undefined): string =>
   `${Math.round(n ?? 0)}%`;
 

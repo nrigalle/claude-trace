@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { fmtCost, fmtDuration, fmtPct, fmtTokens, shortId } from "../../media/src/ui/format";
+import {
+  fmtCost,
+  fmtDuration,
+  fmtPct,
+  fmtTimeAgo,
+  fmtTokens,
+  shortId,
+} from "../../media/src/ui/format";
 
 describe("fmtDuration boundaries", () => {
   it("ms below 1s", () => {
@@ -88,5 +95,30 @@ describe("shortId", () => {
 
   it("respects custom length", () => {
     expect(shortId("abcdefghij", 4)).toBe("abcd…");
+  });
+});
+
+describe("fmtTimeAgo", () => {
+  const now = 1_700_000_000_000;
+
+  it("returns empty string when ts is null", () => {
+    expect(fmtTimeAgo(null, now)).toBe("");
+  });
+
+  it("returns 'just now' under 60 seconds", () => {
+    expect(fmtTimeAgo(now - 5_000, now)).toBe("just now");
+    expect(fmtTimeAgo(now - 59_999, now)).toBe("just now");
+  });
+
+  it("renders minute granularity", () => {
+    expect(fmtTimeAgo(now - 5 * 60_000, now)).toBe("5m ago");
+  });
+
+  it("renders hour granularity", () => {
+    expect(fmtTimeAgo(now - 3 * 3_600_000, now)).toBe("3h ago");
+  });
+
+  it("renders day granularity", () => {
+    expect(fmtTimeAgo(now - 2 * 86_400_000, now)).toBe("2d ago");
   });
 });

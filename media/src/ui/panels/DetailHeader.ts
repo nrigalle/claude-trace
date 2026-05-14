@@ -1,27 +1,53 @@
 import type { SessionDetail } from "../../../../src/domain/types";
+import { fmtTimeAgo } from "../format.js";
 import { h } from "../h.js";
-import { icon } from "../icons.js";
+import { icon, type IconName } from "../icons.js";
 
 export interface DetailHeaderActions {
   onRename(): void;
   onResume(): void;
 }
 
+interface Chip {
+  readonly root: HTMLElement;
+  readonly label: HTMLSpanElement;
+}
+
+const buildChip = (iconName: IconName, modifier?: string): Chip => {
+  const label = h("span", { className: "meta-chip-label" });
+  const root = h(
+    "div",
+    { className: `meta-chip${modifier ? ` ${modifier}` : ""}` },
+    icon(iconName, 11),
+    label,
+  );
+  root.hidden = true;
+  return { root, label };
+};
+
+const setChip = (chip: Chip, text: string): void => {
+  if (text.length === 0) {
+    chip.root.hidden = true;
+    return;
+  }
+  if (chip.label.textContent !== text) chip.label.textContent = text;
+  chip.root.hidden = false;
+};
+
 export class DetailHeaderView {
   private readonly root: HTMLElement;
   private readonly titleEl: HTMLHeadingElement;
-  private readonly modelBadge: HTMLSpanElement;
-  private readonly subtitleEl: HTMLElement;
   private readonly pathEl: HTMLElement;
+  private readonly modelChip = buildChip("cpu", "model");
+  private readonly timeChip = buildChip("clock");
   private readonly renameBtn: HTMLButtonElement;
   private readonly resumeBtn: HTMLButtonElement;
+  private currentEndedAt: number | null = null;
+  private timeRefreshHandle: number | null = null;
   private hasDetail = false;
 
   constructor(private readonly actions: DetailHeaderActions) {
-    this.titleEl = h("h2", {});
-    this.modelBadge = h("span", { className: "model-badge" });
-    this.modelBadge.hidden = true;
-    this.subtitleEl = h("div", { className: "detail-subtitle" });
+    this.titleEl = h("h2", { className: "detail-title-text" });
     this.pathEl = h("div", { className: "detail-path" });
 
     this.renameBtn = h(
@@ -46,20 +72,28 @@ export class DetailHeaderView {
       h("span", { textContent: "Resume" }),
     );
 
-    const titleRow = h(
+    const topRow = h(
       "div",
-      { className: "detail-title-row" },
-      h("div", { className: "detail-title" }, this.titleEl, this.modelBadge),
+      { className: "detail-top-row" },
+      this.titleEl,
       h("div", { className: "detail-actions" }, this.renameBtn, this.resumeBtn),
+    );
+
+    const metaRow = h(
+      "div",
+      { className: "detail-meta-row" },
+      this.modelChip.root,
+      this.timeChip.root,
     );
 
     this.root = h(
       "header",
       { className: "detail-header" },
-      titleRow,
-      this.subtitleEl,
+      topRow,
+      metaRow,
       this.pathEl,
     );
+
     this.setActionsEnabled(false);
   }
 
@@ -72,25 +106,36 @@ export class DetailHeaderView {
     if (this.titleEl.textContent !== title) this.titleEl.textContent = title;
     this.titleEl.title = title;
 
-    const project = d.cwd ? d.cwd.split("/").pop() ?? "" : "";
-    if (this.subtitleEl.textContent !== project) this.subtitleEl.textContent = project;
-    this.subtitleEl.hidden = project.length === 0;
+    setChip(this.modelChip, d.model?.display_name ?? "");
 
-    const model = d.model?.display_name ?? null;
-    if (model) {
-      this.modelBadge.hidden = false;
-      if (this.modelBadge.textContent !== model) this.modelBadge.textContent = model;
-    } else {
-      this.modelBadge.hidden = true;
-    }
+    this.currentEndedAt = d.ended_at;
+    this.refreshTimeChip();
+    this.scheduleTimeRefresh();
 
-    const path = d.cwd ?? d.session_id;
+    const path = d.cwd ?? "";
     if (this.pathEl.textContent !== path) this.pathEl.textContent = path;
+    this.pathEl.hidden = path.length === 0;
 
     if (!this.hasDetail) {
       this.hasDetail = true;
       this.setActionsEnabled(true);
     }
+  }
+
+  dispose(): void {
+    if (this.timeRefreshHandle !== null) {
+      window.clearInterval(this.timeRefreshHandle);
+      this.timeRefreshHandle = null;
+    }
+  }
+
+  private refreshTimeChip(): void {
+    setChip(this.timeChip, fmtTimeAgo(this.currentEndedAt));
+  }
+
+  private scheduleTimeRefresh(): void {
+    if (this.timeRefreshHandle !== null) return;
+    this.timeRefreshHandle = window.setInterval(() => this.refreshTimeChip(), 30_000);
   }
 
   private setActionsEnabled(enabled: boolean): void {
