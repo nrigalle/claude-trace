@@ -1,7 +1,9 @@
+import * as path from "path";
 import * as vscode from "vscode";
 import { DashboardController, type DashboardActions } from "./app/DashboardController";
 import { SessionService } from "./app/SessionService";
 import { PROJECTS_DIR } from "./config";
+import { isAutoMemoryFile } from "./domain/memory";
 import { ensureProjectsDirExists, SessionFileReader } from "./infra/fs/SessionFileReader";
 import { SessionDirectoryWatcher } from "./infra/fs/SessionDirectoryWatcher";
 import { registerOpenDashboardCommand } from "./infra/vscode/Commands";
@@ -44,6 +46,16 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       terminal.show();
       terminal.sendText(`claude --resume ${fromSessionId(id)}`);
+    },
+    openMemoryFile(filePath: string): void {
+      if (!isAutoMemoryFile(filePath)) return;
+      void vscode.commands.executeCommand("vscode.open", vscode.Uri.file(filePath));
+    },
+    openMemoryFolder(id: SessionId): void {
+      const projectDir = service.projectDirFor(id);
+      if (!projectDir) return;
+      const memoryDir = path.join(PROJECTS_DIR, projectDir, "memory");
+      void vscode.commands.executeCommand("revealInExplorer", vscode.Uri.file(memoryDir));
     },
   };
 

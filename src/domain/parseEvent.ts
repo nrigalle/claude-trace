@@ -1,4 +1,5 @@
 import { lineDiffFromToolInput } from "./lineDiff";
+import { isAutoMemoryFile, memoryActionForTool, type RawMemoryEdit } from "./memory";
 import { estimateUsageCost, type Usage } from "./pricing";
 import type { ContextSnapshot, CostSnapshot, SessionId, ToolInput, TraceEvent } from "./types";
 
@@ -15,6 +16,7 @@ export interface ParseContext {
   lastModel: string | null;
   aiTitle: string | null;
   firstUserText: string | null;
+  memoryEdits: RawMemoryEdit[];
 }
 
 export const createParseContext = (sessionId: SessionId): ParseContext => ({
@@ -30,6 +32,7 @@ export const createParseContext = (sessionId: SessionId): ParseContext => ({
   lastModel: null,
   aiTitle: null,
   firstUserText: null,
+  memoryEdits: [],
 });
 
 export const parseNativeLine = (line: string, ctx: ParseContext): TraceEvent[] => {
@@ -129,6 +132,7 @@ const parseAssistant = (
       const diff = lineDiffFromToolInput(toolName, rawInput);
       ctx.totalLinesAdded += diff.added;
       ctx.totalLinesRemoved += diff.removed;
+      recordMemoryEdit(ctx, ts, toolName, rawInput, diff);
     }
 
     toolUses.push({
@@ -253,6 +257,21 @@ const SYNTHETIC_PREFIXES = [
   "Caveat:",
   "[Request interrupted",
 ];
+
+const recordMemoryEdit = (
+  ctx: ParseContext,
+  ts: number,
+  toolName: string,
+  input: Record<string, unknown>,
+  diff: { added: number; removed: number },
+): void => {
+  const action = memoryActionForTool(toolName);
+  if (!action) return;
+  const filePath = input["file_path"];
+  if (typeof filePath !== "string") return;
+  if (!isAutoMemoryFile(filePath)) return;
+  ctx.memoryEdits.push({ ts, filePath, added: diff.added, removed: diff.removed, action });
+};
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);

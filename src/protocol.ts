@@ -23,7 +23,9 @@ export type WebviewToHost =
   | { readonly type: "ready" }
   | { readonly type: "selectSession"; readonly sessionId: SessionId | null }
   | { readonly type: "renameSession"; readonly sessionId: SessionId }
-  | { readonly type: "resumeSession"; readonly sessionId: SessionId };
+  | { readonly type: "resumeSession"; readonly sessionId: SessionId }
+  | { readonly type: "openMemoryFile"; readonly filePath: string }
+  | { readonly type: "openMemoryFolder"; readonly sessionId: SessionId };
 
 export const assertNever = (x: never): never => {
   throw new Error(`unreachable: ${JSON.stringify(x)}`);

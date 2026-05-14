@@ -23,6 +23,8 @@ const boot = () => {
     },
     onRename: (id: SessionId) => client.send({ type: "renameSession", sessionId: id }),
     onResume: (id: SessionId) => client.send({ type: "resumeSession", sessionId: id }),
+    onOpenMemoryFile: (filePath: string) => client.send({ type: "openMemoryFile", filePath }),
+    onOpenMemoryFolder: (id: SessionId) => client.send({ type: "openMemoryFolder", sessionId: id }),
   });
 
   const appHost = document.getElementById("app");

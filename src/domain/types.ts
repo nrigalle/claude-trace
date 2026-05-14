@@ -79,11 +79,22 @@ export interface ChartPoint {
   readonly value: number;
 }
 
+export interface MemoryEditSummary {
+  readonly filePath: string;
+  readonly fileName: string;
+  readonly latestTs: number;
+  readonly count: number;
+  readonly added: number;
+  readonly removed: number;
+  readonly dominantAction: "write" | "edit" | "multiedit";
+}
+
 export interface SessionDetail extends SessionSummary {
   readonly events: readonly TraceEvent[];
   readonly tool_stats: readonly ToolStat[];
   readonly context_timeline: readonly ChartPoint[];
   readonly cost_timeline: readonly ChartPoint[];
+  readonly memory_edits: readonly MemoryEditSummary[];
 }
 
 export interface GlobalStats {

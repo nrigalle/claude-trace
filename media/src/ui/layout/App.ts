@@ -6,6 +6,7 @@ import type {
 } from "../../../../src/domain/types";
 import type { Store } from "../../state/Store.js";
 import { DetailHeaderView } from "../panels/DetailHeader.js";
+import { MemorySection } from "../panels/MemorySection.js";
 import { SummaryCardsView } from "../panels/SummaryCards.js";
 import { ChartsRowView, CostChartView } from "../panels/ChartsRow.js";
 import { Timeline } from "../panels/Timeline.js";
@@ -17,6 +18,8 @@ export interface AppHandlers {
   onSelect(id: SessionId): void;
   onRename(id: SessionId): void;
   onResume(id: SessionId): void;
+  onOpenMemoryFile(filePath: string): void;
+  onOpenMemoryFolder(id: SessionId): void;
 }
 
 interface SectionSignatures {
@@ -24,10 +27,18 @@ interface SectionSignatures {
   cards: string;
   charts: string;
   cost: string;
+  memory: string;
   timeline: string;
 }
 
-const EMPTY_SIGS: SectionSignatures = { header: "", cards: "", charts: "", cost: "", timeline: "" };
+const EMPTY_SIGS: SectionSignatures = {
+  header: "",
+  cards: "",
+  charts: "",
+  cost: "",
+  memory: "",
+  timeline: "",
+};
 
 export class App {
   readonly root: HTMLElement;
@@ -40,6 +51,7 @@ export class App {
   private readonly summaryCards = new SummaryCardsView();
   private readonly chartsRow = new ChartsRowView();
   private readonly costChart = new CostChartView();
+  private readonly memorySection: MemorySection;
   private readonly timeline: Timeline;
 
   private sigs: SectionSignatures = { ...EMPTY_SIGS };
@@ -61,6 +73,13 @@ export class App {
       },
     });
 
+    this.memorySection = new MemorySection({
+      onOpenFile: (filePath) => handlers.onOpenMemoryFile(filePath),
+      onOpenFolder: () => {
+        if (this.currentDetail) handlers.onOpenMemoryFolder(this.currentDetail.session_id);
+      },
+    });
+
     this.timeline = new Timeline(store, () => {
       if (this.currentDetail) this.timeline.update(this.currentDetail);
     });
@@ -72,6 +91,7 @@ export class App {
       this.summaryCards.element(),
       this.chartsRow.element(),
       this.costChart.element(),
+      this.memorySection.element(),
       this.timeline.element(),
     );
     this.detailRoot.hidden = true;
@@ -163,6 +183,10 @@ export class App {
       this.costChart.update(d);
       this.sigs.cost = next.cost;
     }
+    if (next.memory !== this.sigs.memory) {
+      this.memorySection.update(d);
+      this.sigs.memory = next.memory;
+    }
     if (next.timeline !== this.sigs.timeline) {
       this.timeline.update(d);
       this.sigs.timeline = next.timeline;
@@ -190,11 +214,16 @@ const computeSignatures = (d: SessionDetail): SectionSignatures => {
   const lastTs = d.events[d.events.length - 1]?.ts ?? 0;
   const timeline = `${d.events.length}|${lastTs}`;
 
+  const memory = `${d.memory_edits.length}|${d.memory_edits
+    .map((e) => `${e.filePath}:${e.count}:${e.added}:${e.removed}`)
+    .join(",")}`;
+
   return {
     header: JSON.stringify([d.title, d.cwd, d.session_id, d.model?.display_name ?? null]),
     cards,
     charts,
     cost,
+    memory,
     timeline,
   };
 };

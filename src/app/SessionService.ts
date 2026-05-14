@@ -1,4 +1,5 @@
 import { PROJECTS_DIR } from "../config";
+import { aggregateMemoryEdits } from "../domain/memory";
 import { computeStats } from "../domain/stats";
 import { summarize } from "../domain/summarize";
 import { extractContextTimeline, extractCostTimeline } from "../domain/timelines";
@@ -40,6 +41,10 @@ export class SessionService {
     return this.refs.get(id)?.filePath ? this.detail(id)?.cwd ?? null : null;
   }
 
+  projectDirFor(id: SessionId): string | null {
+    return this.refs.get(id)?.projectDirName ?? null;
+  }
+
   list(): SessionSummary[] {
     ensureProjectsDirExists(PROJECTS_DIR);
     const refs = discoverSessionRefs();
@@ -70,6 +75,7 @@ export class SessionService {
       tool_stats: computeToolStats(events),
       context_timeline: extractContextTimeline(events),
       cost_timeline: extractCostTimeline(events),
+      memory_edits: aggregateMemoryEdits(this.reader.getMemoryEdits(id)),
     };
   }
 

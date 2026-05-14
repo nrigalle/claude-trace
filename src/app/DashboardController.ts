@@ -14,6 +14,8 @@ import { RefreshScheduler } from "./RefreshScheduler";
 export interface DashboardActions {
   renameSession(id: SessionId): Promise<void>;
   resumeSession(id: SessionId, cwd: string | null): void;
+  openMemoryFile(filePath: string): void;
+  openMemoryFolder(id: SessionId): void;
 }
 
 export class DashboardController {
@@ -85,6 +87,12 @@ export class DashboardController {
         return;
       case "resumeSession":
         this.actions.resumeSession(msg.sessionId, this.service.detail(msg.sessionId)?.cwd ?? null);
+        return;
+      case "openMemoryFile":
+        this.actions.openMemoryFile(msg.filePath);
+        return;
+      case "openMemoryFolder":
+        this.actions.openMemoryFolder(msg.sessionId);
         return;
       default:
         return assertNever(msg);
