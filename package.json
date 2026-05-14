@@ -1,0 +1,93 @@
+{
+  "name": "claude-trace",
+  "displayName": "Claude Trace",
+  "version": "0.2.0",
+  "description": "Session intelligence dashboard for Claude Code. Trace every action, visualize context usage, and track costs.",
+  "publisher": "nrigalle",
+  "license": "MIT",
+  "author": {
+    "name": "Nathan Rigalle"
+  },
+  "homepage": "https://github.com/nrigalle/claude-trace#readme",
+  "bugs": {
+    "url": "https://github.com/nrigalle/claude-trace/issues"
+  },
+  "qna": "marketplace",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nrigalle/claude-trace.git"
+  },
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1E1E2E",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "ai",
+    "tracing",
+    "observability",
+    "telemetry",
+    "dashboard",
+    "cost-tracking",
+    "context-window"
+  ],
+  "badges": [
+    {
+      "url": "https://img.shields.io/visual-studio-marketplace/v/nrigalle.claude-trace.svg?label=VS%20Marketplace",
+      "href": "https://marketplace.visualstudio.com/items?itemName=nrigalle.claude-trace",
+      "description": "VS Code Marketplace Version"
+    }
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onWebviewPanel:claudeTrace.dashboard"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeTrace.openDashboard",
+        "title": "Open Dashboard",
+        "category": "Claude Trace",
+        "icon": "$(pulse)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "claudeTrace.openDashboard",
+        "key": "ctrl+alt+t",
+        "mac": "cmd+alt+t"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
+    "package": "npm run compile && npx @vscode/vsce package --no-dependencies",
+    "publish": "npm run compile && npx @vscode/vsce publish --no-dependencies",
+    "publish:ovsx": "npx ovsx publish --no-dependencies",
+    "test:unit": "vitest run"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@types/node": "^22.14.1",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.25.2",
+    "fast-check": "^3.23.2",
+    "happy-dom": "^15.11.7",
+    "memfs": "^4.17.0",
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.9"
+  }
+}

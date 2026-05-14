@@ -1,0 +1,189 @@
+import type {
+  GlobalStats,
+  SessionDetail,
+  SessionId,
+  SessionSummary,
+} from "../../../../src/domain/types";
+import type { Store } from "../../state/Store.js";
+import { DetailHeaderView } from "../panels/DetailHeader.js";
+import { SummaryCardsView } from "../panels/SummaryCards.js";
+import { ChartsRowView, CostChartView } from "../panels/ChartsRow.js";
+import { Timeline } from "../panels/Timeline.js";
+import { h } from "../h.js";
+import { Sidebar } from "./Sidebar.js";
+import { renderEmptyState } from "./Empty.js";
+
+export interface AppHandlers {
+  onSelect(id: SessionId): void;
+}
+
+interface SectionSignatures {
+  header: string;
+  cards: string;
+  charts: string;
+  cost: string;
+  timeline: string;
+}
+
+const EMPTY_SIGS: SectionSignatures = { header: "", cards: "", charts: "", cost: "", timeline: "" };
+
+export class App {
+  readonly root: HTMLElement;
+  private readonly sidebar: Sidebar;
+  private readonly mainEl: HTMLElement;
+  private readonly detailRoot: HTMLElement;
+  private readonly emptyHost: HTMLElement;
+
+  private readonly detailHeader = new DetailHeaderView();
+  private readonly summaryCards = new SummaryCardsView();
+  private readonly chartsRow = new ChartsRowView();
+  private readonly costChart = new CostChartView();
+  private readonly timeline: Timeline;
+
+  private sigs: SectionSignatures = { ...EMPTY_SIGS };
+  private sessions: readonly SessionSummary[] = [];
+  private currentDetail: SessionDetail | null = null;
+  private mode: "empty" | "detail" = "empty";
+
+  constructor(private readonly store: Store, handlers: AppHandlers) {
+    this.root = h("div", { className: "app-shell" });
+    this.sidebar = new Sidebar(store, { onSelect: handlers.onSelect });
+    this.sidebar.mount(this.root);
+
+    this.timeline = new Timeline(store, () => {
+      if (this.currentDetail) this.timeline.update(this.currentDetail);
+    });
+
+    this.detailRoot = h(
+      "div",
+      { className: "detail-root" },
+      this.detailHeader.element(),
+      this.summaryCards.element(),
+      this.chartsRow.element(),
+      this.costChart.element(),
+      this.timeline.element(),
+    );
+    this.detailRoot.hidden = true;
+
+    this.emptyHost = h("div", { className: "empty-host" });
+
+    this.mainEl = h(
+      "main",
+      { className: "main-content", attrs: { "aria-label": "Session detail" } },
+      this.emptyHost,
+      this.detailRoot,
+    );
+
+    this.mainEl.scrollTop = this.store.state.mainScroll;
+    this.mainEl.addEventListener("scroll", () => {
+      this.store.update({ mainScroll: this.mainEl.scrollTop });
+    }, { passive: true });
+
+    this.root.appendChild(this.mainEl);
+    this.showEmpty();
+  }
+
+  mount(parent: HTMLElement): void {
+    parent.appendChild(this.root);
+  }
+
+  updateSessions(
+    sessions: readonly SessionSummary[],
+    stats: GlobalStats | null,
+    changedIds: ReadonlySet<SessionId>,
+  ): void {
+    this.sessions = sessions;
+    this.sidebar.updateStats(stats);
+    this.sidebar.updateSessions(sessions, changedIds);
+    if (this.mode === "empty") this.refreshEmptyMessage();
+  }
+
+  updateDetail(detail: SessionDetail | null): void {
+    this.currentDetail = detail;
+    if (!detail) {
+      this.showEmpty();
+      return;
+    }
+    this.showDetail(detail);
+  }
+
+  noSelection(): void {
+    this.currentDetail = null;
+    this.showEmpty();
+  }
+
+  private showEmpty(): void {
+    this.mode = "empty";
+    this.detailRoot.hidden = true;
+    this.mainEl.classList.add("empty");
+    this.refreshEmptyMessage();
+    this.sigs = { ...EMPTY_SIGS };
+  }
+
+  private refreshEmptyMessage(): void {
+    while (this.emptyHost.firstChild) this.emptyHost.removeChild(this.emptyHost.firstChild);
+    this.emptyHost.hidden = false;
+    this.emptyHost.appendChild(renderEmptyState(this.sessions.length > 0));
+  }
+
+  private showDetail(d: SessionDetail): void {
+    if (this.mode !== "detail") {
+      this.mode = "detail";
+      this.emptyHost.hidden = true;
+      this.detailRoot.hidden = false;
+      this.mainEl.classList.remove("empty");
+    }
+
+    const next = computeSignatures(d);
+
+    if (next.header !== this.sigs.header) {
+      this.detailHeader.update(d);
+      this.sigs.header = next.header;
+    }
+    if (next.cards !== this.sigs.cards) {
+      this.summaryCards.update(d);
+      this.sigs.cards = next.cards;
+    }
+    if (next.charts !== this.sigs.charts) {
+      this.chartsRow.update(d);
+      this.sigs.charts = next.charts;
+    }
+    if (next.cost !== this.sigs.cost) {
+      this.costChart.update(d);
+      this.sigs.cost = next.cost;
+    }
+    if (next.timeline !== this.sigs.timeline) {
+      this.timeline.update(d);
+      this.sigs.timeline = next.timeline;
+    }
+  }
+}
+
+const computeSignatures = (d: SessionDetail): SectionSignatures => {
+  const cards = [
+    d.duration_ms,
+    d.tool_count,
+    d.cost?.total_cost_usd ?? 0,
+    d.context_window?.used_percentage ?? 0,
+    d.context_window?.total_input_tokens ?? 0,
+    d.context_window?.total_output_tokens ?? 0,
+    d.cost?.total_lines_added ?? 0,
+    d.cost?.total_lines_removed ?? 0,
+  ].join("|");
+
+  const charts = `${d.context_timeline.length}|${d.tool_stats.length}|${d.tool_stats.map((t) => `${t.name}:${t.count}`).join(",")}`;
+
+  const lastCost = d.cost_timeline[d.cost_timeline.length - 1]?.value ?? 0;
+  const cost = `${d.cost_timeline.length}|${lastCost}`;
+
+  const lastTs = d.events[d.events.length - 1]?.ts ?? 0;
+  const timeline = `${d.events.length}|${lastTs}`;
+
+  return {
+    header: JSON.stringify([d.title, d.cwd, d.session_id, d.model?.display_name ?? null]),
+    cards,
+    charts,
+    cost,
+    timeline,
+  };
+};

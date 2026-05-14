@@ -1,0 +1,12 @@
+node_modules/
+out/
+*.vsix
+.env
+*.log
+.DS_Store
+media/dashboard.js
+media/dashboard.js.map
+media/out/
+.playwright/
+.vscode-test/
+coverage/

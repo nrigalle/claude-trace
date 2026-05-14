@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "outDir": "media/out",
+    "rootDir": ".",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": []
+  },
+  "include": [
+    "media/src/**/*",
+    "src/protocol.ts",
+    "src/domain/types.ts"
+  ],
+  "exclude": ["node_modules", "out", "bin", "test"]
+}
