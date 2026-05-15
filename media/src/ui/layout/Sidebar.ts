@@ -6,8 +6,12 @@ import type {
 import type { Store } from "../../state/Store.js";
 import { fmtCost } from "../format.js";
 import { h } from "../h.js";
-import { ICONS } from "../icons.js";
+import { ICONS, icon } from "../icons.js";
 import { renderSessionItem, type SessionItemHandlers } from "./SessionItem.js";
+
+export interface SidebarHandlers extends SessionItemHandlers {
+  onStartNewSession(): void;
+}
 
 export class Sidebar {
   private readonly root: HTMLElement;
@@ -18,7 +22,7 @@ export class Sidebar {
 
   constructor(
     private readonly store: Store,
-    private readonly handlers: SessionItemHandlers,
+    private readonly handlers: SidebarHandlers,
   ) {
     this.root = h("nav", {
       className: "sidebar",
@@ -36,6 +40,18 @@ export class Sidebar {
 
     const header = h("div", { className: "sidebar-header" }, brand, this.statsContainer);
     this.root.appendChild(header);
+
+    const startButton = h(
+      "button",
+      {
+        className: "start-session-btn",
+        attrs: { type: "button", "aria-label": "Start a new Claude Code session" },
+        on: { click: () => this.handlers.onStartNewSession() },
+      },
+      icon("plus", 14),
+      h("span", { textContent: "Start new session" }),
+    );
+    this.root.appendChild(startButton);
 
     this.searchInput = h("input", {
       className: "search-input",

@@ -20,6 +20,7 @@ export interface AppHandlers {
   onResume(id: SessionId): void;
   onOpenMemoryFile(filePath: string): void;
   onOpenMemoryFolder(id: SessionId): void;
+  onStartNewSession(): void;
 }
 
 interface SectionSignatures {
@@ -61,7 +62,10 @@ export class App {
 
   constructor(private readonly store: Store, handlers: AppHandlers) {
     this.root = h("div", { className: "app-shell" });
-    this.sidebar = new Sidebar(store, { onSelect: handlers.onSelect });
+    this.sidebar = new Sidebar(store, {
+      onSelect: handlers.onSelect,
+      onStartNewSession: handlers.onStartNewSession,
+    });
     this.sidebar.mount(this.root);
 
     this.detailHeader = new DetailHeaderView({

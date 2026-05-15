@@ -16,6 +16,7 @@ export interface DashboardActions {
   resumeSession(id: SessionId, cwd: string | null): void;
   openMemoryFile(filePath: string): void;
   openMemoryFolder(id: SessionId): void;
+  startNewSession(): Promise<void>;
 }
 
 export class DashboardController {
@@ -93,6 +94,9 @@ export class DashboardController {
         return;
       case "openMemoryFolder":
         this.actions.openMemoryFolder(msg.sessionId);
+        return;
+      case "startNewSession":
+        void this.actions.startNewSession();
         return;
       default:
         return assertNever(msg);

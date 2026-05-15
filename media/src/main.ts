@@ -25,6 +25,7 @@ const boot = () => {
     onResume: (id: SessionId) => client.send({ type: "resumeSession", sessionId: id }),
     onOpenMemoryFile: (filePath: string) => client.send({ type: "openMemoryFile", filePath }),
     onOpenMemoryFolder: (id: SessionId) => client.send({ type: "openMemoryFolder", sessionId: id }),
+    onStartNewSession: () => client.send({ type: "startNewSession" }),
   });
 
   const appHost = document.getElementById("app");
