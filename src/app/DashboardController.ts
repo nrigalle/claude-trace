@@ -16,6 +16,7 @@ export interface DashboardActions {
   resumeSession(id: SessionId, cwd: string | null): void;
   openMemoryFile(filePath: string): void;
   openMemoryFolder(id: SessionId): void;
+  openFile(filePath: string): void;
   startNewSession(): Promise<void>;
 }
 
@@ -94,6 +95,9 @@ export class DashboardController {
         return;
       case "openMemoryFolder":
         this.actions.openMemoryFolder(msg.sessionId);
+        return;
+      case "openFile":
+        this.actions.openFile(msg.filePath);
         return;
       case "startNewSession":
         void this.actions.startNewSession();

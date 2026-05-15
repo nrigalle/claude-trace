@@ -51,6 +51,7 @@ export interface TraceEvent {
   readonly context_window: ContextSnapshot | null;
   readonly tokens_freed: number | null;
   readonly error: string | null;
+  readonly is_sidechain: boolean;
 }
 
 export interface SessionSummary {
@@ -79,7 +80,7 @@ export interface ChartPoint {
   readonly value: number;
 }
 
-export interface MemoryEditSummary {
+export interface FileEditSummary {
   readonly filePath: string;
   readonly fileName: string;
   readonly latestTs: number;
@@ -94,7 +95,8 @@ export interface SessionDetail extends SessionSummary {
   readonly tool_stats: readonly ToolStat[];
   readonly context_timeline: readonly ChartPoint[];
   readonly cost_timeline: readonly ChartPoint[];
-  readonly memory_edits: readonly MemoryEditSummary[];
+  readonly memory_edits: readonly FileEditSummary[];
+  readonly files_touched: readonly FileEditSummary[];
 }
 
 export interface GlobalStats {

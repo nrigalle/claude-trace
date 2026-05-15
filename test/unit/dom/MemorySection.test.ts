@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemorySection } from "../../../media/src/ui/panels/MemorySection";
-import { toSessionId, type MemoryEditSummary, type SessionDetail } from "../../../src/domain/types";
+import { toSessionId, type FileEditSummary, type SessionDetail } from "../../../src/domain/types";
 
 const baseDetail = (overrides: Partial<SessionDetail>): SessionDetail => ({
   session_id: toSessionId("s"),
@@ -24,7 +24,7 @@ const baseDetail = (overrides: Partial<SessionDetail>): SessionDetail => ({
   ...overrides,
 });
 
-const edit = (overrides: Partial<MemoryEditSummary>): MemoryEditSummary => ({
+const edit = (overrides: Partial<FileEditSummary>): FileEditSummary => ({
   filePath: "/home/u/.claude/projects/-p/memory/feedback.md",
   fileName: "feedback.md",
   latestTs: Date.UTC(2026, 4, 1, 10),
@@ -65,13 +65,13 @@ describe("MemorySection — rendering", () => {
         edit({ filePath: "/a/b/memory/y.md", fileName: "y.md" }),
       ],
     }));
-    expect(view.element().querySelectorAll(".memory-row")).toHaveLength(2);
+    expect(view.element().querySelectorAll(".file-edits-row")).toHaveLength(2);
   });
 
   it("shows the count chip only when count > 1", () => {
     const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
     view.update(baseDetail({ memory_edits: [edit({ count: 3 })] }));
-    const countEl = view.element().querySelector<HTMLElement>(".memory-row-count")!;
+    const countEl = view.element().querySelector<HTMLElement>(".file-edits-row-count")!;
     expect(countEl.hidden).toBe(false);
     expect(countEl.textContent).toBe("×3");
   });
@@ -79,7 +79,7 @@ describe("MemorySection — rendering", () => {
   it("hides the count chip when count is 1", () => {
     const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
     view.update(baseDetail({ memory_edits: [edit({ count: 1 })] }));
-    expect(view.element().querySelector<HTMLElement>(".memory-row-count")!.hidden).toBe(true);
+    expect(view.element().querySelector<HTMLElement>(".file-edits-row-count")!.hidden).toBe(true);
   });
 
   it("renders write-only diffs as +N", () => {
@@ -87,7 +87,7 @@ describe("MemorySection — rendering", () => {
     view.update(baseDetail({
       memory_edits: [edit({ dominantAction: "write", added: 12, removed: 0 })],
     }));
-    expect(view.element().querySelector(".memory-row-diff")!.textContent).toBe("+12");
+    expect(view.element().querySelector(".file-edits-row-diff")!.textContent).toBe("+12");
   });
 
   it("renders edit diffs as +N / -M", () => {
@@ -95,7 +95,7 @@ describe("MemorySection — rendering", () => {
     view.update(baseDetail({
       memory_edits: [edit({ dominantAction: "edit", added: 5, removed: 2 })],
     }));
-    expect(view.element().querySelector(".memory-row-diff")!.textContent).toBe("+5 / -2");
+    expect(view.element().querySelector(".file-edits-row-diff")!.textContent).toBe("+5 / -2");
   });
 });
 
@@ -104,9 +104,9 @@ describe("MemorySection — DOM identity across updates", () => {
     const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
     document.body.appendChild(view.element());
     view.update(baseDetail({ memory_edits: [edit({ added: 1 })] }));
-    const before = view.element().querySelector(".memory-row");
+    const before = view.element().querySelector(".file-edits-row");
     view.update(baseDetail({ memory_edits: [edit({ added: 9 })] }));
-    const after = view.element().querySelector(".memory-row");
+    const after = view.element().querySelector(".file-edits-row");
     expect(after).toBe(before);
   });
 
@@ -118,12 +118,12 @@ describe("MemorySection — DOM identity across updates", () => {
         edit({ filePath: "/a/memory/drop.md", fileName: "drop.md" }),
       ],
     }));
-    expect(view.element().querySelectorAll(".memory-row")).toHaveLength(2);
+    expect(view.element().querySelectorAll(".file-edits-row")).toHaveLength(2);
     view.update(baseDetail({
       memory_edits: [edit({ filePath: "/a/memory/keep.md", fileName: "keep.md" })],
     }));
-    expect(view.element().querySelectorAll(".memory-row")).toHaveLength(1);
-    expect(view.element().querySelector(".memory-row-name")!.textContent).toBe("keep.md");
+    expect(view.element().querySelectorAll(".file-edits-row")).toHaveLength(1);
+    expect(view.element().querySelector(".file-edits-row-name")!.textContent).toBe("keep.md");
   });
 });
 
@@ -142,13 +142,13 @@ describe("MemorySection — actions", () => {
     view.update(baseDetail({
       memory_edits: [edit({ filePath: "/a/b/memory/x.md", fileName: "x.md" })],
     }));
-    view.element().querySelector<HTMLButtonElement>(".memory-row-open")!.click();
+    view.element().querySelector<HTMLButtonElement>(".file-edits-row-open")!.click();
     expect(onOpenFile).toHaveBeenCalledWith("/a/b/memory/x.md");
   });
 
   it("Open folder button invokes onOpenFolder", () => {
     view.update(baseDetail({ memory_edits: [edit({})] }));
-    view.element().querySelector<HTMLButtonElement>(".memory-open-folder")!.click();
+    view.element().querySelector<HTMLButtonElement>(".file-edits-folder")!.click();
     expect(onOpenFolder).toHaveBeenCalledTimes(1);
   });
 });

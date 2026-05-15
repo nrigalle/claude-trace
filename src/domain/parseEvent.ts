@@ -1,5 +1,5 @@
+import { fileEditActionForTool, type RawFileEdit } from "./fileEdits";
 import { lineDiffFromToolInput } from "./lineDiff";
-import { isAutoMemoryFile, memoryActionForTool, type RawMemoryEdit } from "./memory";
 import { estimateUsageCost, type Usage } from "./pricing";
 import type { ContextSnapshot, CostSnapshot, SessionId, ToolInput, TraceEvent } from "./types";
 
@@ -16,7 +16,7 @@ export interface ParseContext {
   lastModel: string | null;
   aiTitle: string | null;
   firstUserText: string | null;
-  memoryEdits: RawMemoryEdit[];
+  fileEdits: RawFileEdit[];
 }
 
 export const createParseContext = (sessionId: SessionId): ParseContext => ({
@@ -32,7 +32,7 @@ export const createParseContext = (sessionId: SessionId): ParseContext => ({
   lastModel: null,
   aiTitle: null,
   firstUserText: null,
-  memoryEdits: [],
+  fileEdits: [],
 });
 
 export const parseNativeLine = (line: string, ctx: ParseContext): TraceEvent[] => {
@@ -68,7 +68,7 @@ export const parseNativeLine = (line: string, ctx: ParseContext): TraceEvent[] =
 
   if (type === "user" && isObject(message)) {
     captureFirstUserText(ctx, message);
-    return parseUser(ts, cwd, message, ctx);
+    return parseUser(ts, cwd, isSidechain, message, ctx);
   }
 
   return [];
@@ -127,7 +127,7 @@ const parseAssistant = (
       const diff = lineDiffFromToolInput(toolName, rawInput);
       ctx.totalLinesAdded += diff.added;
       ctx.totalLinesRemoved += diff.removed;
-      recordMemoryEdit(ctx, ts, toolName, rawInput, diff);
+      recordFileEdit(ctx, ts, toolName, rawInput, diff);
     }
 
     toolUses.push({
@@ -144,6 +144,7 @@ const parseAssistant = (
       context_window: contextSnapshot,
       tokens_freed: null,
       error: null,
+      is_sidechain: isSidechain,
     });
   }
 
@@ -165,6 +166,7 @@ const parseAssistant = (
       context_window: contextSnapshot,
       tokens_freed: null,
       error: null,
+      is_sidechain: isSidechain,
     },
   ];
 };
@@ -183,6 +185,7 @@ const buildCostSnapshot = (ctx: ParseContext): CostSnapshot | null => {
 const parseUser = (
   ts: number,
   cwd: string | null,
+  isSidechain: boolean,
   message: Record<string, unknown>,
   ctx: ParseContext,
 ): TraceEvent[] => {
@@ -216,6 +219,7 @@ const parseUser = (
       context_window: null,
       tokens_freed: null,
       error: isError && text ? truncate(text, 400) : null,
+      is_sidechain: isSidechain,
     });
   }
   return out;
@@ -253,19 +257,18 @@ const SYNTHETIC_PREFIXES = [
   "[Request interrupted",
 ];
 
-const recordMemoryEdit = (
+const recordFileEdit = (
   ctx: ParseContext,
   ts: number,
   toolName: string,
   input: Record<string, unknown>,
   diff: { added: number; removed: number },
 ): void => {
-  const action = memoryActionForTool(toolName);
+  const action = fileEditActionForTool(toolName);
   if (!action) return;
   const filePath = input["file_path"];
   if (typeof filePath !== "string") return;
-  if (!isAutoMemoryFile(filePath)) return;
-  ctx.memoryEdits.push({ ts, filePath, added: diff.added, removed: diff.removed, action });
+  ctx.fileEdits.push({ ts, filePath, added: diff.added, removed: diff.removed, action });
 };
 
 const isObject = (v: unknown): v is Record<string, unknown> =>

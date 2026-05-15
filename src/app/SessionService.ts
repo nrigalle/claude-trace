@@ -1,5 +1,6 @@
 import { PROJECTS_DIR } from "../config";
-import { aggregateMemoryEdits } from "../domain/memory";
+import { aggregateByFile } from "../domain/fileEdits";
+import { isAutoMemoryFile } from "../domain/memory";
 import { computeStats } from "../domain/stats";
 import { summarize } from "../domain/summarize";
 import { extractContextTimeline, extractCostTimeline } from "../domain/timelines";
@@ -69,13 +70,15 @@ export class SessionService {
     if (!stats) return null;
     const events = this.reader.read(ref, stats);
     const summary = summarize(id, events, stats.mtime, { title: this.titleFor(id) });
+    const rawEdits = this.reader.getFileEdits(id);
     return {
       ...summary,
       events,
       tool_stats: computeToolStats(events),
       context_timeline: extractContextTimeline(events),
       cost_timeline: extractCostTimeline(events),
-      memory_edits: aggregateMemoryEdits(this.reader.getMemoryEdits(id)),
+      memory_edits: aggregateByFile(rawEdits, isAutoMemoryFile),
+      files_touched: aggregateByFile(rawEdits, (p) => !isAutoMemoryFile(p)),
     };
   }
 

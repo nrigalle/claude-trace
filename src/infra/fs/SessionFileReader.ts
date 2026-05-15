@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import { SESSION_CACHE_LRU_LIMIT } from "../../config";
-import type { RawMemoryEdit } from "../../domain/memory";
+import type { RawFileEdit } from "../../domain/fileEdits";
 import { createParseContext, parseNativeLine, type ParseContext } from "../../domain/parseEvent";
 import type { SessionId, TraceEvent } from "../../domain/types";
 import type { SessionRef } from "./paths";
@@ -36,9 +36,9 @@ export class SessionFileReader {
     return entry.parseCtx.aiTitle ?? entry.parseCtx.firstUserText ?? null;
   }
 
-  getMemoryEdits(id: SessionId): readonly RawMemoryEdit[] {
+  getFileEdits(id: SessionId): readonly RawFileEdit[] {
     const entry = this.cache.get(id);
-    return entry?.parseCtx.memoryEdits ?? [];
+    return entry?.parseCtx.fileEdits ?? [];
   }
 
   statSafe(ref: SessionRef): SessionFileStats | null {

@@ -70,6 +70,10 @@ export function activate(context: vscode.ExtensionContext): void {
       const memoryDir = path.join(PROJECTS_DIR, projectDir, "memory");
       void vscode.commands.executeCommand("revealInExplorer", vscode.Uri.file(memoryDir));
     },
+    openFile(filePath: string): void {
+      if (!filePath) return;
+      void vscode.commands.executeCommand("vscode.open", vscode.Uri.file(filePath));
+    },
     async startNewSession(): Promise<void> {
       const name = await vscode.window.showInputBox({
         title: "Start a new Claude Code session",

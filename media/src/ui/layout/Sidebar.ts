@@ -3,7 +3,12 @@ import type {
   SessionId,
   SessionSummary,
 } from "../../../../src/domain/types";
-import type { Store } from "../../state/Store.js";
+import type { DateFilter, Store } from "../../state/Store.js";
+import {
+  DATE_FILTER_LABELS,
+  DATE_FILTER_ORDER,
+  matchesDateFilter,
+} from "../dateFilter.js";
 import { fmtCost } from "../format.js";
 import { h } from "../h.js";
 import { ICONS, icon } from "../icons.js";
@@ -18,6 +23,7 @@ export class Sidebar {
   private readonly statsContainer: HTMLElement;
   private readonly listContainer: HTMLElement;
   private readonly searchInput: HTMLInputElement;
+  private readonly dateFilterChips = new Map<DateFilter, HTMLButtonElement>();
   private sessions: readonly SessionSummary[] = [];
 
   constructor(
@@ -71,6 +77,8 @@ export class Sidebar {
     this.searchInput.value = this.store.state.searchQuery;
     const searchBox = h("div", { className: "search-box" }, this.searchInput);
     this.root.appendChild(searchBox);
+
+    this.root.appendChild(this.buildDateFilters());
 
     this.listContainer = h("div", {
       className: "session-list",
@@ -160,6 +168,8 @@ export class Sidebar {
 
   private applyFilter(): void {
     const q = this.store.state.searchQuery.toLowerCase().trim();
+    const dateFilter = this.store.state.dateFilter;
+    const now = new Date();
     this.listContainer.querySelectorAll<HTMLButtonElement>(".session-item").forEach((el) => {
       const id = el.dataset.sessionId;
       const session = this.sessions.find((s) => s.session_id === id);
@@ -167,12 +177,48 @@ export class Sidebar {
         el.style.display = "none";
         return;
       }
-      const match =
+      const lastActivity = session.ended_at ?? session.last_modified_ms;
+      const inRange = matchesDateFilter(lastActivity, dateFilter, now);
+      const searchHit =
         !q ||
         session.session_id.toLowerCase().includes(q) ||
-        (session.cwd?.toLowerCase().includes(q) ?? false);
-      el.style.display = match ? "" : "none";
+        (session.cwd?.toLowerCase().includes(q) ?? false) ||
+        (session.title?.toLowerCase().includes(q) ?? false);
+      el.style.display = inRange && searchHit ? "" : "none";
     });
+  }
+
+  private buildDateFilters(): HTMLElement {
+    const row = h("div", {
+      className: "date-filters",
+      attrs: { role: "group", "aria-label": "Filter by date" },
+    });
+    for (const value of DATE_FILTER_ORDER) {
+      const active = this.store.state.dateFilter === value;
+      const chip = h(
+        "button",
+        {
+          className: `date-filter-chip${active ? " active" : ""}`,
+          attrs: { type: "button", "aria-pressed": String(active) },
+          on: { click: () => this.setDateFilter(value) },
+        },
+        h("span", { textContent: DATE_FILTER_LABELS[value] }),
+      );
+      this.dateFilterChips.set(value, chip);
+      row.appendChild(chip);
+    }
+    return row;
+  }
+
+  private setDateFilter(next: DateFilter): void {
+    if (this.store.state.dateFilter === next) return;
+    this.store.update({ dateFilter: next });
+    for (const [value, chip] of this.dateFilterChips) {
+      const active = value === next;
+      chip.classList.toggle("active", active);
+      chip.setAttribute("aria-pressed", String(active));
+    }
+    this.applyFilter();
   }
 
   private capturedActiveSessionId(): string | null {

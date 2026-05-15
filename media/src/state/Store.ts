@@ -1,10 +1,12 @@
 import type { SessionId } from "../../../src/domain/types";
 
 export type TimelineFilter = "all" | "tools" | "errors";
+export type DateFilter = "all" | "today" | "week" | "month";
 
 export interface UiState {
   selectedId: SessionId | null;
   searchQuery: string;
+  dateFilter: DateFilter;
   timelineFilter: TimelineFilter;
   expandedEvent: number | null;
   mainScroll: number;
@@ -22,6 +24,7 @@ declare const acquireVsCodeApi: <_S = unknown>() => VsCodeApi;
 const DEFAULTS: UiState = {
   selectedId: null,
   searchQuery: "",
+  dateFilter: "all",
   timelineFilter: "all",
   expandedEvent: null,
   mainScroll: 0,
@@ -30,6 +33,9 @@ const DEFAULTS: UiState = {
 
 const normalizeFilter = (value: unknown): TimelineFilter =>
   value === "tools" || value === "errors" ? value : "all";
+
+const normalizeDateFilter = (value: unknown): DateFilter =>
+  value === "today" || value === "week" || value === "month" ? value : "all";
 
 export class Store {
   readonly vscode: VsCodeApi;
@@ -44,6 +50,7 @@ export class Store {
       ...DEFAULTS,
       ...(saved ?? {}),
       timelineFilter: normalizeFilter(saved?.timelineFilter),
+      dateFilter: normalizeDateFilter(saved?.dateFilter),
     };
   }
 

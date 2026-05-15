@@ -209,7 +209,46 @@ body {
 
 .search-box {
   padding: 8px 12px;
+}
+
+.date-filters {
+  display: flex;
+  gap: 4px;
+  padding: 0 12px 10px;
   border-bottom: 1px solid var(--ct-border);
+  flex-wrap: wrap;
+}
+
+.date-filter-chip {
+  flex: 1 1 auto;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--ct-border);
+  border-radius: 999px;
+  color: var(--ct-text-secondary);
+  font-family: var(--ct-font);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+
+.date-filter-chip:hover {
+  background: var(--ct-bg-2);
+  border-color: var(--ct-border-hover);
+  color: var(--ct-text-primary);
+}
+
+.date-filter-chip:focus-visible {
+  outline: 2px solid var(--ct-focus);
+  outline-offset: 2px;
+}
+
+.date-filter-chip.active {
+  background: rgba(217, 119, 87, 0.18);
+  border-color: rgba(217, 119, 87, 0.45);
+  color: var(--ct-claude);
 }
 
 .search-input {
@@ -733,9 +772,9 @@ canvas {
   text-align: right;
 }
 
-/* Memory section */
+/* File edits sections (memory + files-touched) */
 
-.memory-section {
+.file-edits-section {
   background: var(--ct-bg-1);
   border: 1px solid var(--ct-border);
   border-radius: var(--ct-radius);
@@ -743,7 +782,7 @@ canvas {
   overflow: hidden;
 }
 
-.memory-header {
+.file-edits-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -751,7 +790,7 @@ canvas {
   border-bottom: 1px solid var(--ct-border);
 }
 
-.memory-title {
+.file-edits-title {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -760,18 +799,18 @@ canvas {
   color: var(--ct-text-secondary);
 }
 
-.memory-title svg {
+.file-edits-title svg {
   width: 14px;
   height: 14px;
   color: var(--ct-text-muted);
 }
 
-.memory-count {
+.file-edits-count {
   font-weight: 500;
   color: var(--ct-text-muted);
 }
 
-.memory-open-folder {
+.file-edits-folder {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -786,28 +825,28 @@ canvas {
   transition: background 0.12s, border-color 0.12s;
 }
 
-.memory-open-folder:hover {
+.file-edits-folder:hover {
   background: var(--ct-bg-2);
   border-color: var(--ct-border-hover);
   color: var(--ct-text-primary);
 }
 
-.memory-open-folder:focus-visible {
+.file-edits-folder:focus-visible {
   outline: 2px solid var(--ct-focus);
   outline-offset: 2px;
 }
 
-.memory-open-folder svg {
+.file-edits-folder svg {
   width: 12px;
   height: 12px;
 }
 
-.memory-list {
+.file-edits-list {
   display: flex;
   flex-direction: column;
 }
 
-.memory-row {
+.file-edits-row {
   display: grid;
   grid-template-columns: 64px 1fr auto;
   align-items: center;
@@ -817,24 +856,24 @@ canvas {
   font-size: 12px;
 }
 
-.memory-row:last-child {
+.file-edits-row:last-child {
   border-bottom: none;
 }
 
-.memory-row-time {
+.file-edits-row-time {
   font-family: var(--ct-mono);
   font-size: 11px;
   color: var(--ct-text-muted);
 }
 
-.memory-row-main {
+.file-edits-row-main {
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
   min-width: 0;
 }
 
-.memory-row-name {
+.file-edits-row-name {
   font-family: var(--ct-mono);
   color: var(--ct-text-primary);
   overflow: hidden;
@@ -842,19 +881,19 @@ canvas {
   white-space: nowrap;
 }
 
-.memory-row-count {
+.file-edits-row-count {
   font-size: 10px;
   font-family: var(--ct-mono);
   color: var(--ct-text-muted);
 }
 
-.memory-row-diff {
+.file-edits-row-diff {
   font-family: var(--ct-mono);
   font-size: 11px;
   color: var(--ct-text-secondary);
 }
 
-.memory-row-open {
+.file-edits-row-open {
   padding: 4px 10px;
   background: var(--ct-bg-2);
   border: 1px solid var(--ct-border);
@@ -866,12 +905,12 @@ canvas {
   transition: background 0.12s, border-color 0.12s;
 }
 
-.memory-row-open:hover {
+.file-edits-row-open:hover {
   background: var(--ct-bg-3);
   border-color: var(--ct-border-hover);
 }
 
-.memory-row-open:focus-visible {
+.file-edits-row-open:focus-visible {
   outline: 2px solid var(--ct-focus);
   outline-offset: 2px;
 }
@@ -1029,6 +1068,22 @@ canvas {
 .event-badge.error {
   background: rgba(239, 68, 68, 0.15);
   color: var(--ct-red);
+}
+
+.event-badge.subagent {
+  background: rgba(139, 92, 246, 0.16);
+  color: var(--ct-purple);
+  letter-spacing: 0.04em;
+}
+
+.event-row.subagent {
+  background: rgba(127, 127, 127, 0.04);
+  border-left: 2px solid rgba(139, 92, 246, 0.35);
+}
+
+.event-row.subagent .event-label,
+.event-row.subagent .event-detail {
+  opacity: 0.85;
 }
 
 .event-detail {

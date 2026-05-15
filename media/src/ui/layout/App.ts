@@ -6,6 +6,7 @@ import type {
 } from "../../../../src/domain/types";
 import type { Store } from "../../state/Store.js";
 import { DetailHeaderView } from "../panels/DetailHeader.js";
+import { FilesTouchedSection } from "../panels/FilesTouchedSection.js";
 import { MemorySection } from "../panels/MemorySection.js";
 import { SummaryCardsView } from "../panels/SummaryCards.js";
 import { ChartsRowView, CostChartView } from "../panels/ChartsRow.js";
@@ -20,6 +21,7 @@ export interface AppHandlers {
   onResume(id: SessionId): void;
   onOpenMemoryFile(filePath: string): void;
   onOpenMemoryFolder(id: SessionId): void;
+  onOpenFile(filePath: string): void;
   onStartNewSession(): void;
 }
 
@@ -29,6 +31,7 @@ interface SectionSignatures {
   charts: string;
   cost: string;
   memory: string;
+  files: string;
   timeline: string;
 }
 
@@ -38,6 +41,7 @@ const EMPTY_SIGS: SectionSignatures = {
   charts: "",
   cost: "",
   memory: "",
+  files: "",
   timeline: "",
 };
 
@@ -53,6 +57,7 @@ export class App {
   private readonly chartsRow = new ChartsRowView();
   private readonly costChart = new CostChartView();
   private readonly memorySection: MemorySection;
+  private readonly filesSection: FilesTouchedSection;
   private readonly timeline: Timeline;
 
   private sigs: SectionSignatures = { ...EMPTY_SIGS };
@@ -84,6 +89,10 @@ export class App {
       },
     });
 
+    this.filesSection = new FilesTouchedSection({
+      onOpenFile: (filePath) => handlers.onOpenFile(filePath),
+    });
+
     this.timeline = new Timeline(store, () => {
       if (this.currentDetail) this.timeline.update(this.currentDetail);
     });
@@ -96,6 +105,7 @@ export class App {
       this.chartsRow.element(),
       this.costChart.element(),
       this.memorySection.element(),
+      this.filesSection.element(),
       this.timeline.element(),
     );
     this.detailRoot.hidden = true;
@@ -191,6 +201,10 @@ export class App {
       this.memorySection.update(d);
       this.sigs.memory = next.memory;
     }
+    if (next.files !== this.sigs.files) {
+      this.filesSection.update(d);
+      this.sigs.files = next.files;
+    }
     if (next.timeline !== this.sigs.timeline) {
       this.timeline.update(d);
       this.sigs.timeline = next.timeline;
@@ -218,9 +232,11 @@ const computeSignatures = (d: SessionDetail): SectionSignatures => {
   const lastTs = d.events[d.events.length - 1]?.ts ?? 0;
   const timeline = `${d.events.length}|${lastTs}`;
 
-  const memory = `${d.memory_edits.length}|${d.memory_edits
-    .map((e) => `${e.filePath}:${e.count}:${e.added}:${e.removed}`)
-    .join(",")}`;
+  const fileEditSignature = (edits: readonly typeof d.memory_edits[number][]): string =>
+    `${edits.length}|${edits.map((e) => `${e.filePath}:${e.count}:${e.added}:${e.removed}`).join(",")}`;
+
+  const memory = fileEditSignature(d.memory_edits);
+  const files = fileEditSignature(d.files_touched);
 
   return {
     header: JSON.stringify([d.title, d.cwd, d.session_id, d.model?.display_name ?? null]),
@@ -228,6 +244,7 @@ const computeSignatures = (d: SessionDetail): SectionSignatures => {
     charts,
     cost,
     memory,
+    files,
     timeline,
   };
 };

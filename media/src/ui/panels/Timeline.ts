@@ -208,6 +208,7 @@ export class Timeline {
     row.classList.toggle("expanded", expanded);
     const isError = ev.event === "StopFailure" || !!ev.error;
     row.classList.toggle("error", isError);
+    row.classList.toggle("subagent", ev.is_sidechain);
     row.setAttribute("aria-expanded", String(expanded));
 
     const iconHost = row.querySelector(".event-icon") as HTMLElement;
@@ -222,6 +223,10 @@ export class Timeline {
     label.textContent = ev.tool_name ?? ev.event;
     if (isError) {
       const badge = h("span", { className: "event-badge error", textContent: "ERROR" });
+      label.appendChild(badge);
+    }
+    if (ev.is_sidechain) {
+      const badge = h("span", { className: "event-badge subagent", textContent: "SUBAGENT" });
       label.appendChild(badge);
     }
 
