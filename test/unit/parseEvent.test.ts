@@ -195,7 +195,7 @@ describe("parseNativeLine — cost accumulation", () => {
 });
 
 describe("parseNativeLine — context window", () => {
-  it("computes used_percentage from input+cache tokens against model size", () => {
+  it("stores total_input_tokens from usage fields", () => {
     const events = parseNativeLine(
       assistantLine({
         model: "claude-opus-4-7",
@@ -207,17 +207,17 @@ describe("parseNativeLine — context window", () => {
       }),
       ctx(),
     );
-    expect(events[0]!.context_window!.used_percentage).toBeCloseTo(50, 0);
-    expect(events[0]!.context_window!.context_window_size).toBe(200_000);
+    expect(events[0]!.context_window!.total_input_tokens).toBe(100_000);
+    expect(events[0]!.context_window!.total_output_tokens).toBe(50);
   });
 
-  it("uses 1M context for [1m] models", () => {
+  it("leaves the denominator decision to the summary layer", () => {
     const events = parseNativeLine(
-      assistantLine({ model: "claude-opus-4-7[1m]", usage: { input_tokens: 100_000 } }),
+      assistantLine({ model: "claude-opus-4-7", usage: { input_tokens: 100_000 } }),
       ctx(),
     );
-    expect(events[0]!.context_window!.context_window_size).toBe(1_000_000);
-    expect(events[0]!.context_window!.used_percentage).toBeCloseTo(10, 0);
+    expect(events[0]!.context_window!.used_percentage).toBeUndefined();
+    expect(events[0]!.context_window!.context_window_size).toBeUndefined();
   });
 });
 

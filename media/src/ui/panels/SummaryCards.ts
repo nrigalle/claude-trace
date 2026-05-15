@@ -50,6 +50,10 @@ export class SummaryCardsView {
     this.context.iconHost.style.background = `${ctxColor}15`;
     this.context.iconHost.style.color = ctxColor;
     setValue(this.context, fmtPct(ctxPct));
+    const ctxSize = d.context_window?.context_window_size ?? 0;
+    setSub(this.context, ctxSize > 0
+      ? `${fmtTokens(inTok)} / ${fmtTokens(ctxSize)}`
+      : "");
 
     setValue(this.tokens, fmtTokens(inTok + outTok));
     setSub(this.tokens, `${fmtTokens(inTok)} in / ${fmtTokens(outTok)} out`);

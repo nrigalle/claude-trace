@@ -1,10 +1,13 @@
+import { effectiveContextSize, percentOfContext } from "./contextWindow";
 import type { ChartPoint, TraceEvent } from "./types";
 
 export const extractContextTimeline = (events: readonly TraceEvent[]): ChartPoint[] => {
+  const contextSize = effectiveContextSize(events);
   const out: ChartPoint[] = [];
   for (const e of events) {
-    const pct = e.context_window?.used_percentage;
-    if (pct != null) out.push({ ts: e.ts, value: pct });
+    const tokens = e.context_window?.total_input_tokens;
+    if (typeof tokens !== "number") continue;
+    out.push({ ts: e.ts, value: percentOfContext(tokens, contextSize) });
   }
   return out;
 };

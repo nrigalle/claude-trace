@@ -105,14 +105,9 @@ const parseAssistant = (
         u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens;
       if (used > ctx.maxTotalInputTokens) ctx.maxTotalInputTokens = used;
 
-      const contextSize = effectiveContextSize(ctx.lastModel ?? "", ctx.maxTotalInputTokens);
-      const pct = contextSize > 0 ? Math.min((used / contextSize) * 100, 100) : 0;
       contextSnapshot = {
-        used_percentage: pct,
-        remaining_percentage: 100 - pct,
         total_input_tokens: used,
         total_output_tokens: u.output_tokens,
-        context_window_size: contextSize,
       };
     }
   }
@@ -295,12 +290,6 @@ const sanitizeInput = (input: Record<string, unknown>): ToolInput => {
     return { _summary: truncate(s, 300) };
   }
   return out;
-};
-
-const effectiveContextSize = (model: string, observedMaxInput: number): number => {
-  if (model.includes("[1m]") || model.includes("-1m") || /\b1m\b/.test(model)) return 1_000_000;
-  if (observedMaxInput > 200_000) return 1_000_000;
-  return 200_000;
 };
 
 const humanizeModel = (model: string): string => {

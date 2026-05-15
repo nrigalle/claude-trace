@@ -1,7 +1,7 @@
 {
   "name": "claude-trace",
   "displayName": "Claude Trace",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Session intelligence dashboard for Claude Code. Trace every action, visualize context usage, and track costs.",
   "publisher": "nrigalle",
   "license": "MIT",

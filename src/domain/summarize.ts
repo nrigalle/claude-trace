@@ -1,3 +1,4 @@
+import { effectiveContextSize, percentOfContext } from "./contextWindow";
 import type {
   CostSnapshot,
   ContextSnapshot,
@@ -59,6 +60,18 @@ export const summarize = (
     if (!contextWindow && e.context_window) contextWindow = e.context_window;
     if (!model && e.model) model = e.model;
     if (cost && contextWindow && model) break;
+  }
+
+  if (contextWindow) {
+    const contextSize = effectiveContextSize(events);
+    const tokens = contextWindow.total_input_tokens ?? 0;
+    const pct = percentOfContext(tokens, contextSize);
+    contextWindow = {
+      ...contextWindow,
+      used_percentage: pct,
+      remaining_percentage: 100 - pct,
+      context_window_size: contextSize,
+    };
   }
 
   return {

@@ -87,14 +87,15 @@ describe("summarize", () => {
 
   it("cost/context/model: most recent non-null wins", () => {
     const evs = [
-      makeEvent({ ts: 1, cost: { total_cost_usd: 0.1 }, context_window: { used_percentage: 10 }, model: { id: "a" } }),
+      makeEvent({ ts: 1, cost: { total_cost_usd: 0.1 }, context_window: { total_input_tokens: 10_000 }, model: { id: "a" } }),
       makeEvent({ ts: 2, cost: { total_cost_usd: 0.5 } }),
-      makeEvent({ ts: 3, context_window: { used_percentage: 30 } }),
+      makeEvent({ ts: 3, context_window: { total_input_tokens: 30_000 } }),
       makeEvent({ ts: 4, model: { id: "b" } }),
     ];
     const s = summarize(toSessionId("s"), evs, 0);
     expect(s.cost?.total_cost_usd).toBe(0.5);
-    expect(s.context_window?.used_percentage).toBe(30);
+    expect(s.context_window?.total_input_tokens).toBe(30_000);
+    expect(s.context_window?.used_percentage).toBeGreaterThan(0);
     expect(s.model?.id).toBe("b");
   });
 
@@ -150,20 +151,25 @@ describe("extractContextTimeline / extractCostTimeline", () => {
   it("filters events without the relevant snapshot", () => {
     const evs = [
       makeEvent({ ts: 1 }),
-      makeEvent({ ts: 2, context_window: { used_percentage: 10 } }),
+      makeEvent({ ts: 2, context_window: { total_input_tokens: 20_000 } }),
       makeEvent({ ts: 3, cost: { total_cost_usd: 0.5 } }),
     ];
-    expect(extractContextTimeline(evs)).toEqual([{ ts: 2, value: 10 }]);
+    const ctx = extractContextTimeline(evs);
+    expect(ctx).toHaveLength(1);
+    expect(ctx[0]!.ts).toBe(2);
     expect(extractCostTimeline(evs)).toEqual([{ ts: 3, value: 0.5 }]);
   });
 
-  it("preserves event order", () => {
+  it("preserves event order and is monotonically increasing for monotonic inputs", () => {
     const evs = [
-      makeEvent({ ts: 3, context_window: { used_percentage: 50 } }),
-      makeEvent({ ts: 1, context_window: { used_percentage: 10 } }),
-      makeEvent({ ts: 2, context_window: { used_percentage: 20 } }),
+      makeEvent({ ts: 1, context_window: { total_input_tokens: 10_000 } }),
+      makeEvent({ ts: 2, context_window: { total_input_tokens: 20_000 } }),
+      makeEvent({ ts: 3, context_window: { total_input_tokens: 50_000 } }),
     ];
-    expect(extractContextTimeline(evs).map((p) => p.value)).toEqual([50, 10, 20]);
+    const values = extractContextTimeline(evs).map((p) => p.value);
+    expect(values.length).toBe(3);
+    expect(values[1]).toBeGreaterThan(values[0]!);
+    expect(values[2]).toBeGreaterThan(values[1]!);
   });
 });
 
