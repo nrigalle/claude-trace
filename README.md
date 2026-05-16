@@ -5,11 +5,11 @@
 [![Rating](https://img.shields.io/visual-studio-marketplace/r/nrigalle.claude-trace.svg)](https://marketplace.visualstudio.com/items?itemName=nrigalle.claude-trace)
 [![License: MIT](https://img.shields.io/github/license/nrigalle/claude-trace.svg)](LICENSE)
 
-> A live dashboard inside VS Code that shows you what Claude Code is actually doing in your sessions: tool calls, context usage, tokens, and cost.
+> A dashboard inside VS Code that shows you what Claude Code is doing in your sessions: tool calls, context usage, tokens, cost.
 
-If you've used Claude Code for more than a few hours, you've probably wondered: *how much did that session cost? how close did I get to the context limit? which tools did Claude lean on?* Claude Trace answers all three at a glance, without leaving your editor.
+If you've used Claude Code for more than a few hours, you've probably wondered how much that last session actually cost, or how close it got to the context limit, or which tools Claude leaned on. Claude Trace tells you, from inside your editor.
 
-It reads the transcripts Claude Code already writes to your machine. No hooks. No daemon. No data leaves your computer.
+The extension reads the transcripts Claude Code already writes to your machine. No hooks to install, no daemon to run, and nothing leaves your computer.
 
 ## Screenshot
 
@@ -20,12 +20,14 @@ The dashboard has a sidebar of sessions on the left, summary cards and charts in
 ## Highlights
 
 * Every Claude Code session on your machine, listed by last activity.
-* Live updates as the active session runs. Smooth, with no flicker.
+* The active session refreshes as Claude works, without tearing the view.
 * Context window usage chart with a warning line at 80%.
 * Cost breakdown that tracks the actual token rates for Opus 4.7, Sonnet 4.6, and Haiku 4.5.
-* Tool distribution donut so you can see at a glance which tools dominate.
+* Tool distribution donut so you can see which tools dominate a session.
 * Virtualized timeline that stays responsive at 10,000+ events.
-* Adapts to your VS Code theme (light, dark, high contrast).
+* Side by side diff for every file Claude touched, in VS Code's native diff editor.
+* Picks the permission mode when you start a new session (`acceptEdits`, `plan`, `bypassPermissions`, and the rest of the CLI set).
+* Adapts to your VS Code theme: light, dark, high contrast.
 * Full keyboard navigation, ARIA landmarks, `prefers-reduced-motion` support.
 
 ## Install
@@ -48,7 +50,7 @@ The first time you open it, you'll see every Claude Code session that's already 
 
 Claude Code stores a full transcript for every session under `~/.claude/projects/<encoded-path>/<session-id>.jsonl`. Each line is a JSON object recording one event: a user prompt, an assistant turn, a tool call, a tool result.
 
-Claude Trace watches that directory with `vscode.workspace.createFileSystemWatcher`. When a session file grows (a new event was appended), the extension reads only the new bytes (not the whole file) and pushes the delta to the dashboard webview. The webview batches incoming updates through `requestAnimationFrame` so even a flood of events stays under one render per frame.
+Claude Trace watches that directory with `vscode.workspace.createFileSystemWatcher`, with a one-second poll as a backstop for the platforms where the watcher misses appends. When a session file grows, the extension reads only the new bytes and pushes the delta to the dashboard webview. The webview batches updates through `requestAnimationFrame`, so even a flood of events stays under one render per frame.
 
 Cost numbers are computed locally from the token counts already in the transcript, using public Anthropic pricing. The context percentage is auto detected: if any turn in the session reports more than 200K input tokens, the dashboard assumes a 1M context window (the variant Claude Code uses on Max and Team plans).
 
@@ -76,7 +78,11 @@ rm -rf ~/.claude/projects
 
 **Event timeline.** Filterable, virtualized, expandable. Click any event to see the inputs the model passed and the result it received back.
 
-**Live updates.** When you have Claude Code running in one window and the dashboard open in another, the active session updates in place. The cards refresh their values, the charts redraw, and new events stream into the timeline. No flicker, no scroll jump, no focus loss in the search box.
+**Side by side diffs.** Every row in *Files touched* and *Memory edits* has a Diff button. Clicking it opens VS Code's diff editor with the file's pre-session state on the left, reconstructed from the transcript, and the live file on the right. The right pane is the real file: editable, with normal undo, save, revert, and the same gutter chevrons Source Control uses. When the on-disk file has drifted from what the session left behind, you get the old summary diff instead, with a notice.
+
+**New session, your terms.** The sidebar has a Start new session button. After naming the session you pick how much Claude should ask before acting. The choices come straight from the CLI: ask before edits, accept edits, plan mode, auto, don't ask, bypass permissions. The mode is passed through as `--permission-mode` when the terminal launches.
+
+**Refreshes as Claude works.** When you have Claude Code running in one window and the dashboard open in another, the active session refreshes in place. The cards update their numbers, the charts redraw, new events stream into the timeline. No flicker, no scroll jump, the search box keeps its focus.
 
 ## Usage
 

@@ -11,6 +11,7 @@ const raw = (overrides: Partial<RawFileEdit>): RawFileEdit => ({
   added: 0,
   removed: 0,
   action: "edit",
+  changes: [],
   ...overrides,
 });
 

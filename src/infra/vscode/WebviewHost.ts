@@ -23,7 +23,7 @@ export class WebviewHost {
         opts.column ?? vscode.ViewColumn.One,
         {
           enableScripts: true,
-          retainContextWhenHidden: false,
+          retainContextWhenHidden: true,
           localResourceRoots: [vscode.Uri.joinPath(opts.extensionUri, "media")],
         },
       );

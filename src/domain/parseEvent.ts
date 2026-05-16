@@ -1,4 +1,4 @@
-import { fileEditActionForTool, type RawFileEdit } from "./fileEdits";
+import { fileEditActionForTool, type FileChange, type RawFileEdit } from "./fileEdits";
 import { lineDiffFromToolInput } from "./lineDiff";
 import { estimateUsageCost, type Usage } from "./pricing";
 import type { ContextSnapshot, CostSnapshot, SessionId, ToolInput, TraceEvent } from "./types";
@@ -268,7 +268,43 @@ const recordFileEdit = (
   if (!action) return;
   const filePath = input["file_path"];
   if (typeof filePath !== "string") return;
-  ctx.fileEdits.push({ ts, filePath, added: diff.added, removed: diff.removed, action });
+  ctx.fileEdits.push({
+    ts,
+    filePath,
+    added: diff.added,
+    removed: diff.removed,
+    action,
+    changes: extractChanges(action, ts, input),
+  });
+};
+
+const extractChanges = (
+  action: "write" | "edit" | "multiedit",
+  ts: number,
+  input: Record<string, unknown>,
+): FileChange[] => {
+  if (action === "write") {
+    const content = typeof input["content"] === "string" ? (input["content"] as string) : "";
+    if (!content) return [];
+    return [{ kind: "write", ts, content }];
+  }
+  if (action === "edit") {
+    const oldString = typeof input["old_string"] === "string" ? (input["old_string"] as string) : "";
+    const newString = typeof input["new_string"] === "string" ? (input["new_string"] as string) : "";
+    if (!oldString && !newString) return [];
+    return [{ kind: "edit", ts, oldString, newString }];
+  }
+  const edits = Array.isArray(input["edits"]) ? (input["edits"] as unknown[]) : [];
+  const out: FileChange[] = [];
+  for (const entry of edits) {
+    if (entry === null || typeof entry !== "object") continue;
+    const rec = entry as Record<string, unknown>;
+    const oldString = typeof rec["old_string"] === "string" ? (rec["old_string"] as string) : "";
+    const newString = typeof rec["new_string"] === "string" ? (rec["new_string"] as string) : "";
+    if (!oldString && !newString) continue;
+    out.push({ kind: "edit", ts, oldString, newString });
+  }
+  return out;
 };
 
 const isObject = (v: unknown): v is Record<string, unknown> =>

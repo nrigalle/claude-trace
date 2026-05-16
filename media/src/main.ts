@@ -26,6 +26,8 @@ const boot = () => {
     onOpenMemoryFile: (filePath: string) => client.send({ type: "openMemoryFile", filePath }),
     onOpenMemoryFolder: (id: SessionId) => client.send({ type: "openMemoryFolder", sessionId: id }),
     onOpenFile: (filePath: string) => client.send({ type: "openFile", filePath }),
+    onViewFileDiff: (id: SessionId, filePath: string) =>
+      client.send({ type: "viewFileDiff", sessionId: id, filePath }),
     onStartNewSession: () => client.send({ type: "startNewSession" }),
   });
 

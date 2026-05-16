@@ -12,6 +12,7 @@ import {
 import { fmtCost } from "../format.js";
 import { h } from "../h.js";
 import { ICONS, icon } from "../icons.js";
+import { renderSidebarSkeletons } from "./Loading.js";
 import { renderSessionItem, type SessionItemHandlers } from "./SessionItem.js";
 
 export interface SidebarHandlers extends SessionItemHandlers {
@@ -21,10 +22,14 @@ export interface SidebarHandlers extends SessionItemHandlers {
 export class Sidebar {
   private readonly root: HTMLElement;
   private readonly statsContainer: HTMLElement;
+  private readonly statsSessions: HTMLElement;
+  private readonly statsTools: HTMLElement;
+  private readonly statsCost: HTMLElement;
   private readonly listContainer: HTMLElement;
   private readonly searchInput: HTMLInputElement;
   private readonly dateFilterChips = new Map<DateFilter, HTMLButtonElement>();
   private sessions: readonly SessionSummary[] = [];
+  private hasLoaded = false;
 
   constructor(
     private readonly store: Store,
@@ -43,6 +48,13 @@ export class Sidebar {
     );
 
     this.statsContainer = h("div", { className: "global-stats", attrs: { role: "status", "aria-live": "polite" } });
+    this.statsContainer.style.display = "none";
+    this.statsSessions = h("span", { className: "stat-pill-value" });
+    this.statsTools = h("span", { className: "stat-pill-value" });
+    this.statsCost = h("span", { className: "stat-pill-value" });
+    this.statsContainer.appendChild(this.buildPill("Sessions", this.statsSessions));
+    this.statsContainer.appendChild(this.buildPill("Tools", this.statsTools));
+    this.statsContainer.appendChild(this.buildPill("Cost", this.statsCost));
 
     const header = h("div", { className: "sidebar-header" }, brand, this.statsContainer);
     this.root.appendChild(header);
@@ -84,6 +96,7 @@ export class Sidebar {
       className: "session-list",
       attrs: { role: "list", "aria-label": "Sessions" },
     });
+    for (const skel of renderSidebarSkeletons()) this.listContainer.appendChild(skel);
     this.root.appendChild(this.listContainer);
   }
 
@@ -92,20 +105,24 @@ export class Sidebar {
   }
 
   updateStats(stats: GlobalStats | null): void {
-    while (this.statsContainer.firstChild) this.statsContainer.removeChild(this.statsContainer.firstChild);
     if (!stats || stats.total_sessions === 0) {
       this.statsContainer.style.display = "none";
       return;
     }
     this.statsContainer.style.display = "";
-    this.statsContainer.appendChild(this.pill("Sessions", String(stats.total_sessions)));
-    this.statsContainer.appendChild(this.pill("Tools", String(stats.total_tool_calls)));
-    this.statsContainer.appendChild(this.pill("Cost", fmtCost(stats.total_cost_usd)));
+    setIfChanged(this.statsSessions, String(stats.total_sessions));
+    setIfChanged(this.statsTools, String(stats.total_tool_calls));
+    setIfChanged(this.statsCost, fmtCost(stats.total_cost_usd));
   }
 
   updateSessions(sessions: readonly SessionSummary[], changedIds: ReadonlySet<SessionId>): void {
     const previousFocusedId = this.capturedActiveSessionId();
     this.sessions = sessions;
+
+    if (!this.hasLoaded) {
+      this.listContainer.querySelectorAll(".session-item-skeleton").forEach((el) => el.remove());
+      this.hasLoaded = true;
+    }
 
     if (sessions.length === 0) {
       while (this.listContainer.firstChild) this.listContainer.removeChild(this.listContainer.firstChild);
@@ -236,12 +253,16 @@ export class Sidebar {
     if (target && document.activeElement !== target) target.focus({ preventScroll: true });
   }
 
-  private pill(label: string, value: string): HTMLElement {
+  private buildPill(label: string, valueEl: HTMLElement): HTMLElement {
     return h(
       "div",
       { className: "stat-pill" },
       h("span", { className: "stat-pill-label", textContent: label }),
-      h("span", { className: "stat-pill-value", textContent: value }),
+      valueEl,
     );
   }
 }
+
+const setIfChanged = (el: HTMLElement, value: string): void => {
+  if (el.textContent !== value) el.textContent = value;
+};

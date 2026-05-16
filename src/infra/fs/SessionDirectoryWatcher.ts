@@ -11,6 +11,10 @@ export type WatcherChange = {
 
 export type WatcherListener = (change: WatcherChange) => void;
 
+export interface WatcherSource {
+  onChange(listener: WatcherListener): vscode.Disposable;
+}
+
 export class SessionDirectoryWatcher {
   private watcher: vscode.FileSystemWatcher | null = null;
   private readonly listeners = new Set<WatcherListener>();

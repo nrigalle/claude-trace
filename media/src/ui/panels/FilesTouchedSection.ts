@@ -3,6 +3,7 @@ import { FileEditsListView } from "./FileEditsListView.js";
 
 export interface FilesTouchedSectionActions {
   onOpenFile(filePath: string): void;
+  onViewDiff(filePath: string): void;
 }
 
 export class FilesTouchedSection {
@@ -14,6 +15,7 @@ export class FilesTouchedSection {
       iconName: "file",
       rowActionLabel: "Open",
       onRowAction: (filePath) => actions.onOpenFile(filePath),
+      onViewDiff: (filePath) => actions.onViewDiff(filePath),
       ariaLabel: "Files edited during this session",
     });
   }

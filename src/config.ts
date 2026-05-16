@@ -13,3 +13,5 @@ export const REFRESH_TRAILING_DEBOUNCE_MS = 350;
 export const REFRESH_MAX_WAIT_MS = 1500;
 
 export const SESSION_CACHE_LRU_LIMIT = 32;
+
+export const LIVE_POLL_INTERVAL_MS = 1000;

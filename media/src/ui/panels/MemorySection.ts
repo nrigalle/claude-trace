@@ -4,6 +4,7 @@ import { FileEditsListView } from "./FileEditsListView.js";
 export interface MemorySectionActions {
   onOpenFile(filePath: string): void;
   onOpenFolder(): void;
+  onViewDiff(filePath: string): void;
 }
 
 export class MemorySection {
@@ -15,6 +16,7 @@ export class MemorySection {
       iconName: "edit",
       rowActionLabel: "Open",
       onRowAction: (filePath) => actions.onOpenFile(filePath),
+      onViewDiff: (filePath) => actions.onViewDiff(filePath),
       folderAction: {
         label: "Open folder",
         icon: "folder",

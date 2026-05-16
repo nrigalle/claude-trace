@@ -8,6 +8,7 @@ export interface FileEditsListOptions {
   readonly iconName: IconName;
   readonly rowActionLabel: string;
   readonly onRowAction: (filePath: string) => void;
+  readonly onViewDiff?: (filePath: string) => void;
   readonly folderAction?: {
     readonly label: string;
     readonly icon: IconName;
@@ -117,6 +118,22 @@ export class FileEditsListView {
     const countEl = h("span", { className: "file-edits-row-count" });
     countEl.hidden = true;
     const diffEl = h("span", { className: "file-edits-row-diff" });
+    const actionsHost = h("div", { className: "file-edits-row-actions" });
+
+    if (this.opts.onViewDiff) {
+      const viewDiff = this.opts.onViewDiff;
+      const diffBtn = h(
+        "button",
+        {
+          className: "file-edits-row-diff-btn",
+          attrs: { type: "button", "aria-label": `View diff for ${edit.fileName}` },
+          on: { click: () => viewDiff(edit.filePath) },
+        },
+        h("span", { textContent: "Diff" }),
+      );
+      actionsHost.appendChild(diffBtn);
+    }
+
     const openBtn = h(
       "button",
       {
@@ -126,13 +143,14 @@ export class FileEditsListView {
       },
       h("span", { textContent: this.opts.rowActionLabel }),
     );
+    actionsHost.appendChild(openBtn);
 
     const row = h(
       "div",
       { className: "file-edits-row", attrs: { role: "listitem" } },
       timeEl,
       h("div", { className: "file-edits-row-main" }, nameEl, countEl, diffEl),
-      openBtn,
+      actionsHost,
     );
     this.applyRowContent(row, edit);
     return row;

@@ -12,8 +12,9 @@ import { SummaryCardsView } from "../panels/SummaryCards.js";
 import { ChartsRowView, CostChartView } from "../panels/ChartsRow.js";
 import { Timeline } from "../panels/Timeline.js";
 import { h } from "../h.js";
-import { Sidebar } from "./Sidebar.js";
 import { renderEmptyState } from "./Empty.js";
+import { renderMainSkeleton } from "./Loading.js";
+import { Sidebar } from "./Sidebar.js";
 
 export interface AppHandlers {
   onSelect(id: SessionId): void;
@@ -22,6 +23,7 @@ export interface AppHandlers {
   onOpenMemoryFile(filePath: string): void;
   onOpenMemoryFolder(id: SessionId): void;
   onOpenFile(filePath: string): void;
+  onViewFileDiff(id: SessionId, filePath: string): void;
   onStartNewSession(): void;
 }
 
@@ -64,6 +66,8 @@ export class App {
   private sessions: readonly SessionSummary[] = [];
   private currentDetail: SessionDetail | null = null;
   private mode: "empty" | "detail" = "empty";
+  private hasLoaded = false;
+  private renderedEmptyKey: "skeleton" | "no-sessions" | "select-session" | null = null;
 
   constructor(private readonly store: Store, handlers: AppHandlers) {
     this.root = h("div", { className: "app-shell" });
@@ -87,10 +91,16 @@ export class App {
       onOpenFolder: () => {
         if (this.currentDetail) handlers.onOpenMemoryFolder(this.currentDetail.session_id);
       },
+      onViewDiff: (filePath) => {
+        if (this.currentDetail) handlers.onViewFileDiff(this.currentDetail.session_id, filePath);
+      },
     });
 
     this.filesSection = new FilesTouchedSection({
       onOpenFile: (filePath) => handlers.onOpenFile(filePath),
+      onViewDiff: (filePath) => {
+        if (this.currentDetail) handlers.onViewFileDiff(this.currentDetail.session_id, filePath);
+      },
     });
 
     this.timeline = new Timeline(store, () => {
@@ -138,6 +148,7 @@ export class App {
     changedIds: ReadonlySet<SessionId>,
   ): void {
     this.sessions = sessions;
+    this.hasLoaded = true;
     this.sidebar.updateStats(stats);
     this.sidebar.updateSessions(sessions, changedIds);
     if (this.mode === "empty") this.refreshEmptyMessage();
@@ -158,17 +169,33 @@ export class App {
   }
 
   private showEmpty(): void {
+    if (this.mode !== "empty") this.renderedEmptyKey = null;
     this.mode = "empty";
     this.detailRoot.hidden = true;
-    this.mainEl.classList.add("empty");
     this.refreshEmptyMessage();
     this.sigs = { ...EMPTY_SIGS };
   }
 
   private refreshEmptyMessage(): void {
+    const key: "skeleton" | "no-sessions" | "select-session" = !this.hasLoaded
+      ? "skeleton"
+      : this.sessions.length === 0
+        ? "no-sessions"
+        : "select-session";
+    if (this.renderedEmptyKey === key) return;
+    this.renderedEmptyKey = key;
+
     while (this.emptyHost.firstChild) this.emptyHost.removeChild(this.emptyHost.firstChild);
     this.emptyHost.hidden = false;
-    this.emptyHost.appendChild(renderEmptyState(this.sessions.length > 0));
+    if (key === "skeleton") {
+      this.mainEl.classList.add("loading");
+      this.mainEl.classList.remove("empty");
+      this.emptyHost.appendChild(renderMainSkeleton());
+    } else {
+      this.mainEl.classList.add("empty");
+      this.mainEl.classList.remove("loading");
+      this.emptyHost.appendChild(renderEmptyState(key === "select-session"));
+    }
   }
 
   private showDetail(d: SessionDetail): void {
@@ -177,6 +204,7 @@ export class App {
       this.emptyHost.hidden = true;
       this.detailRoot.hidden = false;
       this.mainEl.classList.remove("empty");
+      this.mainEl.classList.remove("loading");
     }
 
     const next = computeSignatures(d);

@@ -1,11 +1,16 @@
 export type FileEditAction = "write" | "edit" | "multiedit";
 
+export type FileChange =
+  | { readonly kind: "write"; readonly ts: number; readonly content: string }
+  | { readonly kind: "edit"; readonly ts: number; readonly oldString: string; readonly newString: string };
+
 export interface RawFileEdit {
   readonly ts: number;
   readonly filePath: string;
   readonly added: number;
   readonly removed: number;
   readonly action: FileEditAction;
+  readonly changes: readonly FileChange[];
 }
 
 export interface FileEditSummary {
@@ -16,6 +21,7 @@ export interface FileEditSummary {
   readonly added: number;
   readonly removed: number;
   readonly dominantAction: FileEditAction;
+  readonly changes: readonly FileChange[];
 }
 
 export type FilePathFilter = (filePath: string) => boolean;
@@ -39,6 +45,7 @@ export const aggregateByFile = (
     removed: number;
     hasWrite: boolean;
     hasMultiedit: boolean;
+    changes: FileChange[];
   };
 
   const grouped = new Map<string, Acc>();
@@ -52,6 +59,7 @@ export const aggregateByFile = (
       if (edit.ts > existing.latestTs) existing.latestTs = edit.ts;
       if (edit.action === "write") existing.hasWrite = true;
       if (edit.action === "multiedit") existing.hasMultiedit = true;
+      for (const change of edit.changes) existing.changes.push(change);
     } else {
       grouped.set(edit.filePath, {
         filePath: edit.filePath,
@@ -61,6 +69,7 @@ export const aggregateByFile = (
         removed: edit.removed,
         hasWrite: edit.action === "write",
         hasMultiedit: edit.action === "multiedit",
+        changes: [...edit.changes],
       });
     }
   }
@@ -72,6 +81,7 @@ export const aggregateByFile = (
       : acc.hasMultiedit
         ? "multiedit"
         : "edit";
+    acc.changes.sort((a, b) => a.ts - b.ts);
     result.push({
       filePath: acc.filePath,
       fileName: baseName(acc.filePath),
@@ -80,6 +90,7 @@ export const aggregateByFile = (
       added: acc.added,
       removed: acc.removed,
       dominantAction,
+      changes: acc.changes,
     });
   }
   result.sort((a, b) => b.latestTs - a.latestTs);

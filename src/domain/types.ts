@@ -80,6 +80,10 @@ export interface ChartPoint {
   readonly value: number;
 }
 
+export type FileChange =
+  | { readonly kind: "write"; readonly ts: number; readonly content: string }
+  | { readonly kind: "edit"; readonly ts: number; readonly oldString: string; readonly newString: string };
+
 export interface FileEditSummary {
   readonly filePath: string;
   readonly fileName: string;
@@ -88,6 +92,7 @@ export interface FileEditSummary {
   readonly added: number;
   readonly removed: number;
   readonly dominantAction: "write" | "edit" | "multiedit";
+  readonly changes: readonly FileChange[];
 }
 
 export interface SessionDetail extends SessionSummary {

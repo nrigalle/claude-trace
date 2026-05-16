@@ -2,8 +2,8 @@ import * as vscode from "vscode";
 import type { SessionId, SessionSummary } from "../domain/types";
 import type { WebviewHost } from "../infra/vscode/WebviewHost";
 import type {
-  SessionDirectoryWatcher,
   WatcherChange,
+  WatcherSource,
 } from "../infra/fs/SessionDirectoryWatcher";
 import type { SerializedState } from "../infra/vscode/PanelSerializer";
 import type { WebviewToHost } from "../protocol";
@@ -17,7 +17,10 @@ export interface DashboardActions {
   openMemoryFile(filePath: string): void;
   openMemoryFolder(id: SessionId): void;
   openFile(filePath: string): void;
+  viewFileDiff(id: SessionId, filePath: string): Promise<void>;
   startNewSession(): Promise<void>;
+  setActiveSession(id: SessionId | null): void;
+  invalidateSession(id: SessionId): void;
 }
 
 export class DashboardController {
@@ -32,13 +35,14 @@ export class DashboardController {
   constructor(
     private readonly host: WebviewHost,
     private readonly service: SessionService,
-    private readonly watcher: SessionDirectoryWatcher,
+    private readonly watcher: WatcherSource,
     private readonly actions: DashboardActions,
     initialState?: SerializedState,
   ) {
     if (initialState?.selectedId) {
       this.activeSessionId = initialState.selectedId as SessionId;
     }
+    this.actions.setActiveSession(this.activeSessionId);
 
     this.scheduler = new RefreshScheduler({
       isVisible: () => this.host.visible,
@@ -55,6 +59,7 @@ export class DashboardController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.actions.setActiveSession(null);
     this.scheduler.dispose();
     for (const d of this.disposables) {
       try { d.dispose(); } catch { }
@@ -63,9 +68,10 @@ export class DashboardController {
   }
 
   private onWatcherChange(change: WatcherChange): void {
-    this.service.invalidate(change.sessionId);
+    if (change.kind !== "changed") this.service.invalidate(change.sessionId);
     this.dirtySessions.add(change.sessionId);
     if (change.kind === "added" || change.kind === "removed") this.listDirty = true;
+    this.actions.invalidateSession(change.sessionId);
     this.scheduler.schedule();
   }
 
@@ -82,6 +88,7 @@ export class DashboardController {
         return;
       case "selectSession":
         this.activeSessionId = msg.sessionId;
+        this.actions.setActiveSession(this.activeSessionId);
         if (this.activeSessionId) this.sendSessionDetail(this.activeSessionId);
         return;
       case "renameSession":
@@ -98,6 +105,9 @@ export class DashboardController {
         return;
       case "openFile":
         this.actions.openFile(msg.filePath);
+        return;
+      case "viewFileDiff":
+        void this.actions.viewFileDiff(msg.sessionId, msg.filePath);
         return;
       case "startNewSession":
         void this.actions.startNewSession();

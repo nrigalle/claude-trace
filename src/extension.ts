@@ -5,8 +5,17 @@ import { PendingNameStore } from "./app/PendingNameStore";
 import { SessionService } from "./app/SessionService";
 import { PROJECTS_DIR } from "./config";
 import { isAutoMemoryFile } from "./domain/memory";
+import {
+  buildClaudeCommand,
+  PERMISSION_MODES,
+  type PermissionMode,
+} from "./domain/permissionModes";
+import { computeBeforeContent } from "./domain/reverseApply";
+import { buildUnifiedDiff } from "./domain/unifiedDiff";
 import { ensureProjectsDirExists, SessionFileReader } from "./infra/fs/SessionFileReader";
-import { SessionDirectoryWatcher } from "./infra/fs/SessionDirectoryWatcher";
+import { SessionDirectoryWatcher, type WatcherListener } from "./infra/fs/SessionDirectoryWatcher";
+import { SessionFilePoller } from "./infra/fs/SessionFilePoller";
+import { ClaudeTraceQuickDiff } from "./infra/vscode/ClaudeTraceQuickDiff";
 import { registerOpenDashboardCommand } from "./infra/vscode/Commands";
 import { registerPanelSerializer, SerializedState } from "./infra/vscode/PanelSerializer";
 import { SessionNameStore } from "./infra/vscode/SessionNameStore";
@@ -19,6 +28,27 @@ const PENDING_CLAIM_TTL_MS = 5 * 60_000;
 
 let currentController: DashboardController | null = null;
 
+interface PermissionModeQuickPickItem extends vscode.QuickPickItem {
+  readonly mode: PermissionMode;
+}
+
+const pickPermissionMode = async (): Promise<PermissionMode | undefined> => {
+  const items: PermissionModeQuickPickItem[] = PERMISSION_MODES.map((option) => ({
+    mode: option.mode,
+    label: option.label,
+    description: option.mode,
+    detail: option.oneLine,
+  }));
+  const choice = await vscode.window.showQuickPick(items, {
+    title: "Permission mode for this Claude session",
+    placeHolder: "How much should Claude ask before acting? (Esc = Ask before edits)",
+    ignoreFocusOut: true,
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+  return choice?.mode;
+};
+
 export function activate(context: vscode.ExtensionContext): void {
   ensureProjectsDirExists(PROJECTS_DIR);
 
@@ -27,10 +57,23 @@ export function activate(context: vscode.ExtensionContext): void {
   const reader = new SessionFileReader();
   const service = new SessionService(reader, nameStore);
   const watcher = new SessionDirectoryWatcher();
+  const poller = new SessionFilePoller();
   context.subscriptions.push(watcher.start());
+  context.subscriptions.push(poller.start());
+
+  const watcherSource = {
+    onChange(listener: WatcherListener): vscode.Disposable {
+      const a = watcher.onChange(listener);
+      const b = poller.onChange(listener);
+      return new vscode.Disposable(() => { a.dispose(); b.dispose(); });
+    },
+  };
+
+  const quickDiff = new ClaudeTraceQuickDiff(service);
+  context.subscriptions.push(quickDiff);
 
   context.subscriptions.push(
-    watcher.onChange((change) => {
+    watcherSource.onChange((change) => {
       if (change.kind !== "added") return;
       const claimed = pendingNames.take();
       if (claimed === null) return;
@@ -74,6 +117,47 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!filePath) return;
       void vscode.commands.executeCommand("vscode.open", vscode.Uri.file(filePath));
     },
+    async viewFileDiff(id: SessionId, filePath: string): Promise<void> {
+      const detail = service.detail(id);
+      if (!detail) return;
+      const summary =
+        detail.files_touched.find((f) => f.filePath === filePath) ??
+        detail.memory_edits.find((f) => f.filePath === filePath);
+      if (!summary || summary.changes.length === 0) return;
+
+      const fileUri = vscode.Uri.file(filePath);
+      let currentContent = "";
+      try {
+        const bytes = await vscode.workspace.fs.readFile(fileUri);
+        currentContent = new TextDecoder("utf-8").decode(bytes);
+      } catch {
+        currentContent = "";
+      }
+
+      const reverse = computeBeforeContent(currentContent, summary.changes);
+      if (!reverse.ok) {
+        void vscode.window.showInformationMessage(
+          "Claude Trace: file changed since this session ran; showing a summary diff instead.",
+        );
+        const document = await vscode.workspace.openTextDocument({
+          content: buildUnifiedDiff(summary),
+          language: "diff",
+        });
+        await vscode.window.showTextDocument(document, { preview: true });
+        return;
+      }
+
+      quickDiff.setActiveSession(id);
+      const beforeUri = quickDiff.contentProvider.originalUri(filePath);
+      const title = `${path.basename(filePath)} — Claude session vs current`;
+      await vscode.commands.executeCommand("vscode.diff", beforeUri, fileUri, title, { preview: true });
+    },
+    setActiveSession(id: SessionId | null): void {
+      quickDiff.setActiveSession(id);
+    },
+    invalidateSession(id: SessionId): void {
+      quickDiff.invalidate(id);
+    },
     async startNewSession(): Promise<void> {
       const name = await vscode.window.showInputBox({
         title: "Start a new Claude Code session",
@@ -84,6 +168,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const trimmed = name?.trim() ?? "";
       if (!trimmed) return;
 
+      const mode = (await pickPermissionMode()) ?? "default";
+
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       pendingNames.set(trimmed, PENDING_CLAIM_TTL_MS);
 
@@ -93,7 +179,7 @@ export function activate(context: vscode.ExtensionContext): void {
         iconPath: new vscode.ThemeIcon("pulse"),
       });
       terminal.show();
-      terminal.sendText("claude");
+      terminal.sendText(buildClaudeCommand(mode));
     },
   };
 
@@ -107,7 +193,7 @@ export function activate(context: vscode.ExtensionContext): void {
       column,
       existingPanel,
     });
-    currentController = new DashboardController(host, service, watcher, actions, state);
+    currentController = new DashboardController(host, service, watcherSource, actions, state);
     host.onDispose(() => {
       if (currentController) currentController.dispose();
       currentController = null;
