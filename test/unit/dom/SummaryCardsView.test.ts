@@ -16,6 +16,8 @@ const makeDetail = (overrides: Partial<SessionDetail>): SessionDetail => ({
   context_window: null,
   model: null,
   last_modified_ms: 0,
+  pinned: false,
+  searchable_text: "",
   events: [],
   tool_stats: [],
   context_timeline: [],

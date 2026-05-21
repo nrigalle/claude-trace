@@ -28,6 +28,8 @@ export type WebviewToHost =
   | { readonly type: "openMemoryFolder"; readonly sessionId: SessionId }
   | { readonly type: "openFile"; readonly filePath: string }
   | { readonly type: "viewFileDiff"; readonly sessionId: SessionId; readonly filePath: string }
+  | { readonly type: "exportChatMarkdown"; readonly sessionId: SessionId }
+  | { readonly type: "togglePin"; readonly sessionId: SessionId }
   | { readonly type: "startNewSession" };
 
 export const assertNever = (x: never): never => {

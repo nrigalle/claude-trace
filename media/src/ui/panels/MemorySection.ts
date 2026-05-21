@@ -5,6 +5,8 @@ export interface MemorySectionActions {
   onOpenFile(filePath: string): void;
   onOpenFolder(): void;
   onViewDiff(filePath: string): void;
+  isCollapsed(): boolean;
+  onToggleCollapsed(): void;
 }
 
 export class MemorySection {
@@ -24,6 +26,8 @@ export class MemorySection {
         onClick: () => actions.onOpenFolder(),
       },
       ariaLabel: "Memory edits during this session",
+      collapsed: () => actions.isCollapsed(),
+      onToggleCollapsed: () => actions.onToggleCollapsed(),
     });
   }
 

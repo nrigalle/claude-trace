@@ -1,17 +1,15 @@
 import type { DateFilter } from "../state/Store.js";
 
 export const dateFilterCutoff = (filter: DateFilter, now: Date = new Date()): number | null => {
-  if (filter === "all") return null;
-  const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  if (filter === "today") return cutoff.getTime();
+  if (filter === "all" || filter === "favorites") return null;
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (filter === "today") return startOfDay.getTime();
   if (filter === "week") {
-    const dayOfWeek = cutoff.getDay();
-    const daysSinceMonday = (dayOfWeek + 6) % 7;
-    cutoff.setDate(cutoff.getDate() - daysSinceMonday);
-    return cutoff.getTime();
+    startOfDay.setDate(startOfDay.getDate() - 6);
+    return startOfDay.getTime();
   }
-  cutoff.setDate(1);
-  return cutoff.getTime();
+  startOfDay.setDate(startOfDay.getDate() - 29);
+  return startOfDay.getTime();
 };
 
 export const matchesDateFilter = (
@@ -26,8 +24,9 @@ export const matchesDateFilter = (
 export const DATE_FILTER_LABELS: Record<DateFilter, string> = {
   all: "All",
   today: "Today",
-  week: "This week",
-  month: "This month",
+  week: "Last 7 days",
+  month: "Last 30 days",
+  favorites: "★ Favorites",
 };
 
-export const DATE_FILTER_ORDER: readonly DateFilter[] = ["all", "today", "week", "month"];
+export const DATE_FILTER_ORDER: readonly DateFilter[] = ["all", "today", "week", "month", "favorites"];

@@ -4,6 +4,8 @@ import { FileEditsListView } from "./FileEditsListView.js";
 export interface FilesTouchedSectionActions {
   onOpenFile(filePath: string): void;
   onViewDiff(filePath: string): void;
+  isCollapsed(): boolean;
+  onToggleCollapsed(): void;
 }
 
 export class FilesTouchedSection {
@@ -17,6 +19,8 @@ export class FilesTouchedSection {
       onRowAction: (filePath) => actions.onOpenFile(filePath),
       onViewDiff: (filePath) => actions.onViewDiff(filePath),
       ariaLabel: "Files edited during this session",
+      collapsed: () => actions.isCollapsed(),
+      onToggleCollapsed: () => actions.onToggleCollapsed(),
     });
   }
 

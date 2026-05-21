@@ -1,7 +1,7 @@
 {
   "name": "claude-trace",
   "displayName": "Claude Trace",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Session intelligence dashboard for Claude Code. Trace every action, visualize context usage, and track costs.",
   "publisher": "nrigalle",
   "license": "MIT",
@@ -68,7 +68,24 @@
         "key": "ctrl+alt+t",
         "mac": "cmd+alt+t"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Claude Trace",
+      "properties": {
+        "claudeTrace.budgetPerSession": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Warn when a single Claude Code session exceeds this USD amount. Set to 0 to disable."
+        },
+        "claudeTrace.budgetPerDay": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Warn when today's combined Claude Code spend exceeds this USD amount. Status bar turns amber at 80% and red when over. Set to 0 to disable."
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "node esbuild.mjs",

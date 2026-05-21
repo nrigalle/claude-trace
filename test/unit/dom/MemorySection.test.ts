@@ -16,6 +16,8 @@ const baseDetail = (overrides: Partial<SessionDetail>): SessionDetail => ({
   context_window: null,
   model: null,
   last_modified_ms: 0,
+  pinned: false,
+  searchable_text: "",
   events: [],
   tool_stats: [],
   context_timeline: [],
@@ -37,19 +39,19 @@ const edit = (overrides: Partial<FileEditSummary>): FileEditSummary => ({
 
 describe("MemorySection — visibility", () => {
   it("is hidden when there are no memory edits", () => {
-    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
+    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {}, onViewDiff: () => {}, isCollapsed: () => false, onToggleCollapsed: () => {} });
     view.update(baseDetail({ memory_edits: [] }));
     expect(view.element().hidden).toBe(true);
   });
 
   it("becomes visible when memory edits arrive", () => {
-    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
+    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {}, onViewDiff: () => {}, isCollapsed: () => false, onToggleCollapsed: () => {} });
     view.update(baseDetail({ memory_edits: [edit({})] }));
     expect(view.element().hidden).toBe(false);
   });
 
   it("hides again when edits disappear", () => {
-    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
+    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {}, onViewDiff: () => {}, isCollapsed: () => false, onToggleCollapsed: () => {} });
     view.update(baseDetail({ memory_edits: [edit({})] }));
     view.update(baseDetail({ memory_edits: [] }));
     expect(view.element().hidden).toBe(true);
@@ -58,7 +60,7 @@ describe("MemorySection — visibility", () => {
 
 describe("MemorySection — rendering", () => {
   it("renders one row per file", () => {
-    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
+    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {}, onViewDiff: () => {}, isCollapsed: () => false, onToggleCollapsed: () => {} });
     view.update(baseDetail({
       memory_edits: [
         edit({ filePath: "/a/b/memory/x.md", fileName: "x.md" }),
@@ -69,7 +71,7 @@ describe("MemorySection — rendering", () => {
   });
 
   it("shows the count chip only when count > 1", () => {
-    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
+    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {}, onViewDiff: () => {}, isCollapsed: () => false, onToggleCollapsed: () => {} });
     view.update(baseDetail({ memory_edits: [edit({ count: 3 })] }));
     const countEl = view.element().querySelector<HTMLElement>(".file-edits-row-count")!;
     expect(countEl.hidden).toBe(false);
@@ -77,13 +79,13 @@ describe("MemorySection — rendering", () => {
   });
 
   it("hides the count chip when count is 1", () => {
-    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
+    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {}, onViewDiff: () => {}, isCollapsed: () => false, onToggleCollapsed: () => {} });
     view.update(baseDetail({ memory_edits: [edit({ count: 1 })] }));
     expect(view.element().querySelector<HTMLElement>(".file-edits-row-count")!.hidden).toBe(true);
   });
 
   it("renders write-only diffs as +N", () => {
-    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
+    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {}, onViewDiff: () => {}, isCollapsed: () => false, onToggleCollapsed: () => {} });
     view.update(baseDetail({
       memory_edits: [edit({ dominantAction: "write", added: 12, removed: 0 })],
     }));
@@ -91,7 +93,7 @@ describe("MemorySection — rendering", () => {
   });
 
   it("renders edit diffs as +N / -M", () => {
-    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
+    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {}, onViewDiff: () => {}, isCollapsed: () => false, onToggleCollapsed: () => {} });
     view.update(baseDetail({
       memory_edits: [edit({ dominantAction: "edit", added: 5, removed: 2 })],
     }));
@@ -101,7 +103,7 @@ describe("MemorySection — rendering", () => {
 
 describe("MemorySection — DOM identity across updates", () => {
   it("reuses the same row element when the file persists", () => {
-    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
+    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {}, onViewDiff: () => {}, isCollapsed: () => false, onToggleCollapsed: () => {} });
     document.body.appendChild(view.element());
     view.update(baseDetail({ memory_edits: [edit({ added: 1 })] }));
     const before = view.element().querySelector(".file-edits-row");
@@ -111,7 +113,7 @@ describe("MemorySection — DOM identity across updates", () => {
   });
 
   it("removes rows for files that drop out of the list", () => {
-    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {} });
+    const view = new MemorySection({ onOpenFile: () => {}, onOpenFolder: () => {}, onViewDiff: () => {}, isCollapsed: () => false, onToggleCollapsed: () => {} });
     view.update(baseDetail({
       memory_edits: [
         edit({ filePath: "/a/memory/keep.md", fileName: "keep.md" }),
@@ -135,7 +137,7 @@ describe("MemorySection — actions", () => {
   beforeEach(() => {
     onOpenFile = vi.fn();
     onOpenFolder = vi.fn();
-    view = new MemorySection({ onOpenFile, onOpenFolder });
+    view = new MemorySection({ onOpenFile, onOpenFolder, onViewDiff: () => {}, isCollapsed: () => false, onToggleCollapsed: () => {} });
   });
 
   it("Open button invokes onOpenFile with the absolute path", () => {

@@ -118,3 +118,58 @@ describe("SessionService", () => {
     void detailBefore;
   });
 });
+
+describe("SessionService — summary cache invalidation", () => {
+  it("reuses the same summary object when nothing changed between list() calls", () => {
+    const stamp = Date.now();
+    const id = `svc-cache-${stamp}`;
+    writeSession(`-svc-cache-${stamp}`, id, [assistantTurn("2026-05-01T10:00:00Z")]);
+    const service = new SessionService(new SessionFileReader());
+    const first = service.list().find((s) => s.session_id === toSessionId(id))!;
+    const second = service.list().find((s) => s.session_id === toSessionId(id))!;
+    expect(second).toBe(first);
+  });
+
+  it("rebuilds a session's summary when its pinned state flips", () => {
+    const stamp = Date.now();
+    const id = `svc-cache-pin-${stamp}`;
+    writeSession(`-svc-cache-pin-${stamp}`, id, [assistantTurn("2026-05-01T10:00:00Z")]);
+
+    const pins = { _set: new Set<string>(), has(x: string) { return this._set.has(x); } };
+    const service = new SessionService(new SessionFileReader(), undefined, pins);
+
+    const before = service.list().find((s) => s.session_id === toSessionId(id))!;
+    expect(before.pinned).toBe(false);
+
+    pins._set.add(id);
+    const after = service.list().find((s) => s.session_id === toSessionId(id))!;
+    expect(after.pinned).toBe(true);
+    expect(after).not.toBe(before);
+  });
+
+  it("invalidate(id) forces the next list() to rebuild that session's summary", () => {
+    const stamp = Date.now();
+    const id = `svc-cache-inval-${stamp}`;
+    writeSession(`-svc-cache-inval-${stamp}`, id, [assistantTurn("2026-05-01T10:00:00Z")]);
+
+    const service = new SessionService(new SessionFileReader());
+    const before = service.list().find((s) => s.session_id === toSessionId(id))!;
+    service.invalidate(toSessionId(id));
+    const after = service.list().find((s) => s.session_id === toSessionId(id))!;
+    expect(after).not.toBe(before);
+  });
+
+  it("evicts cached entries for sessions that disappear from disk", () => {
+    const stamp = Date.now();
+    const dir = `-svc-cache-evict-${stamp}`;
+    const fileA = writeSession(dir, `svc-evict-a-${stamp}`, [assistantTurn("2026-05-01T10:00:00Z")]);
+    writeSession(dir, `svc-evict-b-${stamp}`, [assistantTurn("2026-05-01T10:00:00Z")]);
+    const service = new SessionService(new SessionFileReader());
+    service.list();
+    fs.rmSync(fileA);
+    const after = service.list();
+    const ids = new Set(after.map((s) => s.session_id));
+    expect(ids.has(toSessionId(`svc-evict-a-${stamp}`))).toBe(false);
+    expect(ids.has(toSessionId(`svc-evict-b-${stamp}`))).toBe(true);
+  });
+});

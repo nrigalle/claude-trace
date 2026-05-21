@@ -37,6 +37,8 @@ const baseSummary = (overrides: Partial<SessionSummary>): SessionSummary => ({
   context_window: null,
   model: null,
   last_modified_ms: 0,
+  pinned: false,
+  searchable_text: "",
   ...overrides,
 });
 
@@ -197,5 +199,49 @@ describe("computeStats", () => {
   it("ignores cost when total_cost_usd missing", () => {
     const stats = computeStats([baseSummary({ cost: {} })]);
     expect(stats.total_cost_usd).toBe(0);
+  });
+});
+
+describe("summarize — searchable_text", () => {
+  it("collects text from UserPrompt and AssistantText events", () => {
+    const events: TraceEvent[] = [
+      makeEvent({ event: "UserPrompt", ts: 1, tool_result: "refactor the auth middleware" }),
+      makeEvent({ event: "AssistantText", ts: 2, tool_result: "OK, starting with the session layer" }),
+    ];
+    const s = summarize(toSessionId("s"), events, 0);
+    expect(s.searchable_text).toContain("refactor the auth middleware");
+    expect(s.searchable_text).toContain("starting with the session layer");
+  });
+
+  it("collects tool name and string-valued tool_input fields from PostToolUse events", () => {
+    const events: TraceEvent[] = [
+      makeEvent({
+        event: "PostToolUse",
+        ts: 1,
+        tool_name: "Bash",
+        tool_input: { command: "npm test", description: "run the test suite" },
+      }),
+    ];
+    const s = summarize(toSessionId("s"), events, 0);
+    expect(s.searchable_text).toContain("Bash");
+    expect(s.searchable_text).toContain("npm test");
+    expect(s.searchable_text).toContain("run the test suite");
+  });
+
+  it("caps searchable_text at 5000 chars to bound the payload", () => {
+    const huge = "x".repeat(20_000);
+    const events: TraceEvent[] = [
+      makeEvent({ event: "UserPrompt", ts: 1, tool_result: huge }),
+    ];
+    const s = summarize(toSessionId("s"), events, 0);
+    expect(s.searchable_text.length).toBeLessThanOrEqual(5000);
+  });
+
+  it("does NOT pull text from Metrics or other non-conversational events", () => {
+    const events: TraceEvent[] = [
+      makeEvent({ event: "Metrics", ts: 1, tool_result: "this is a tool result, not chat" }),
+    ];
+    const s = summarize(toSessionId("s"), events, 0);
+    expect(s.searchable_text).not.toContain("this is a tool result");
   });
 });

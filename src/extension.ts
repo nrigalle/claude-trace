@@ -1,3 +1,4 @@
+import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { DashboardController, type DashboardActions } from "./app/DashboardController";
@@ -5,57 +6,39 @@ import { PendingNameStore } from "./app/PendingNameStore";
 import { SessionService } from "./app/SessionService";
 import { PROJECTS_DIR } from "./config";
 import { isAutoMemoryFile } from "./domain/memory";
-import {
-  buildClaudeCommand,
-  PERMISSION_MODES,
-  type PermissionMode,
-} from "./domain/permissionModes";
+import { buildChatMarkdown, chatExportFilename } from "./domain/chatExport";
+import { buildClaudeCommand } from "./domain/permissionModes";
 import { computeBeforeContent } from "./domain/reverseApply";
 import { buildUnifiedDiff } from "./domain/unifiedDiff";
 import { ensureProjectsDirExists, SessionFileReader } from "./infra/fs/SessionFileReader";
 import { SessionDirectoryWatcher, type WatcherListener } from "./infra/fs/SessionDirectoryWatcher";
 import { SessionFilePoller } from "./infra/fs/SessionFilePoller";
+import { BudgetMonitor } from "./infra/vscode/BudgetMonitor";
+import { ClaudeTerminalRegistry } from "./infra/vscode/ClaudeTerminalRegistry";
 import { ClaudeTraceQuickDiff } from "./infra/vscode/ClaudeTraceQuickDiff";
 import { registerOpenDashboardCommand } from "./infra/vscode/Commands";
 import { registerPanelSerializer, SerializedState } from "./infra/vscode/PanelSerializer";
+import { pickModel, pickPermissionMode } from "./infra/vscode/SessionPickers";
 import { SessionNameStore } from "./infra/vscode/SessionNameStore";
+import { SessionPinStore } from "./infra/vscode/SessionPinStore";
 import { registerStatusBar } from "./infra/vscode/StatusBar";
 import { WebviewHost } from "./infra/vscode/WebviewHost";
 import type { SessionId } from "./domain/types";
 import { fromSessionId } from "./domain/types";
 
 const PENDING_CLAIM_TTL_MS = 5 * 60_000;
+const CLAUDE_TERMINAL_PREFIX = "Claude · ";
 
 let currentController: DashboardController | null = null;
-
-interface PermissionModeQuickPickItem extends vscode.QuickPickItem {
-  readonly mode: PermissionMode;
-}
-
-const pickPermissionMode = async (): Promise<PermissionMode | undefined> => {
-  const items: PermissionModeQuickPickItem[] = PERMISSION_MODES.map((option) => ({
-    mode: option.mode,
-    label: option.label,
-    description: option.mode,
-    detail: option.oneLine,
-  }));
-  const choice = await vscode.window.showQuickPick(items, {
-    title: "Permission mode for this Claude session",
-    placeHolder: "How much should Claude ask before acting? (Esc = Ask before edits)",
-    ignoreFocusOut: true,
-    matchOnDescription: true,
-    matchOnDetail: true,
-  });
-  return choice?.mode;
-};
 
 export function activate(context: vscode.ExtensionContext): void {
   ensureProjectsDirExists(PROJECTS_DIR);
 
   const nameStore = new SessionNameStore(context.globalState);
+  const pinStore = new SessionPinStore(context.globalState);
   const pendingNames = new PendingNameStore();
   const reader = new SessionFileReader();
-  const service = new SessionService(reader, nameStore);
+  const service = new SessionService(reader, nameStore, pinStore);
   const watcher = new SessionDirectoryWatcher();
   const poller = new SessionFilePoller();
   context.subscriptions.push(watcher.start());
@@ -71,6 +54,16 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const quickDiff = new ClaudeTraceQuickDiff(service);
   context.subscriptions.push(quickDiff);
+
+  const terminalRegistry = new ClaudeTerminalRegistry();
+  context.subscriptions.push(terminalRegistry);
+
+  const budgetMonitor = new BudgetMonitor(() => service.list());
+  context.subscriptions.push(budgetMonitor.start());
+  context.subscriptions.push(budgetMonitor);
+  context.subscriptions.push(
+    watcherSource.onChange(() => budgetMonitor.schedule()),
+  );
 
   context.subscriptions.push(
     watcherSource.onChange((change) => {
@@ -93,15 +86,15 @@ export function activate(context: vscode.ExtensionContext): void {
       if (next === undefined) return;
       await nameStore.set(id, next.trim() || null);
     },
-    resumeSession(id: SessionId, cwd: string | null): void {
+    async resumeSession(id: SessionId, cwd: string | null): Promise<void> {
+      const mode = (await pickPermissionMode("Ask before edits")) ?? "default";
       const shortId = fromSessionId(id).slice(0, 8);
-      const terminal = vscode.window.createTerminal({
-        name: `Claude · ${shortId}`,
-        cwd: cwd ?? undefined,
-        iconPath: new vscode.ThemeIcon("pulse"),
-      });
+      const terminal = await terminalRegistry.create(
+        `${CLAUDE_TERMINAL_PREFIX}${shortId}`,
+        cwd ?? undefined,
+      );
       terminal.show();
-      terminal.sendText(`claude --resume ${fromSessionId(id)}`);
+      terminal.sendText(buildClaudeCommand({ mode, resumeId: fromSessionId(id) }));
     },
     openMemoryFile(filePath: string): void {
       if (!isAutoMemoryFile(filePath)) return;
@@ -136,11 +129,20 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const reverse = computeBeforeContent(currentContent, summary.changes);
       if (!reverse.ok) {
-        void vscode.window.showInformationMessage(
-          "Claude Trace: file changed since this session ran; showing a summary diff instead.",
+        void vscode.window.showWarningMessage(
+          "Claude Trace: this file has been modified since the session ended, so the side-by-side diff can't be reconstructed. Showing a summary of what the session changed instead.",
         );
+        const header = [
+          "# Claude Trace — summary diff",
+          "#",
+          "# This file has been modified on disk since Claude's session ended,",
+          "# so the side-by-side diff editor cannot faithfully reconstruct what changed.",
+          "# The hunks below are what the session itself wrote, in chronological order.",
+          "#",
+          "",
+        ].join("\n");
         const document = await vscode.workspace.openTextDocument({
-          content: buildUnifiedDiff(summary),
+          content: header + buildUnifiedDiff(summary),
           language: "diff",
         });
         await vscode.window.showTextDocument(document, { preview: true });
@@ -152,6 +154,33 @@ export function activate(context: vscode.ExtensionContext): void {
       const title = `${path.basename(filePath)} — Claude session vs current`;
       await vscode.commands.executeCommand("vscode.diff", beforeUri, fileUri, title, { preview: true });
     },
+    async togglePin(id: SessionId): Promise<void> {
+      try {
+        await pinStore.toggle(id);
+      } catch (err) {
+        void vscode.window.showErrorMessage(
+          `Claude Trace: failed to save pin state. ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    },
+    async exportChatMarkdown(id: SessionId): Promise<void> {
+      const detail = service.detail(id);
+      if (!detail) return;
+      const markdown = buildChatMarkdown(detail);
+      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const defaultUri = vscode.Uri.file(
+        path.join(cwd ?? os.homedir(), chatExportFilename(detail)),
+      );
+      const target = await vscode.window.showSaveDialog({
+        defaultUri,
+        filters: { Markdown: ["md"] },
+        saveLabel: "Export chat",
+        title: "Export Claude session chat as Markdown",
+      });
+      if (!target) return;
+      await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(markdown));
+      void vscode.window.showInformationMessage(`Claude Trace: chat exported to ${target.fsPath}`);
+    },
     setActiveSession(id: SessionId | null): void {
       quickDiff.setActiveSession(id);
     },
@@ -161,25 +190,29 @@ export function activate(context: vscode.ExtensionContext): void {
     async startNewSession(): Promise<void> {
       const name = await vscode.window.showInputBox({
         title: "Start a new Claude Code session",
-        prompt: "Give this session a name. It becomes the title in the dashboard.",
+        prompt: "Give this session a name. It becomes the title in the dashboard. Press Esc to cancel.",
         placeHolder: "e.g., Refactor auth middleware",
         ignoreFocusOut: true,
       });
-      const trimmed = name?.trim() ?? "";
+      if (name === undefined) return;
+      const trimmed = name.trim();
       if (!trimmed) return;
 
-      const mode = (await pickPermissionMode()) ?? "default";
+      const model = await pickModel("cancel");
+      if (model === undefined) return;
+
+      const mode = await pickPermissionMode("cancel");
+      if (mode === undefined) return;
 
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       pendingNames.set(trimmed, PENDING_CLAIM_TTL_MS);
 
-      const terminal = vscode.window.createTerminal({
-        name: `Claude · ${trimmed.slice(0, 24)}`,
+      const terminal = await terminalRegistry.create(
+        `${CLAUDE_TERMINAL_PREFIX}${trimmed.slice(0, 24)}`,
         cwd,
-        iconPath: new vscode.ThemeIcon("pulse"),
-      });
+      );
       terminal.show();
-      terminal.sendText(buildClaudeCommand(mode));
+      terminal.sendText(buildClaudeCommand({ mode, model }));
     },
   };
 

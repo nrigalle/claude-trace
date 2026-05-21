@@ -36,18 +36,26 @@ describe("baselineContextSize", () => {
     expect(baselineContextSize("claude-opus-4-7-20260415")).toBe(1_000_000);
   });
 
-  it("returns 200K for Opus 4.6 by default", () => {
-    expect(baselineContextSize("claude-opus-4-6")).toBe(200_000);
+  it("returns 1M for Opus 4.6 (long-context tier per Anthropic)", () => {
+    expect(baselineContextSize("claude-opus-4-6")).toBe(1_000_000);
   });
 
-  it("returns 1M for any model carrying the [1m] flag", () => {
-    expect(baselineContextSize("claude-opus-4-6[1m]")).toBe(1_000_000);
-    expect(baselineContextSize("claude-sonnet-4-6-1m")).toBe(1_000_000);
+  it("returns 1M for Sonnet 4.6 (long-context tier per Anthropic)", () => {
+    expect(baselineContextSize("claude-sonnet-4-6")).toBe(1_000_000);
   });
 
-  it("returns 200K for Sonnet and Haiku by default", () => {
-    expect(baselineContextSize("claude-sonnet-4-6")).toBe(200_000);
+  it("returns 200K for Sonnet 4.5 / Opus 4.5 (still 200K-only)", () => {
+    expect(baselineContextSize("claude-sonnet-4-5")).toBe(200_000);
+    expect(baselineContextSize("claude-opus-4-5")).toBe(200_000);
+  });
+
+  it("returns 200K for Haiku 4.5", () => {
     expect(baselineContextSize("claude-haiku-4-5")).toBe(200_000);
+  });
+
+  it("returns 1M for any model carrying the [1m] flag (legacy beta header)", () => {
+    expect(baselineContextSize("claude-sonnet-4-5[1m]")).toBe(1_000_000);
+    expect(baselineContextSize("claude-sonnet-4-5-1m")).toBe(1_000_000);
   });
 });
 
@@ -63,23 +71,30 @@ describe("effectiveContextSize", () => {
 
   it("upgrades to 1M when observed tokens exceed any 200K baseline", () => {
     const evs = [
-      makeEvent({ model: { id: "claude-sonnet-4-6" }, context_window: { total_input_tokens: 250_000 } }),
+      makeEvent({ model: { id: "claude-sonnet-4-5" }, context_window: { total_input_tokens: 250_000 } }),
     ];
     expect(effectiveContextSize(evs)).toBe(1_000_000);
   });
 
-  it("stays at 200K when observed tokens never cross the threshold", () => {
+  it("stays at 200K when observed tokens never cross the threshold (200K model)", () => {
     const evs = [
-      makeEvent({ model: { id: "claude-sonnet-4-6" }, context_window: { total_input_tokens: 50_000 } }),
-      makeEvent({ model: { id: "claude-sonnet-4-6" }, context_window: { total_input_tokens: 80_000 } }),
+      makeEvent({ model: { id: "claude-sonnet-4-5" }, context_window: { total_input_tokens: 50_000 } }),
+      makeEvent({ model: { id: "claude-sonnet-4-5" }, context_window: { total_input_tokens: 80_000 } }),
     ];
     expect(effectiveContextSize(evs)).toBe(200_000);
   });
 
   it("picks the largest baseline across mixed-model events", () => {
     const evs = [
-      makeEvent({ model: { id: "claude-sonnet-4-6" } }),
+      makeEvent({ model: { id: "claude-haiku-4-5" } }),
       makeEvent({ model: { id: "claude-opus-4-7" } }),
+    ];
+    expect(effectiveContextSize(evs)).toBe(1_000_000);
+  });
+
+  it("Sonnet 4.6 sessions report 1M context even at low usage", () => {
+    const evs = [
+      makeEvent({ model: { id: "claude-sonnet-4-6" }, context_window: { total_input_tokens: 50_000 } }),
     ];
     expect(effectiveContextSize(evs)).toBe(1_000_000);
   });

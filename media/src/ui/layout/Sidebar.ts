@@ -14,9 +14,11 @@ import { h } from "../h.js";
 import { ICONS, icon } from "../icons.js";
 import { renderSidebarSkeletons } from "./Loading.js";
 import { renderSessionItem, type SessionItemHandlers } from "./SessionItem.js";
+import { SidebarResizer } from "./SidebarResizer.js";
 
 export interface SidebarHandlers extends SessionItemHandlers {
   onStartNewSession(): void;
+  onToggleCollapsed(): void;
 }
 
 export class Sidebar {
@@ -29,6 +31,8 @@ export class Sidebar {
   private readonly searchInput: HTMLInputElement;
   private readonly dateFilterChips = new Map<DateFilter, HTMLButtonElement>();
   private sessions: readonly SessionSummary[] = [];
+  private byIdCache: Map<string, SessionSummary> | null = null;
+  private byIdCacheFor: readonly SessionSummary[] | null = null;
   private hasLoaded = false;
 
   constructor(
@@ -40,11 +44,22 @@ export class Sidebar {
       attrs: { "aria-label": "Claude Code sessions" },
     });
 
+    const collapseBtn = h(
+      "button",
+      {
+        className: "sidebar-collapse-btn",
+        attrs: { type: "button", "aria-label": "Collapse sidebar", title: "Collapse sidebar" },
+        on: { click: () => this.handlers.onToggleCollapsed() },
+      },
+      icon("chevron-left", 14),
+    );
+
     const brand = h(
       "div",
       { className: "brand" },
       h("div", { className: "brand-icon", innerHTML: ICONS.zap }),
       h("span", { className: "brand-title", textContent: "Claude Trace" }),
+      collapseBtn,
     );
 
     this.statsContainer = h("div", { className: "global-stats", attrs: { role: "status", "aria-live": "polite" } });
@@ -98,6 +113,14 @@ export class Sidebar {
     });
     for (const skel of renderSidebarSkeletons()) this.listContainer.appendChild(skel);
     this.root.appendChild(this.listContainer);
+
+    const resizer = new SidebarResizer({
+      target: this.root,
+      initialPx: this.store.state.sidebarWidth,
+      onLivePx: () => { /* width applied directly to CSS var; no Store churn mid-drag */ },
+      onCommitPx: (px) => this.store.update({ sidebarWidth: px }),
+    });
+    this.root.appendChild(resizer.element);
   }
 
   mount(parent: HTMLElement): void {
@@ -105,7 +128,8 @@ export class Sidebar {
   }
 
   updateStats(stats: GlobalStats | null): void {
-    if (!stats || stats.total_sessions === 0) {
+    if (stats === null) return;
+    if (stats.total_sessions === 0) {
       this.statsContainer.style.display = "none";
       return;
     }
@@ -118,6 +142,8 @@ export class Sidebar {
   updateSessions(sessions: readonly SessionSummary[], changedIds: ReadonlySet<SessionId>): void {
     const previousFocusedId = this.capturedActiveSessionId();
     this.sessions = sessions;
+    this.byIdCache = null;
+    this.byIdCacheFor = null;
 
     if (!this.hasLoaded) {
       this.listContainer.querySelectorAll(".session-item-skeleton").forEach((el) => el.remove());
@@ -186,23 +212,44 @@ export class Sidebar {
   private applyFilter(): void {
     const q = this.store.state.searchQuery.toLowerCase().trim();
     const dateFilter = this.store.state.dateFilter;
+    const onlyFavorites = dateFilter === "favorites";
+    const byId = this.sessionsById();
     const now = new Date();
     this.listContainer.querySelectorAll<HTMLButtonElement>(".session-item").forEach((el) => {
       const id = el.dataset.sessionId;
-      const session = this.sessions.find((s) => s.session_id === id);
+      const session = id ? byId.get(id) : undefined;
       if (!session) {
         el.style.display = "none";
         return;
       }
-      const lastActivity = session.ended_at ?? session.last_modified_ms;
-      const inRange = matchesDateFilter(lastActivity, dateFilter, now);
+      if (onlyFavorites && !session.pinned) {
+        el.style.display = "none";
+        return;
+      }
+      if (!onlyFavorites) {
+        const lastActivity = session.ended_at ?? session.last_modified_ms;
+        if (!matchesDateFilter(lastActivity, dateFilter, now)) {
+          el.style.display = "none";
+          return;
+        }
+      }
       const searchHit =
         !q ||
         session.session_id.toLowerCase().includes(q) ||
         (session.cwd?.toLowerCase().includes(q) ?? false) ||
-        (session.title?.toLowerCase().includes(q) ?? false);
-      el.style.display = inRange && searchHit ? "" : "none";
+        (session.title?.toLowerCase().includes(q) ?? false) ||
+        session.searchable_text.toLowerCase().includes(q);
+      el.style.display = searchHit ? "" : "none";
     });
+  }
+
+  private sessionsById(): Map<string, SessionSummary> {
+    if (this.byIdCache && this.byIdCacheFor === this.sessions) return this.byIdCache;
+    const map = new Map<string, SessionSummary>();
+    for (const s of this.sessions) map.set(s.session_id, s);
+    this.byIdCache = map;
+    this.byIdCacheFor = this.sessions;
+    return map;
   }
 
   private buildDateFilters(): HTMLElement {

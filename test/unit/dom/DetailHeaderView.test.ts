@@ -16,6 +16,8 @@ const baseDetail = (overrides: Partial<SessionDetail>): SessionDetail => ({
   context_window: null,
   model: null,
   last_modified_ms: 0,
+  pinned: false,
+  searchable_text: "",
   events: [],
   tool_stats: [],
   context_timeline: [],
@@ -23,7 +25,7 @@ const baseDetail = (overrides: Partial<SessionDetail>): SessionDetail => ({
   ...overrides,
 });
 
-const noopActions = { onRename: () => {}, onResume: () => {} };
+const noopActions = { onRename: () => {}, onResume: () => {}, onExportChat: () => {} };
 
 describe("DetailHeaderView — display", () => {
   it("h2 and path elements survive across update calls", () => {
@@ -105,34 +107,44 @@ describe("DetailHeaderView — action buttons", () => {
   let onResume: ReturnType<typeof vi.fn>;
   let view: DetailHeaderView;
 
+  let onExportChat: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
     onRename = vi.fn();
     onResume = vi.fn();
-    view = new DetailHeaderView({ onRename, onResume });
+    onExportChat = vi.fn();
+    view = new DetailHeaderView({ onRename, onResume, onExportChat });
     document.body.appendChild(view.element());
   });
 
-  const buttons = (): { rename: HTMLButtonElement; resume: HTMLButtonElement } => {
+  const buttons = (): {
+    rename: HTMLButtonElement;
+    exportChat: HTMLButtonElement;
+    resume: HTMLButtonElement;
+  } => {
     const all = view.element().querySelectorAll<HTMLButtonElement>(".detail-action-btn");
-    return { rename: all[0]!, resume: all[1]! };
+    return { rename: all[0]!, exportChat: all[1]!, resume: all[2]! };
   };
 
-  it("renders Rename and Resume buttons", () => {
-    const { rename, resume } = buttons();
+  it("renders Rename, Export chat and Resume buttons", () => {
+    const { rename, exportChat, resume } = buttons();
     expect(rename.textContent).toContain("Rename");
+    expect(exportChat.textContent).toContain("Export chat");
     expect(resume.textContent).toContain("Resume");
   });
 
   it("buttons start disabled until a detail is shown", () => {
-    const { rename, resume } = buttons();
+    const { rename, exportChat, resume } = buttons();
     expect(rename.disabled).toBe(true);
+    expect(exportChat.disabled).toBe(true);
     expect(resume.disabled).toBe(true);
   });
 
   it("buttons become enabled after first update", () => {
     view.update(baseDetail({ title: "anything" }));
-    const { rename, resume } = buttons();
+    const { rename, exportChat, resume } = buttons();
     expect(rename.disabled).toBe(false);
+    expect(exportChat.disabled).toBe(false);
     expect(resume.disabled).toBe(false);
   });
 
@@ -146,6 +158,12 @@ describe("DetailHeaderView — action buttons", () => {
     view.update(baseDetail({}));
     buttons().resume.click();
     expect(onResume).toHaveBeenCalledTimes(1);
+  });
+
+  it("Export chat click invokes onExportChat callback", () => {
+    view.update(baseDetail({}));
+    buttons().exportChat.click();
+    expect(onExportChat).toHaveBeenCalledTimes(1);
   });
 
   it("button DOM identity survives across updates", () => {

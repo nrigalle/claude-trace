@@ -12,6 +12,7 @@ import { SummaryCardsView } from "../panels/SummaryCards.js";
 import { ChartsRowView, CostChartView } from "../panels/ChartsRow.js";
 import { Timeline } from "../panels/Timeline.js";
 import { h } from "../h.js";
+import { icon } from "../icons.js";
 import { renderEmptyState } from "./Empty.js";
 import { renderMainSkeleton } from "./Loading.js";
 import { Sidebar } from "./Sidebar.js";
@@ -24,6 +25,8 @@ export interface AppHandlers {
   onOpenMemoryFolder(id: SessionId): void;
   onOpenFile(filePath: string): void;
   onViewFileDiff(id: SessionId, filePath: string): void;
+  onExportChat(id: SessionId): void;
+  onTogglePin(id: SessionId): void;
   onStartNewSession(): void;
 }
 
@@ -53,6 +56,7 @@ export class App {
   private readonly mainEl: HTMLElement;
   private readonly detailRoot: HTMLElement;
   private readonly emptyHost: HTMLElement;
+  private readonly expandSidebarBtn: HTMLButtonElement;
 
   private readonly detailHeader: DetailHeaderView;
   private readonly summaryCards = new SummaryCardsView();
@@ -73,9 +77,22 @@ export class App {
     this.root = h("div", { className: "app-shell" });
     this.sidebar = new Sidebar(store, {
       onSelect: handlers.onSelect,
+      onTogglePin: handlers.onTogglePin,
       onStartNewSession: handlers.onStartNewSession,
+      onToggleCollapsed: () => this.setSidebarCollapsed(!this.store.state.sidebarCollapsed),
     });
     this.sidebar.mount(this.root);
+
+    this.expandSidebarBtn = h(
+      "button",
+      {
+        className: "sidebar-expand-btn",
+        attrs: { type: "button", "aria-label": "Show sidebar", title: "Show sidebar" },
+        on: { click: () => this.setSidebarCollapsed(false) },
+      },
+      icon("chevron-right", 14),
+    );
+    this.root.appendChild(this.expandSidebarBtn);
 
     this.detailHeader = new DetailHeaderView({
       onRename: () => {
@@ -83,6 +100,9 @@ export class App {
       },
       onResume: () => {
         if (this.currentDetail) handlers.onResume(this.currentDetail.session_id);
+      },
+      onExportChat: () => {
+        if (this.currentDetail) handlers.onExportChat(this.currentDetail.session_id);
       },
     });
 
@@ -94,12 +114,22 @@ export class App {
       onViewDiff: (filePath) => {
         if (this.currentDetail) handlers.onViewFileDiff(this.currentDetail.session_id, filePath);
       },
+      isCollapsed: () => this.store.state.memoryEditsCollapsed,
+      onToggleCollapsed: () => {
+        this.store.update({ memoryEditsCollapsed: !this.store.state.memoryEditsCollapsed });
+        if (this.currentDetail) this.memorySection.update(this.currentDetail);
+      },
     });
 
     this.filesSection = new FilesTouchedSection({
       onOpenFile: (filePath) => handlers.onOpenFile(filePath),
       onViewDiff: (filePath) => {
         if (this.currentDetail) handlers.onViewFileDiff(this.currentDetail.session_id, filePath);
+      },
+      isCollapsed: () => this.store.state.filesTouchedCollapsed,
+      onToggleCollapsed: () => {
+        this.store.update({ filesTouchedCollapsed: !this.store.state.filesTouchedCollapsed });
+        if (this.currentDetail) this.filesSection.update(this.currentDetail);
       },
     });
 
@@ -135,11 +165,23 @@ export class App {
     }, { passive: true });
 
     this.root.appendChild(this.mainEl);
+    this.applySidebarCollapsed();
     this.showEmpty();
   }
 
   mount(parent: HTMLElement): void {
     parent.appendChild(this.root);
+  }
+
+  private setSidebarCollapsed(collapsed: boolean): void {
+    if (this.store.state.sidebarCollapsed === collapsed) return;
+    this.store.update({ sidebarCollapsed: collapsed });
+    this.applySidebarCollapsed();
+  }
+
+  private applySidebarCollapsed(): void {
+    const collapsed = this.store.state.sidebarCollapsed;
+    this.root.classList.toggle("sidebar-collapsed", collapsed);
   }
 
   updateSessions(

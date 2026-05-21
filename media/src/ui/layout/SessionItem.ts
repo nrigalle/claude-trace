@@ -4,6 +4,7 @@ import { h } from "../h.js";
 
 export interface SessionItemHandlers {
   onSelect(id: SessionId): void;
+  onTogglePin(id: SessionId): void;
 }
 
 const deriveProject = (cwd: string | null): string => {
@@ -27,10 +28,33 @@ export const renderSessionItem = (
   const model = s.model?.display_name ?? null;
   const lastActivityTs = s.ended_at ?? s.last_modified_ms;
 
+  const pinHandler = (ev: Event): void => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    handlers.onTogglePin(s.session_id);
+  };
+  const pin = h("span", {
+    className: `session-item-pin${s.pinned ? " pinned" : ""}`,
+    textContent: s.pinned ? "★" : "☆",
+    attrs: {
+      role: "button",
+      tabindex: "0",
+      "aria-label": s.pinned ? `Unpin ${title}` : `Pin ${title}`,
+      "aria-pressed": String(s.pinned),
+      title: s.pinned ? "Unpin session" : "Pin session",
+    },
+    on: {
+      click: pinHandler,
+      keydown: (e: KeyboardEvent) => {
+        if (e.key === "Enter" || e.key === " ") pinHandler(e);
+      },
+    },
+  });
+
   const item = h(
     "button",
     {
-      className: `session-item${isActive ? " active" : ""}`,
+      className: `session-item${isActive ? " active" : ""}${s.pinned ? " pinned" : ""}`,
       attrs: {
         type: "button",
         "aria-pressed": String(isActive),
@@ -41,6 +65,7 @@ export const renderSessionItem = (
     h(
       "div",
       { className: "session-item-header" },
+      pin,
       h("span", {
         className: "session-item-name",
         textContent: title,
@@ -68,12 +93,13 @@ export const renderSessionItem = (
         ? h("span", { textContent: fmtCost(s.cost.total_cost_usd) })
         : null,
     ),
-    h(
-      "div",
-      { className: "session-item-tags" },
-      model ? h("span", { className: "tag", textContent: model }) : null,
-      h("span", { className: "tag", textContent: shortId(s.session_id) }),
-    ),
+    model
+      ? h(
+          "div",
+          { className: "session-item-tags" },
+          h("span", { className: "tag", textContent: model }),
+        )
+      : null,
   );
   item.dataset.sessionId = s.session_id;
   return item;

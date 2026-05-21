@@ -12,7 +12,9 @@ export type HookEvent =
   | "StopFailure"
   | "PreCompact"
   | "PostCompact"
-  | "Metrics";
+  | "Metrics"
+  | "UserPrompt"
+  | "AssistantText";
 
 export interface CostSnapshot {
   readonly total_cost_usd?: number;
@@ -68,6 +70,8 @@ export interface SessionSummary {
   readonly context_window: ContextSnapshot | null;
   readonly model: ModelInfo | null;
   readonly last_modified_ms: number;
+  readonly pinned: boolean;
+  readonly searchable_text: string;
 }
 
 export interface ToolStat {

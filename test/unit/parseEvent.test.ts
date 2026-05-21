@@ -167,10 +167,10 @@ describe("parseNativeLine — assistant with tool_use", () => {
 });
 
 describe("parseNativeLine — assistant without tool_use", () => {
-  it("emits a single Metrics event when content has only text/thinking", () => {
+  it("emits an AssistantText event when content has only text", () => {
     const events = parseNativeLine(assistantLine({ textOnly: true }), ctx());
-    expect(events).toHaveLength(1);
-    expect(events[0]!.event).toBe("Metrics");
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events.some((e) => e.event === "AssistantText")).toBe(true);
   });
 });
 
@@ -285,6 +285,102 @@ describe("parseNativeLine — user messages", () => {
   });
 });
 
+const assistantLineWithCacheSplit = (split: {
+  ephemeral_5m_input_tokens?: number;
+  ephemeral_1h_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  model?: string;
+  isSidechain?: boolean;
+}) =>
+  JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-05-01T10:00:00Z",
+    cwd: "/p",
+    sessionId: "s",
+    isSidechain: split.isSidechain ?? false,
+    message: {
+      model: split.model ?? "claude-opus-4-7",
+      content: [{ type: "tool_use", id: "t", name: "Bash", input: { command: "ls" } }],
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: split.cache_creation_input_tokens ?? 0,
+        cache_creation: {
+          ephemeral_5m_input_tokens: split.ephemeral_5m_input_tokens ?? 0,
+          ephemeral_1h_input_tokens: split.ephemeral_1h_input_tokens ?? 0,
+        },
+      },
+    },
+  });
+
+describe("parseNativeLine — cache-tier billing", () => {
+  it("1h cache tier costs $10 / MTok on Opus 4.7, not the 5m rate", () => {
+    const c = ctx();
+    parseNativeLine(
+      assistantLineWithCacheSplit({
+        ephemeral_1h_input_tokens: 1_000_000,
+        cache_creation_input_tokens: 1_000_000,
+      }),
+      c,
+    );
+    expect(c.totalCostUsd).toBeCloseTo(10, 2);
+  });
+
+  it("5m cache tier costs $6.25 / MTok on Opus 4.7", () => {
+    const c = ctx();
+    parseNativeLine(
+      assistantLineWithCacheSplit({
+        ephemeral_5m_input_tokens: 1_000_000,
+        cache_creation_input_tokens: 1_000_000,
+      }),
+      c,
+    );
+    expect(c.totalCostUsd).toBeCloseTo(6.25, 2);
+  });
+
+  it("falls back to 5m rate when cache_creation object is absent (legacy JSONL)", () => {
+    const c = ctx();
+    parseNativeLine(
+      assistantLine({
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 1_000_000,
+        },
+      }),
+      c,
+    );
+    expect(c.totalCostUsd).toBeCloseTo(6.25, 2);
+  });
+
+  it("real-world 48,111 1h-cache turn costs ~$0.481 on Opus 4.7", () => {
+    const c = ctx();
+    parseNativeLine(
+      assistantLineWithCacheSplit({
+        ephemeral_1h_input_tokens: 48_111,
+        cache_creation_input_tokens: 48_111,
+      }),
+      c,
+    );
+    expect(c.totalCostUsd).toBeCloseTo(0.48111, 4);
+  });
+
+  it("Sonnet 4.6 1h cache write costs $6 / MTok (not $3.75)", () => {
+    const c = ctx();
+    parseNativeLine(
+      assistantLineWithCacheSplit({
+        ephemeral_1h_input_tokens: 1_000_000,
+        cache_creation_input_tokens: 1_000_000,
+        model: "claude-sonnet-4-6",
+      }),
+      c,
+    );
+    expect(c.totalCostUsd).toBeCloseTo(6, 2);
+  });
+});
+
 describe("parseNativeLine — sidechain isolation", () => {
   it("sidechain assistant turn still emits tool_use events", () => {
     const events = parseNativeLine(
@@ -396,5 +492,86 @@ describe("parseNativeLine — property invariants", () => {
       }),
       { numRuns: 100 },
     );
+  });
+});
+
+describe("parseNativeLine — conversation events", () => {
+  it("emits a UserPrompt event for plain-string user content", () => {
+    const events = parseNativeLine(userLine("What does this function do?"), ctx());
+    const prompt = events.find((e) => e.event === "UserPrompt");
+    expect(prompt).toBeDefined();
+    expect(prompt!.tool_result).toBe("What does this function do?");
+  });
+
+  it("emits a UserPrompt event for text content blocks", () => {
+    const events = parseNativeLine(userLine([{ type: "text", text: "Hello from block" }]), ctx());
+    const prompts = events.filter((e) => e.event === "UserPrompt");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]!.tool_result).toBe("Hello from block");
+  });
+
+  it("does NOT emit a UserPrompt for synthetic system-reminder prefixes", () => {
+    const events = parseNativeLine(userLine("<system-reminder>internal</system-reminder>"), ctx());
+    expect(events.some((e) => e.event === "UserPrompt")).toBe(false);
+  });
+
+  it("does NOT emit a UserPrompt for local-command-caveat", () => {
+    const events = parseNativeLine(userLine("<local-command-caveat>x</local-command-caveat>"), ctx());
+    expect(events.some((e) => e.event === "UserPrompt")).toBe(false);
+  });
+
+  it("does NOT emit a UserPrompt for empty/whitespace text", () => {
+    const events = parseNativeLine(userLine("   "), ctx());
+    expect(events.some((e) => e.event === "UserPrompt")).toBe(false);
+  });
+
+  it("a user turn with both text and tool_result emits one UserPrompt + one Metrics", () => {
+    const events = parseNativeLine(
+      userLine([
+        { type: "text", text: "Please run ls" },
+        { type: "tool_result", tool_use_id: "t", content: "file1.txt\nfile2.txt" },
+      ]),
+      ctx(),
+    );
+    expect(events.filter((e) => e.event === "UserPrompt")).toHaveLength(1);
+    expect(events.filter((e) => e.event === "Metrics")).toHaveLength(1);
+  });
+
+  it("an assistant turn with text + tool_use emits BOTH AssistantText and PostToolUse", () => {
+    const line = JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-05-01T10:00:00Z",
+      message: {
+        model: "claude-opus-4-7",
+        content: [
+          { type: "text", text: "I'll run ls for you." },
+          { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } },
+        ],
+      },
+    });
+    const events = parseNativeLine(line, ctx());
+    expect(events.filter((e) => e.event === "AssistantText")).toHaveLength(1);
+    expect(events.filter((e) => e.event === "PostToolUse")).toHaveLength(1);
+    const text = events.find((e) => e.event === "AssistantText");
+    expect(text!.tool_result).toBe("I'll run ls for you.");
+  });
+
+  it("AssistantText events carry the running cost snapshot AFTER tool-derived line counts accumulate", () => {
+    const line = JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-05-01T10:00:00Z",
+      message: {
+        model: "claude-opus-4-7",
+        content: [
+          { type: "tool_use", id: "t1", name: "Edit", input: { file_path: "/x", old_string: "a", new_string: "b\nc" } },
+          { type: "text", text: "Done." },
+        ],
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+    });
+    const events = parseNativeLine(line, ctx());
+    const text = events.find((e) => e.event === "AssistantText");
+    expect(text).toBeDefined();
+    expect(text!.cost?.total_lines_added).toBeGreaterThan(0);
   });
 });

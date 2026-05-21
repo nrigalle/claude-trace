@@ -1,3 +1,5 @@
+import type { ModelChoice } from "./models";
+
 export type PermissionMode =
   | "default"
   | "acceptEdits"
@@ -45,7 +47,16 @@ export const PERMISSION_MODES: readonly PermissionModeOption[] = [
   },
 ];
 
-export const buildClaudeCommand = (mode: PermissionMode): string => {
-  if (mode === "default") return "claude";
-  return `claude --permission-mode ${mode}`;
+export interface ClaudeCommandOptions {
+  readonly mode: PermissionMode;
+  readonly resumeId?: string;
+  readonly model?: ModelChoice;
+}
+
+export const buildClaudeCommand = (opts: ClaudeCommandOptions): string => {
+  const parts = ["claude"];
+  if (opts.resumeId) parts.push("--resume", opts.resumeId);
+  if (opts.model && opts.model !== "default") parts.push("--model", opts.model);
+  if (opts.mode !== "default") parts.push("--permission-mode", opts.mode);
+  return parts.join(" ");
 };

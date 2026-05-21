@@ -1,4 +1,4 @@
-import type { SessionId, SessionSummary } from "../../src/domain/types";
+import type { GlobalStats, SessionId, SessionSummary } from "../../src/domain/types";
 import type { HostToWebview } from "../../src/protocol";
 import { MessageClient } from "./messaging/client.js";
 import { Store } from "./state/Store.js";
@@ -7,6 +7,7 @@ import { App } from "./ui/layout/App.js";
 const boot = () => {
   const store = new Store();
   let sessionsCache: readonly SessionSummary[] = [];
+  let statsCache: GlobalStats | null = null;
 
   const app = new App(store, {
     onSelect: (id: SessionId) => {
@@ -28,6 +29,18 @@ const boot = () => {
     onOpenFile: (filePath: string) => client.send({ type: "openFile", filePath }),
     onViewFileDiff: (id: SessionId, filePath: string) =>
       client.send({ type: "viewFileDiff", sessionId: id, filePath }),
+    onExportChat: (id: SessionId) => client.send({ type: "exportChatMarkdown", sessionId: id }),
+    onTogglePin: (id: SessionId) => {
+      let target: SessionSummary | undefined;
+      sessionsCache = sessionsCache.map((s) => {
+        if (s.session_id !== id) return s;
+        const flipped = { ...s, pinned: !s.pinned };
+        target = flipped;
+        return flipped;
+      });
+      if (target) app.updateSessions(sessionsCache, statsCache, new Set([id]));
+      client.send({ type: "togglePin", sessionId: id });
+    },
     onStartNewSession: () => client.send({ type: "startNewSession" }),
   });
 
@@ -39,6 +52,7 @@ const boot = () => {
   client.onUpdate((msg: HostToWebview) => {
     if (msg.type === "update") {
       sessionsCache = msg.sessions;
+      statsCache = msg.stats;
       app.updateSessions(msg.sessions, msg.stats, new Set(msg.changedIds));
 
       const selected = store.state.selectedId;

@@ -13,11 +13,13 @@ import { RefreshScheduler } from "./RefreshScheduler";
 
 export interface DashboardActions {
   renameSession(id: SessionId): Promise<void>;
-  resumeSession(id: SessionId, cwd: string | null): void;
+  resumeSession(id: SessionId, cwd: string | null): Promise<void>;
   openMemoryFile(filePath: string): void;
   openMemoryFolder(id: SessionId): void;
   openFile(filePath: string): void;
   viewFileDiff(id: SessionId, filePath: string): Promise<void>;
+  exportChatMarkdown(id: SessionId): Promise<void>;
+  togglePin(id: SessionId): Promise<void>;
   startNewSession(): Promise<void>;
   setActiveSession(id: SessionId | null): void;
   invalidateSession(id: SessionId): void;
@@ -95,7 +97,7 @@ export class DashboardController {
         void this.handleRename(msg.sessionId);
         return;
       case "resumeSession":
-        this.actions.resumeSession(msg.sessionId, this.service.detail(msg.sessionId)?.cwd ?? null);
+        void this.actions.resumeSession(msg.sessionId, this.service.detail(msg.sessionId)?.cwd ?? null);
         return;
       case "openMemoryFile":
         this.actions.openMemoryFile(msg.filePath);
@@ -109,6 +111,15 @@ export class DashboardController {
       case "viewFileDiff":
         void this.actions.viewFileDiff(msg.sessionId, msg.filePath);
         return;
+      case "exportChatMarkdown":
+        void this.actions.exportChatMarkdown(msg.sessionId);
+        return;
+      case "togglePin":
+        this.lastSent.delete(msg.sessionId);
+        this.dirtySessions.add(msg.sessionId);
+        this.listDirty = true;
+        void this.handleTogglePin(msg.sessionId);
+        return;
       case "startNewSession":
         void this.actions.startNewSession();
         return;
@@ -119,6 +130,14 @@ export class DashboardController {
 
   private async handleRename(id: SessionId): Promise<void> {
     await this.actions.renameSession(id);
+    this.lastSent.delete(id);
+    this.dirtySessions.add(id);
+    this.listDirty = true;
+    if (this.host.visible) this.flush();
+  }
+
+  private async handleTogglePin(id: SessionId): Promise<void> {
+    await this.actions.togglePin(id);
     this.lastSent.delete(id);
     this.dirtySessions.add(id);
     this.listDirty = true;

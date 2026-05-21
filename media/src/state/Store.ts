@@ -1,16 +1,23 @@
 import type { SessionId } from "../../../src/domain/types";
+import { clampSidebarWidth, SIDEBAR_DEFAULT_PX } from "../ui/layout/sidebarWidth.js";
 
-export type TimelineFilter = "all" | "tools" | "errors";
-export type DateFilter = "all" | "today" | "week" | "month";
+export type TimelineFilter = "all" | "tools" | "errors" | "conversation";
+export type DateFilter = "all" | "today" | "week" | "month" | "favorites";
 
 export interface UiState {
   selectedId: SessionId | null;
   searchQuery: string;
   dateFilter: DateFilter;
   timelineFilter: TimelineFilter;
+  toolFilter: string | null;
   expandedEvent: number | null;
   mainScroll: number;
   timelineScroll: number;
+  filesTouchedCollapsed: boolean;
+  memoryEditsCollapsed: boolean;
+  timelineCollapsed: boolean;
+  sidebarWidth: number;
+  sidebarCollapsed: boolean;
 }
 
 interface VsCodeApi {
@@ -26,16 +33,27 @@ const DEFAULTS: UiState = {
   searchQuery: "",
   dateFilter: "all",
   timelineFilter: "all",
+  toolFilter: null,
   expandedEvent: null,
   mainScroll: 0,
   timelineScroll: 0,
+  filesTouchedCollapsed: false,
+  memoryEditsCollapsed: false,
+  timelineCollapsed: false,
+  sidebarWidth: SIDEBAR_DEFAULT_PX,
+  sidebarCollapsed: false,
 };
 
 const normalizeFilter = (value: unknown): TimelineFilter =>
-  value === "tools" || value === "errors" ? value : "all";
+  value === "tools" || value === "errors" || value === "conversation" ? value : "all";
 
 const normalizeDateFilter = (value: unknown): DateFilter =>
-  value === "today" || value === "week" || value === "month" ? value : "all";
+  value === "today" || value === "week" || value === "month" || value === "favorites" ? value : "all";
+
+const normalizeToolFilter = (value: unknown): string | null =>
+  typeof value === "string" && value.length > 0 ? value : null;
+
+const normalizeBool = (value: unknown): boolean => value === true;
 
 export class Store {
   readonly vscode: VsCodeApi;
@@ -51,6 +69,12 @@ export class Store {
       ...(saved ?? {}),
       timelineFilter: normalizeFilter(saved?.timelineFilter),
       dateFilter: normalizeDateFilter(saved?.dateFilter),
+      toolFilter: normalizeToolFilter(saved?.toolFilter),
+      filesTouchedCollapsed: normalizeBool(saved?.filesTouchedCollapsed),
+      memoryEditsCollapsed: normalizeBool(saved?.memoryEditsCollapsed),
+      timelineCollapsed: normalizeBool(saved?.timelineCollapsed),
+      sidebarWidth: clampSidebarWidth(saved?.sidebarWidth),
+      sidebarCollapsed: normalizeBool(saved?.sidebarCollapsed),
     };
   }
 

@@ -16,10 +16,13 @@ export interface FileEditsListOptions {
     readonly ariaLabel: string;
   };
   readonly ariaLabel: string;
+  readonly collapsed: () => boolean;
+  readonly onToggleCollapsed: () => void;
 }
 
 export class FileEditsListView {
   readonly root: HTMLElement;
+  private readonly toggleBtn: HTMLButtonElement;
   private readonly countEl: HTMLSpanElement;
   private readonly listEl: HTMLElement;
   private readonly rows = new Map<string, HTMLElement>();
@@ -27,15 +30,24 @@ export class FileEditsListView {
   constructor(private readonly opts: FileEditsListOptions) {
     this.countEl = h("span", { className: "file-edits-count" });
 
-    const headerChildren: (HTMLElement | null)[] = [
-      h(
-        "div",
-        { className: "file-edits-title" },
-        icon(this.opts.iconName, 14),
-        h("span", { textContent: this.opts.title }),
-        this.countEl,
-      ),
-    ];
+    this.toggleBtn = h(
+      "button",
+      {
+        className: "file-edits-toggle",
+        attrs: {
+          type: "button",
+          "aria-expanded": "true",
+          "aria-label": `Toggle ${this.opts.title} section`,
+        },
+        on: { click: () => this.opts.onToggleCollapsed() },
+      },
+      h("span", { className: "file-edits-chevron" }, icon("chevron-down", 12)),
+      icon(this.opts.iconName, 14),
+      h("span", { className: "file-edits-title-text", textContent: this.opts.title }),
+      this.countEl,
+    );
+
+    const headerChildren: HTMLElement[] = [this.toggleBtn];
 
     if (this.opts.folderAction) {
       const folder = this.opts.folderAction;
@@ -76,7 +88,14 @@ export class FileEditsListView {
     }
     this.root.hidden = false;
     this.countEl.textContent = `(${edits.length})`;
+    this.applyCollapsed();
     this.renderRows(edits);
+  }
+
+  private applyCollapsed(): void {
+    const collapsed = this.opts.collapsed();
+    this.root.classList.toggle("collapsed", collapsed);
+    this.toggleBtn.setAttribute("aria-expanded", String(!collapsed));
   }
 
   private renderRows(edits: readonly FileEditSummary[]): void {

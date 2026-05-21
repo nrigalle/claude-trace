@@ -2,23 +2,25 @@ import type { SessionDetail, TraceEvent } from "../../../../src/domain/types";
 import { fmtTime } from "../format.js";
 import { h } from "../h.js";
 import { EVENT_ICONS, TOOL_ICONS, getToolColor, icon } from "../icons.js";
-import type { Store } from "../../state/Store.js";
+import type { Store, TimelineFilter } from "../../state/Store.js";
+import { filterEvents, uniqueToolNames, visibleCount } from "./timelineFilter.js";
 
 const ROW_HEIGHT = 56;
 const OVERSCAN = 6;
 
-export type TimelineFilter = "all" | "tools" | "errors";
-
 export class Timeline {
   private readonly root: HTMLElement;
   private readonly headerEl: HTMLElement;
+  private readonly toggleBtn: HTMLButtonElement;
   private readonly filtersEl: HTMLElement;
+  private readonly toolFiltersEl: HTMLElement;
   private readonly viewport: HTMLElement;
   private readonly spacer: HTMLElement;
   private readonly stage: HTMLElement;
   private readonly expandedHost: HTMLElement;
   private rowPool: HTMLElement[] = [];
   private filtered: readonly TraceEvent[] = [];
+  private toolsInSession: readonly string[] = [];
   private startedAt = 0;
   private rafScheduled = false;
   private scrollHandlerBound: () => void;
@@ -30,6 +32,17 @@ export class Timeline {
       attrs: { "aria-label": "Session event timeline" },
     });
 
+    this.toggleBtn = h(
+      "button",
+      {
+        className: "timeline-toggle",
+        attrs: { type: "button", "aria-expanded": "true", "aria-label": "Toggle Timeline section" },
+        on: { click: () => this.toggleCollapsed() },
+      },
+      h("span", { className: "timeline-chevron" }, icon("chevron-down", 12)),
+      h("span", { className: "timeline-title", textContent: "Timeline" }),
+    );
+
     this.filtersEl = h("div", {
       className: "timeline-filters",
       attrs: { role: "group", "aria-label": "Timeline filter" },
@@ -38,10 +51,16 @@ export class Timeline {
     this.headerEl = h(
       "div",
       { className: "timeline-header" },
-      h("span", { className: "timeline-title", textContent: "Timeline" }),
+      this.toggleBtn,
       this.filtersEl,
     );
     this.root.appendChild(this.headerEl);
+
+    this.toolFiltersEl = h("div", {
+      className: "timeline-tool-filters",
+      attrs: { role: "group", "aria-label": "Filter by tool name" },
+    });
+    this.root.appendChild(this.toolFiltersEl);
 
     this.spacer = h("div", { className: "timeline-spacer" });
     this.stage = h("div", { className: "timeline-stage" });
@@ -78,14 +97,78 @@ export class Timeline {
 
   update(d: SessionDetail): void {
     this.startedAt = d.started_at ?? 0;
-    this.filtered = filterEvents(d.events, this.store.state.timelineFilter);
+    this.toolsInSession = uniqueToolNames(d.events);
+    if (this.store.state.toolFilter && !this.toolsInSession.includes(this.store.state.toolFilter)) {
+      this.store.update({ toolFilter: null });
+    }
+    this.filtered = filterEvents(d.events, this.store.state.timelineFilter, this.store.state.toolFilter);
     this.renderFilters(visibleCount(d.events));
+    this.renderToolFilters();
+    this.applyCollapsed();
     this.spacer.style.height = `${this.filtered.length * ROW_HEIGHT}px`;
 
     queueMicrotask(() => {
       this.viewport.scrollTop = this.store.state.timelineScroll;
       this.requestPaint();
     });
+  }
+
+  private toggleCollapsed(): void {
+    this.store.update({ timelineCollapsed: !this.store.state.timelineCollapsed });
+    this.applyCollapsed();
+  }
+
+  private applyCollapsed(): void {
+    const collapsed = this.store.state.timelineCollapsed;
+    this.root.classList.toggle("collapsed", collapsed);
+    this.toggleBtn.setAttribute("aria-expanded", String(!collapsed));
+  }
+
+  private renderToolFilters(): void {
+    while (this.toolFiltersEl.firstChild) this.toolFiltersEl.removeChild(this.toolFiltersEl.firstChild);
+    if (this.toolsInSession.length === 0) {
+      this.toolFiltersEl.hidden = true;
+      return;
+    }
+    this.toolFiltersEl.hidden = false;
+
+    const active = this.store.state.toolFilter;
+    const allChip = h(
+      "button",
+      {
+        className: `tool-chip${active === null ? " active" : ""}`,
+        attrs: { type: "button", "aria-pressed": String(active === null) },
+        on: {
+          click: () => {
+            if (this.store.state.toolFilter === null) return;
+            this.store.update({ toolFilter: null, expandedEvent: null });
+            this.onChange();
+          },
+        },
+      },
+      h("span", { textContent: "All tools" }),
+    );
+    this.toolFiltersEl.appendChild(allChip);
+
+    for (const name of this.toolsInSession) {
+      const isActive = active === name;
+      const chip = h(
+        "button",
+        {
+          className: `tool-chip${isActive ? " active" : ""}`,
+          attrs: { type: "button", "aria-pressed": String(isActive) },
+          on: {
+            click: () => {
+              const next = isActive ? null : name;
+              this.store.update({ toolFilter: next, expandedEvent: null });
+              this.onChange();
+            },
+          },
+        },
+        h("span", { textContent: name }),
+      );
+      this.toolFiltersEl.appendChild(chip);
+    }
   }
 
   dispose(): void {
@@ -98,6 +181,7 @@ export class Timeline {
     while (this.filtersEl.firstChild) this.filtersEl.removeChild(this.filtersEl.firstChild);
     const filters: { value: TimelineFilter; label: string }[] = [
       { value: "all", label: `All ${totalCount}` },
+      { value: "conversation", label: "Conversation" },
       { value: "tools", label: "Tools" },
       { value: "errors", label: "Errors" },
     ];
@@ -148,15 +232,15 @@ export class Timeline {
     const scroll = this.viewport.scrollTop;
     const startIdx = Math.max(0, Math.floor(scroll / ROW_HEIGHT) - OVERSCAN);
     const endIdx = Math.min(this.filtered.length, Math.ceil((scroll + viewportH) / ROW_HEIGHT) + OVERSCAN);
-    const visibleCount = endIdx - startIdx;
+    const visibleRowCount = endIdx - startIdx;
 
-    while (this.rowPool.length < visibleCount) {
+    while (this.rowPool.length < visibleRowCount) {
       this.rowPool.push(this.createRowShell());
     }
 
     for (let i = 0; i < this.rowPool.length; i++) {
       const row = this.rowPool[i]!;
-      if (i < visibleCount) {
+      if (i < visibleRowCount) {
         const idx = startIdx + i;
         const ev = this.filtered[idx]!;
         this.bindRow(row, ev, idx);
@@ -220,7 +304,7 @@ export class Timeline {
     iconHost.appendChild(icon(iconName, 13));
 
     const label = row.querySelector(".event-label") as HTMLElement;
-    label.textContent = ev.tool_name ?? ev.event;
+    label.textContent = labelFor(ev);
     if (isError) {
       const badge = h("span", { className: "event-badge error", textContent: "ERROR" });
       label.appendChild(badge);
@@ -231,7 +315,7 @@ export class Timeline {
     }
 
     const detailEl = row.querySelector(".event-detail") as HTMLElement;
-    const detailText = describeInput(ev);
+    const detailText = detailFor(ev);
     detailEl.textContent = detailText;
     detailEl.title = detailText;
 
@@ -280,18 +364,6 @@ export class Timeline {
   }
 }
 
-const isVisibleEvent = (e: TraceEvent): boolean =>
-  e.event === "PostToolUse" || (e.event === "Metrics" && e.error !== null);
-
-const visibleCount = (events: readonly TraceEvent[]): number =>
-  events.reduce((n, e) => (isVisibleEvent(e) ? n + 1 : n), 0);
-
-const filterEvents = (events: readonly TraceEvent[], filter: TimelineFilter): readonly TraceEvent[] => {
-  const visible = events.filter(isVisibleEvent);
-  if (filter === "tools") return visible.filter((e) => e.event === "PostToolUse");
-  if (filter === "errors") return visible.filter((e) => e.error !== null);
-  return visible;
-};
 
 const describeInput = (ev: TraceEvent): string => {
   if (!ev.tool_input) return "";
@@ -302,6 +374,19 @@ const describeInput = (ev: TraceEvent): string => {
     if (typeof v === "string") return v;
   }
   return "";
+};
+
+const labelFor = (ev: TraceEvent): string => {
+  if (ev.event === "UserPrompt") return "You";
+  if (ev.event === "AssistantText") return "Claude";
+  return ev.tool_name ?? ev.event;
+};
+
+const detailFor = (ev: TraceEvent): string => {
+  if (ev.event === "UserPrompt" || ev.event === "AssistantText") {
+    return typeof ev.tool_result === "string" ? ev.tool_result : "";
+  }
+  return describeInput(ev);
 };
 
 const detailBlock = (label: string, content: string, isError = false): HTMLElement =>

@@ -49,6 +49,8 @@ const mkSummary = (id: string) => ({
   context_window: null,
   model: null,
   last_modified_ms: 0,
+  pinned: false,
+  searchable_text: "",
 });
 
 const mkDetail = (id: string) => ({

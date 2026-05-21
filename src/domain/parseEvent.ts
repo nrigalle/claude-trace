@@ -88,21 +88,37 @@ const parseAssistant = (
   let contextSnapshot: ContextSnapshot | null = null;
 
   if (usage) {
+    const cacheCreationObj = isObject(usage["cache_creation"])
+      ? (usage["cache_creation"] as Record<string, unknown>)
+      : null;
+    const totalCacheCreation = numOrZero(usage["cache_creation_input_tokens"]);
+    const split5m = cacheCreationObj
+      ? numOrZero(cacheCreationObj["ephemeral_5m_input_tokens"])
+      : 0;
+    const split1h = cacheCreationObj
+      ? numOrZero(cacheCreationObj["ephemeral_1h_input_tokens"])
+      : 0;
+    const haveSplit = cacheCreationObj !== null && (split5m + split1h) > 0;
     const u: Usage = {
       input_tokens: numOrZero(usage["input_tokens"]),
       output_tokens: numOrZero(usage["output_tokens"]),
       cache_read_input_tokens: numOrZero(usage["cache_read_input_tokens"]),
-      cache_creation_input_tokens: numOrZero(usage["cache_creation_input_tokens"]),
+      cache_creation_5m_input_tokens: haveSplit ? split5m : totalCacheCreation,
+      cache_creation_1h_input_tokens: haveSplit ? split1h : 0,
     };
     ctx.totalCostUsd += estimateUsageCost(ctx.lastModel ?? "", u);
-    ctx.lastInputTokens = u.input_tokens;
-    ctx.lastOutputTokens = u.output_tokens;
-    ctx.lastCacheReadTokens = u.cache_read_input_tokens;
-    ctx.lastCacheWriteTokens = u.cache_creation_input_tokens;
-
     if (!isSidechain) {
+      ctx.lastInputTokens = u.input_tokens;
+      ctx.lastOutputTokens = u.output_tokens;
+      ctx.lastCacheReadTokens = u.cache_read_input_tokens;
+      ctx.lastCacheWriteTokens =
+        u.cache_creation_5m_input_tokens + u.cache_creation_1h_input_tokens;
+
       const used =
-        u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens;
+        u.input_tokens +
+        u.cache_read_input_tokens +
+        u.cache_creation_5m_input_tokens +
+        u.cache_creation_1h_input_tokens;
       if (used > ctx.maxTotalInputTokens) ctx.maxTotalInputTokens = used;
 
       contextSnapshot = {
@@ -113,12 +129,23 @@ const parseAssistant = (
   }
 
   const modelInfo = model ? { id: model, display_name: humanizeModel(model) } : null;
-  const sessionId = ctx.sessionId;
   const content = Array.isArray(message["content"]) ? (message["content"] as unknown[]) : [];
-  const toolUses: TraceEvent[] = [];
+
+  type Pending =
+    | { readonly kind: "text"; readonly text: string }
+    | { readonly kind: "tool"; readonly name: string; readonly rawInput: Record<string, unknown> | null };
+  const pending: Pending[] = [];
 
   for (const block of content) {
     if (!isObject(block)) continue;
+
+    if (block["type"] === "text" && typeof block["text"] === "string") {
+      const text = (block["text"] as string).trim();
+      if (text.length === 0) continue;
+      pending.push({ kind: "text", text });
+      continue;
+    }
+
     if (block["type"] !== "tool_use") continue;
     const toolName = typeof block["name"] === "string" ? (block["name"] as string) : null;
     if (!toolName) continue;
@@ -129,44 +156,46 @@ const parseAssistant = (
       ctx.totalLinesRemoved += diff.removed;
       recordFileEdit(ctx, ts, toolName, rawInput, diff);
     }
-
-    toolUses.push({
-      ts,
-      event: "PostToolUse",
-      session_id: sessionId,
-      cwd,
-      tool_name: toolName,
-      tool_input: rawInput ? sanitizeInput(rawInput) : null,
-      tool_result: null,
-      stop_reason: null,
-      model: modelInfo,
-      cost: buildCostSnapshot(ctx),
-      context_window: contextSnapshot,
-      tokens_freed: null,
-      error: null,
-      is_sidechain: isSidechain,
-    });
+    pending.push({ kind: "tool", name: toolName, rawInput });
   }
 
-  if (toolUses.length > 0) return toolUses;
+  const baseTurn = {
+    ts,
+    session_id: ctx.sessionId,
+    cwd,
+    stop_reason: null as string | null,
+    model: modelInfo,
+    cost: buildCostSnapshot(ctx),
+    context_window: contextSnapshot,
+    tokens_freed: null,
+    error: null,
+    is_sidechain: isSidechain,
+  };
 
+  if (pending.length > 0) {
+    return pending.map((p) =>
+      p.kind === "text"
+        ? { ...baseTurn, event: "AssistantText", tool_name: null, tool_input: null, tool_result: p.text }
+        : {
+            ...baseTurn,
+            event: "PostToolUse",
+            tool_name: p.name,
+            tool_input: p.rawInput ? sanitizeInput(p.rawInput) : null,
+            tool_result: null,
+          },
+    );
+  }
+
+  const stopReason =
+    typeof message["stop_reason"] === "string" ? (message["stop_reason"] as string) : null;
   return [
     {
-      ts,
+      ...baseTurn,
       event: "Metrics",
-      session_id: sessionId,
-      cwd,
       tool_name: null,
       tool_input: null,
       tool_result: null,
-      stop_reason:
-        typeof message["stop_reason"] === "string" ? (message["stop_reason"] as string) : null,
-      model: modelInfo,
-      cost: buildCostSnapshot(ctx),
-      context_window: contextSnapshot,
-      tokens_freed: null,
-      error: null,
-      is_sidechain: isSidechain,
+      stop_reason: stopReason,
     },
   ];
 };
@@ -190,10 +219,23 @@ const parseUser = (
   ctx: ParseContext,
 ): TraceEvent[] => {
   const content = message["content"];
-  if (!Array.isArray(content)) return [];
   const out: TraceEvent[] = [];
+
+  if (typeof content === "string") {
+    const evt = makeUserPromptEvent(ts, cwd, isSidechain, content, ctx);
+    if (evt) out.push(evt);
+    return out;
+  }
+
+  if (!Array.isArray(content)) return out;
+
   for (const block of content) {
     if (!isObject(block)) continue;
+    if (block["type"] === "text" && typeof block["text"] === "string") {
+      const evt = makeUserPromptEvent(ts, cwd, isSidechain, block["text"] as string, ctx);
+      if (evt) out.push(evt);
+      continue;
+    }
     if (block["type"] !== "tool_result") continue;
     const contentField = block["content"];
     const text =
@@ -223,6 +265,34 @@ const parseUser = (
     });
   }
   return out;
+};
+
+const makeUserPromptEvent = (
+  ts: number,
+  cwd: string | null,
+  isSidechain: boolean,
+  text: string,
+  ctx: ParseContext,
+): TraceEvent | null => {
+  if (SYNTHETIC_PREFIXES.some((p) => text.startsWith(p))) return null;
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return null;
+  return {
+    ts,
+    event: "UserPrompt",
+    session_id: ctx.sessionId,
+    cwd,
+    tool_name: null,
+    tool_input: null,
+    tool_result: trimmed,
+    stop_reason: null,
+    model: null,
+    cost: null,
+    context_window: null,
+    tokens_freed: null,
+    error: null,
+    is_sidechain: isSidechain,
+  };
 };
 
 const captureFirstUserText = (ctx: ParseContext, message: Record<string, unknown>): void => {
