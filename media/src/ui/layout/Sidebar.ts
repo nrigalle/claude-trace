@@ -2,13 +2,14 @@ import type {
   GlobalStats,
   SessionId,
   SessionSummary,
-} from "../../../../src/domain/types";
+} from "../../../../src/features/dashboard/domain/types";
 import type { DateFilter, Store } from "../../state/Store.js";
 import {
   DATE_FILTER_LABELS,
   DATE_FILTER_ORDER,
   matchesDateFilter,
 } from "../dateFilter.js";
+import { setIfChanged } from "../dom.js";
 import { fmtCost } from "../format.js";
 import { h } from "../h.js";
 import { ICONS, icon } from "../icons.js";
@@ -17,7 +18,6 @@ import { renderSessionItem, type SessionItemHandlers } from "./SessionItem.js";
 import { SidebarResizer } from "./SidebarResizer.js";
 
 export interface SidebarHandlers extends SessionItemHandlers {
-  onStartNewSession(): void;
   onToggleCollapsed(): void;
 }
 
@@ -74,18 +74,6 @@ export class Sidebar {
     const header = h("div", { className: "sidebar-header" }, brand, this.statsContainer);
     this.root.appendChild(header);
 
-    const startButton = h(
-      "button",
-      {
-        className: "start-session-btn",
-        attrs: { type: "button", "aria-label": "Start a new Claude Code session" },
-        on: { click: () => this.handlers.onStartNewSession() },
-      },
-      icon("plus", 14),
-      h("span", { textContent: "Start new session" }),
-    );
-    this.root.appendChild(startButton);
-
     this.searchInput = h("input", {
       className: "search-input",
       attrs: {
@@ -117,7 +105,7 @@ export class Sidebar {
     const resizer = new SidebarResizer({
       target: this.root,
       initialPx: this.store.state.sidebarWidth,
-      onLivePx: () => { /* width applied directly to CSS var; no Store churn mid-drag */ },
+      onLivePx: () => {},
       onCommitPx: (px) => this.store.update({ sidebarWidth: px }),
     });
     this.root.appendChild(resizer.element);
@@ -310,6 +298,3 @@ export class Sidebar {
   }
 }
 
-const setIfChanged = (el: HTMLElement, value: string): void => {
-  if (el.textContent !== value) el.textContent = value;
-};

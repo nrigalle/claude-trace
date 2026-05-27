@@ -1,8 +1,8 @@
 {
   "name": "claude-trace",
-  "displayName": "Claude Trace",
-  "version": "0.6.0",
-  "description": "Session intelligence dashboard for Claude Code. Trace every action, visualize context usage, and track costs.",
+  "displayName": "Claude Trace: Cost, Sessions & Agent Workflows for Claude Code",
+  "version": "1.0.0",
+  "description": "Cost dashboard, multi-session terminal cockpit, and visual agent workflows for Claude Code. See what you spend, run many sessions at once, and orchestrate agents on your subscription. Everything stays on your machine.",
   "publisher": "nrigalle",
   "license": "MIT",
   "author": {
@@ -30,16 +30,29 @@
     "Other"
   ],
   "keywords": [
+    "claude code",
     "claude",
-    "claude-code",
-    "anthropic",
-    "ai",
-    "tracing",
-    "observability",
-    "telemetry",
+    "cost",
+    "usage",
+    "tokens",
+    "token usage",
     "dashboard",
-    "cost-tracking",
-    "context-window"
+    "cost tracking",
+    "usage monitor",
+    "multi-session",
+    "terminal",
+    "cockpit",
+    "subagents",
+    "agent teams",
+    "multi-agent",
+    "orchestration",
+    "workflows",
+    "anthropic",
+    "cli",
+    "spend",
+    "budget",
+    "context window",
+    "observability"
   ],
   "badges": [
     {
@@ -60,6 +73,11 @@
         "title": "Open Dashboard",
         "category": "Claude Trace",
         "icon": "$(pulse)"
+      },
+      {
+        "command": "claudeTrace.setupDesktopNotifications",
+        "title": "Set Up Desktop Notifications (install alerter)",
+        "category": "Claude Trace"
       }
     ],
     "keybindings": [
@@ -83,6 +101,18 @@
           "default": 0,
           "minimum": 0,
           "description": "Warn when today's combined Claude Code spend exceeds this USD amount. Status bar turns amber at 80% and red when over. Set to 0 to disable."
+        },
+        "claudeTrace.webhookPort": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Local port (127.0.0.1) for the pipeline webhook trigger listener. POST to http://127.0.0.1:<port>/?token=<token> to start a matching pipeline. Set to 0 to disable."
+        },
+        "claudeTrace.desktopNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a native OS notification (not just an in-editor toast) when a Claude session finishes its turn or needs your input, so you see it even when VS Code is not focused."
         }
       }
     }
@@ -91,20 +121,26 @@
     "compile": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
-    "package": "npm run compile && npx @vscode/vsce package --no-dependencies",
-    "publish": "npm run compile && npx @vscode/vsce publish --no-dependencies",
-    "publish:ovsx": "npx ovsx publish --no-dependencies",
+    "package": "npm run compile && npx @vscode/vsce package",
+    "publish": "npm run compile && npx @vscode/vsce publish",
+    "publish:ovsx": "npx ovsx publish",
     "test:unit": "vitest run"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",
     "@types/node": "^22.14.1",
     "@types/vscode": "^1.85.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-webgl": "^0.18.0",
+    "@xterm/xterm": "^5.5.0",
     "esbuild": "^0.25.2",
     "fast-check": "^3.23.2",
     "happy-dom": "^15.11.7",
     "memfs": "^4.17.0",
     "typescript": "^5.8.3",
     "vitest": "^2.1.9"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
   }
 }

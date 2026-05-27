@@ -1,0 +1,456 @@
+import type {
+  CockpitHostToWebview,
+  CockpitLayout,
+  CockpitState,
+  CockpitWebviewToHost,
+  TerminalSession,
+} from "../protocol";
+import { assertNeverCockpit } from "../protocol";
+import type { ProfileStore } from "../infra/ProfileStore";
+import type { CockpitSessionStore } from "../infra/CockpitSessionStore";
+import {
+  batchNames,
+  clampCount,
+  fromProfileId,
+  fromSpaceId,
+  validateProfile,
+  type ProfileId,
+  type SessionProfile,
+} from "../domain/profiles";
+import type { ModelChoice } from "../../../shared/models";
+import { buildClaudeCommand, type PermissionMode } from "../../../shared/permissionModes";
+
+export interface CockpitHost {
+  postMessage(msg: CockpitHostToWebview): void;
+  onMessage(listener: (msg: CockpitWebviewToHost) => void): { dispose(): void };
+  onDispose(listener: () => void): { dispose(): void };
+}
+
+export interface TerminalSpawnSpec {
+  readonly sessionId: string;
+  readonly cwd: string | null;
+  readonly cols: number;
+  readonly rows: number;
+  readonly initialInput: string;
+}
+
+export interface TerminalBackend {
+  spawn(spec: TerminalSpawnSpec): void;
+  write(sessionId: string, data: string): void;
+  resize(sessionId: string, cols: number, rows: number): void;
+  kill(sessionId: string): void;
+  isAlive(sessionId: string): boolean;
+  onData(listener: (sessionId: string, data: string) => void): { dispose(): void };
+  onExit(listener: (sessionId: string, exitCode: number) => void): { dispose(): void };
+  dispose(): void;
+}
+
+export interface CockpitActions {
+  setName(sessionId: string, name: string): void;
+  defaultCwd(): string | null;
+  newSessionId(): string;
+  transcriptExists(cwd: string | null, sessionId: string): boolean;
+  notifyAttention(name: string): void;
+  prepareHooks(sessionId: string): string | null;
+  cleanupHooks(sessionId: string): void;
+  watchAttention(listener: (sessionId: string, reason: "stop" | "notify" | "active") => void): { dispose(): void };
+  saveDroppedImage(fileName: string, dataBase64: string): string | null;
+  loadCockpitLayout(): CockpitLayout;
+  saveCockpitLayout(layout: CockpitLayout): void;
+  now(): number;
+}
+
+export interface CockpitControllerDeps {
+  readonly host: CockpitHost;
+  readonly profileStore: ProfileStore;
+  readonly sessionStore: CockpitSessionStore;
+  readonly terminals: TerminalBackend;
+  readonly actions: CockpitActions;
+}
+
+const DEFAULT_COLS = 80;
+const DEFAULT_ROWS = 24;
+
+interface ManagedTerminal {
+  readonly sessionId: string;
+  readonly windowId: string;
+  readonly name: string;
+  spaceId: string | null;
+  readonly cwd: string | null;
+  readonly model: ModelChoice;
+  readonly permissionMode: PermissionMode;
+  readonly startedAtMs: number;
+  exitCode: number | null;
+}
+
+export class CockpitController {
+  private readonly disposables: { dispose(): void }[] = [];
+  private readonly managed = new Map<string, ManagedTerminal>();
+  private readonly nextIndex = new Map<string, number>();
+  private readonly attentionActive = new Set<string>();
+  private disposed = false;
+
+  constructor(private readonly deps: CockpitControllerDeps) {
+    this.disposables.push(deps.host.onMessage((m) => this.onMessage(m)));
+    this.disposables.push(deps.host.onDispose(() => this.dispose()));
+    this.disposables.push(
+      deps.terminals.onData((sessionId, data) =>
+        this.deps.host.postMessage({ type: "terminalData", sessionId, data }),
+      ),
+    );
+    this.disposables.push(
+      deps.terminals.onExit((sessionId, exitCode) => this.onTerminalExit(sessionId, exitCode)),
+    );
+    this.disposables.push(
+      deps.actions.watchAttention((sessionId, reason) =>
+        reason === "active" ? this.onActive(sessionId) : this.onAttention(sessionId, reason),
+      ),
+    );
+    for (const s of deps.sessionStore.load()) {
+      this.managed.set(s.id, {
+        sessionId: s.id,
+        windowId: s.windowId,
+        name: s.name,
+        spaceId: s.spaceId,
+        cwd: s.cwd,
+        model: s.model,
+        permissionMode: s.permissionMode,
+        startedAtMs: s.startedAtMs,
+        exitCode: null,
+      });
+      deps.actions.setName(s.id, s.name);
+    }
+    for (const key of this.managed.keys()) this.spawnResume(key);
+  }
+
+  private persist(m: ManagedTerminal): void {
+    this.deps.sessionStore.upsert({
+      id: m.sessionId,
+      windowId: m.windowId,
+      name: m.name,
+      spaceId: m.spaceId,
+      cwd: m.cwd,
+      model: m.model,
+      permissionMode: m.permissionMode,
+      startedAtMs: m.startedAtMs,
+    });
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.deps.terminals.dispose();
+    for (const d of this.disposables) {
+      try {
+        d.dispose();
+      } catch {}
+    }
+    this.disposables.length = 0;
+  }
+
+  private onMessage(msg: CockpitWebviewToHost): void {
+    switch (msg.type) {
+      case "cockpitReady":
+        this.deps.host.postMessage({ type: "cockpitLayout", layout: this.deps.actions.loadCockpitLayout() });
+        this.broadcast();
+        return;
+      case "cockpitSaveLayout":
+        this.deps.actions.saveCockpitLayout(msg.layout);
+        return;
+      case "cockpitLaunch":
+        this.handleLaunch(msg.profileId, msg.count, msg.promptOverride);
+        return;
+      case "cockpitQuickLaunch":
+        this.handleQuickLaunch(msg);
+        return;
+      case "cockpitSaveProfile":
+        this.handleSaveProfile(msg.profile);
+        return;
+      case "cockpitDeleteProfile":
+        this.deps.profileStore.deleteProfile(msg.profileId);
+        this.broadcast();
+        return;
+      case "cockpitSaveSpace":
+        this.deps.profileStore.saveSpace(msg.space);
+        this.broadcast();
+        return;
+      case "cockpitDeleteSpace": {
+        for (const m of this.managed.values()) {
+          if (m.spaceId === fromSpaceId(msg.spaceId)) {
+            m.spaceId = null;
+            this.persist(m);
+          }
+        }
+        this.deps.profileStore.deleteSpace(msg.spaceId);
+        this.broadcast();
+        return;
+      }
+      case "terminalInput":
+        this.deps.terminals.write(msg.sessionId, msg.data);
+        return;
+      case "terminalResize":
+        this.deps.terminals.resize(msg.sessionId, msg.cols, msg.rows);
+        return;
+      case "terminalClose":
+        this.deps.terminals.kill(msg.sessionId);
+        this.deps.actions.cleanupHooks(msg.sessionId);
+        this.attentionActive.delete(msg.sessionId);
+        this.managed.delete(msg.sessionId);
+        this.deps.sessionStore.remove(msg.sessionId);
+        this.broadcast();
+        return;
+      case "cockpitResumeSession":
+        this.handleResume(msg.sessionId);
+        return;
+      case "cockpitAddTab":
+        this.handleAddTab(msg.windowId);
+        return;
+      case "cockpitMoveSession": {
+        const moved = this.managed.get(msg.sessionId);
+        if (moved) {
+          moved.spaceId = msg.spaceId;
+          this.persist(moved);
+          this.broadcast();
+        }
+        return;
+      }
+      case "cockpitAdoptSession":
+        this.handleAdopt(msg.sessionId, msg.name, msg.cwd);
+        return;
+      case "cockpitAttention":
+        if (this.attentionActive.has(msg.sessionId)) return;
+        this.attentionActive.add(msg.sessionId);
+        this.deps.actions.notifyAttention(msg.name);
+        return;
+      case "cockpitDropImage": {
+        const imgPath = this.deps.actions.saveDroppedImage(msg.fileName, msg.dataBase64);
+        if (imgPath) this.deps.terminals.write(msg.sessionId, ` '${imgPath}' `);
+        return;
+      }
+      default:
+        return assertNeverCockpit(msg);
+    }
+  }
+
+  private handleSaveProfile(profile: SessionProfile): void {
+    const errors = validateProfile(profile);
+    if (errors.length > 0) {
+      this.deps.host.postMessage({ type: "cockpitProfileInvalid", errors });
+      return;
+    }
+    this.deps.profileStore.saveProfile(profile);
+    this.broadcast();
+  }
+
+  private handleLaunch(profileId: ProfileId, count: number, promptOverride: string | null): void {
+    const profile = this.deps.profileStore
+      .load()
+      .profiles.find((p) => p.id === profileId);
+    if (!profile) {
+      this.deps.host.postMessage({
+        type: "cockpitNotice",
+        level: "error",
+        message: "That profile no longer exists.",
+      });
+      return;
+    }
+    const n = clampCount(count);
+    const profileKey = fromProfileId(profile.id);
+    const start = this.nextIndex.get(profileKey) ?? 1;
+    const names = batchNames(profile.nameTemplate, profile.name, n, start);
+    this.nextIndex.set(profileKey, start + n);
+    this.spawnBatch(names, {
+      model: profile.model,
+      permissionMode: profile.permissionMode,
+      cwd: profile.cwd ?? this.deps.actions.defaultCwd(),
+      spaceId: profile.spaceId === null ? null : fromSpaceId(profile.spaceId),
+      prompt: promptOverride ?? profile.initialPrompt,
+    });
+  }
+
+  private handleQuickLaunch(msg: Extract<CockpitWebviewToHost, { type: "cockpitQuickLaunch" }>): void {
+    const n = clampCount(msg.count);
+    const base = msg.name.trim().length > 0 ? msg.name.trim() : "Claude";
+    const names = batchNames("{profile} {n}", base, n, 1).map((name) => (n === 1 ? base : name));
+    this.spawnBatch(names, {
+      model: msg.model,
+      permissionMode: msg.permissionMode,
+      cwd: msg.cwd ?? this.deps.actions.defaultCwd(),
+      spaceId: msg.spaceId,
+      prompt: msg.prompt,
+    });
+  }
+
+  private spawnBatch(
+    names: readonly string[],
+    config: {
+      readonly model: ModelChoice;
+      readonly permissionMode: PermissionMode;
+      readonly cwd: string | null;
+      readonly spaceId: string | null;
+      readonly prompt: string | null;
+    },
+  ): void {
+    for (const name of names) {
+      const sessionId = this.deps.actions.newSessionId();
+      const command = buildClaudeCommand({
+        mode: config.permissionMode,
+        model: config.model,
+        name,
+        sessionId,
+        initialPrompt: config.prompt,
+        settingsPath: this.deps.actions.prepareHooks(sessionId),
+      });
+      this.deps.terminals.spawn({
+        sessionId,
+        cwd: config.cwd,
+        cols: DEFAULT_COLS,
+        rows: DEFAULT_ROWS,
+        initialInput: `clear && exec ${command}\r`,
+      });
+      const managed: ManagedTerminal = {
+        sessionId,
+        windowId: sessionId,
+        name,
+        spaceId: config.spaceId,
+        cwd: config.cwd,
+        model: config.model,
+        permissionMode: config.permissionMode,
+        startedAtMs: this.deps.actions.now(),
+        exitCode: null,
+      };
+      this.managed.set(sessionId, managed);
+      this.deps.actions.setName(sessionId, name);
+      this.persist(managed);
+    }
+    this.broadcast();
+  }
+
+  private handleAddTab(windowId: string): void {
+    const template = [...this.managed.values()].find((m) => m.windowId === windowId);
+    if (!template) return;
+    const tabCount = [...this.managed.values()].filter((m) => m.windowId === windowId).length;
+    const sessionId = this.deps.actions.newSessionId();
+    const name = `${template.name} · ${tabCount + 1}`;
+    const command = buildClaudeCommand({
+      mode: template.permissionMode,
+      model: template.model,
+      name,
+      sessionId,
+      settingsPath: this.deps.actions.prepareHooks(sessionId),
+    });
+    this.deps.terminals.spawn({
+      sessionId,
+      cwd: template.cwd,
+      cols: DEFAULT_COLS,
+      rows: DEFAULT_ROWS,
+      initialInput: `clear && exec ${command}\r`,
+    });
+    const managed: ManagedTerminal = {
+      sessionId,
+      windowId,
+      name,
+      spaceId: template.spaceId,
+      cwd: template.cwd,
+      model: template.model,
+      permissionMode: template.permissionMode,
+      startedAtMs: this.deps.actions.now(),
+      exitCode: null,
+    };
+    this.managed.set(sessionId, managed);
+    this.deps.actions.setName(sessionId, name);
+    this.persist(managed);
+    this.broadcast();
+  }
+
+  private handleResume(key: string): void {
+    if (this.spawnResume(key)) this.broadcast();
+  }
+
+  private handleAdopt(sessionId: string, name: string, cwd: string | null): void {
+    if (!this.managed.has(sessionId)) {
+      this.managed.set(sessionId, {
+        sessionId,
+        windowId: sessionId,
+        name,
+        spaceId: null,
+        cwd,
+        model: "default",
+        permissionMode: "default",
+        startedAtMs: this.deps.actions.now(),
+        exitCode: null,
+      });
+      this.deps.actions.setName(sessionId, name);
+      this.persist(this.managed.get(sessionId)!);
+    }
+    this.spawnResume(sessionId);
+    this.broadcast();
+  }
+
+  private spawnResume(key: string): boolean {
+    const managed = this.managed.get(key);
+    if (!managed) return false;
+    if (this.deps.terminals.isAlive(key)) return false;
+    managed.exitCode = null;
+    const hasTranscript = this.deps.actions.transcriptExists(managed.cwd, key);
+    const command = buildClaudeCommand({
+      mode: managed.permissionMode,
+      model: managed.model,
+      name: managed.name,
+      settingsPath: this.deps.actions.prepareHooks(key),
+      ...(hasTranscript ? { resumeId: key } : { sessionId: key }),
+    });
+    this.deps.terminals.spawn({
+      sessionId: key,
+      cwd: managed.cwd,
+      cols: DEFAULT_COLS,
+      rows: DEFAULT_ROWS,
+      initialInput: `clear && exec ${command}\r`,
+    });
+    return true;
+  }
+
+  private onAttention(sessionId: string, reason: "stop" | "notify"): void {
+    const managed = this.managed.get(sessionId);
+    if (!managed) return;
+    this.deps.host.postMessage({ type: "terminalAttention", sessionId, reason });
+    if (this.attentionActive.has(sessionId)) return;
+    this.attentionActive.add(sessionId);
+    this.deps.actions.notifyAttention(managed.name);
+  }
+
+  private onActive(sessionId: string): void {
+    this.attentionActive.delete(sessionId);
+    this.deps.host.postMessage({ type: "terminalActive", sessionId });
+  }
+
+  private onTerminalExit(sessionId: string, exitCode: number): void {
+    const managed = this.managed.get(sessionId);
+    if (managed) managed.exitCode = exitCode;
+    this.deps.host.postMessage({ type: "terminalExit", sessionId, exitCode });
+    this.broadcast();
+  }
+
+  private buildState(): CockpitState {
+    const cfg = this.deps.profileStore.load();
+    const terminals: TerminalSession[] = [];
+    for (const m of this.managed.values()) {
+      terminals.push({
+        sessionId: m.sessionId,
+        windowId: m.windowId,
+        name: m.name,
+        spaceId: m.spaceId,
+        cwd: m.cwd,
+        alive: this.deps.terminals.isAlive(m.sessionId),
+        exitCode: m.exitCode,
+        startedAtMs: m.startedAtMs,
+      });
+    }
+    return { profiles: cfg.profiles, spaces: cfg.spaces, terminals };
+  }
+
+  private broadcast(): void {
+    if (this.disposed) return;
+    this.deps.host.postMessage({ type: "cockpitState", state: this.buildState() });
+  }
+}

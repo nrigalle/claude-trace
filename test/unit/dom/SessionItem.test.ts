@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderSessionItem } from "../../../media/src/ui/layout/SessionItem";
-import { toSessionId, type SessionSummary } from "../../../src/domain/types";
+import { toSessionId, type SessionSummary } from "../../../src/features/dashboard/domain/types";
 
 const base = (overrides: Partial<SessionSummary>): SessionSummary => ({
   session_id: toSessionId("abc123def-very-long-id"),
@@ -24,25 +24,59 @@ const base = (overrides: Partial<SessionSummary>): SessionSummary => ({
 const handlers = {
   onSelect: vi.fn(),
   onTogglePin: vi.fn(),
+  onCopyConversation: vi.fn(),
+  onResumeInCockpit: vi.fn(),
 };
 
-describe("renderSessionItem — tags row", () => {
-  it("renders the model tag and NO session-id tag", () => {
+describe("renderSessionItem — actions row", () => {
+  it("renders Resume, Copy and View-info action buttons, and never the model tag or session id", () => {
     const node = renderSessionItem(base({}), false, handlers);
-    const tags = node.querySelectorAll<HTMLElement>(".tag");
-    const texts = [...tags].map((t) => t.textContent);
-    expect(texts).toContain("Claude Opus 4.7");
-    expect(texts.every((t) => t !== null && !t.includes("abc123de"))).toBe(true);
-  });
-
-  it("renders no tags container at all when model is missing", () => {
-    const node = renderSessionItem(base({ model: null }), false, handlers);
+    const actions = node.querySelectorAll<HTMLElement>(".session-item-action");
+    const labels = [...actions].map((a) => a.getAttribute("title"));
+    expect(labels).toContain("Resume in cockpit");
+    expect(labels).toContain("Copy conversation");
+    expect(labels).toContain("View info");
     expect(node.querySelector(".session-item-tags")).toBeNull();
+    expect(node.querySelector(".tag")).toBeNull();
+    expect(node.textContent).not.toContain("Claude Opus 4.7");
   });
 
-  it("renders no session-id tag even when model is also missing", () => {
+  it("renders the action buttons regardless of whether a model is present", () => {
     const node = renderSessionItem(base({ model: null }), false, handlers);
-    expect(node.querySelector(".tag")).toBeNull();
+    expect(node.querySelectorAll(".session-item-action")).toHaveLength(3);
+  });
+
+  it("the Resume button adopts the session into the cockpit and does not also select", () => {
+    const onResumeInCockpit = vi.fn();
+    const onSelect = vi.fn();
+    const node = renderSessionItem(base({}), false, {
+      onSelect,
+      onTogglePin: vi.fn(),
+      onCopyConversation: vi.fn(),
+      onResumeInCockpit,
+    });
+    document.body.appendChild(node);
+    const resume = [...node.querySelectorAll<HTMLElement>(".session-item-action")].find(
+      (a) => a.getAttribute("title") === "Resume in cockpit",
+    )!;
+    resume.click();
+    expect(onResumeInCockpit).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+    node.remove();
+  });
+
+  it("the Copy button calls onCopyConversation and stops the row from also selecting", () => {
+    const onSelect = vi.fn();
+    const onCopyConversation = vi.fn();
+    const node = renderSessionItem(base({}), false, { onSelect, onTogglePin: vi.fn(), onCopyConversation, onResumeInCockpit: vi.fn() });
+    document.body.appendChild(node);
+    const copy = [...node.querySelectorAll<HTMLElement>(".session-item-action")].find(
+      (a) => a.getAttribute("title") === "Copy conversation",
+    )!;
+    copy.click();
+    expect(onCopyConversation).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+    node.remove();
   });
 });
 
@@ -66,7 +100,7 @@ describe("renderSessionItem — pin star", () => {
   it("clicking the star calls onTogglePin and STOPS the click from reaching the parent (no onSelect)", () => {
     const onSelect = vi.fn();
     const onTogglePin = vi.fn();
-    const node = renderSessionItem(base({}), false, { onSelect, onTogglePin });
+    const node = renderSessionItem(base({}), false, { onSelect, onTogglePin, onCopyConversation: vi.fn(), onResumeInCockpit: vi.fn() });
     document.body.appendChild(node);
     const pin = node.querySelector<HTMLElement>(".session-item-pin")!;
     pin.click();
@@ -78,7 +112,7 @@ describe("renderSessionItem — pin star", () => {
   it("keyboard Enter on the pin star toggles without selecting", () => {
     const onSelect = vi.fn();
     const onTogglePin = vi.fn();
-    const node = renderSessionItem(base({}), false, { onSelect, onTogglePin });
+    const node = renderSessionItem(base({}), false, { onSelect, onTogglePin, onCopyConversation: vi.fn(), onResumeInCockpit: vi.fn() });
     document.body.appendChild(node);
     const pin = node.querySelector<HTMLElement>(".session-item-pin")!;
     pin.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));

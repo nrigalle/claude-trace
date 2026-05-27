@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DetailHeaderView } from "../../../media/src/ui/panels/DetailHeader";
-import { toSessionId, type SessionDetail } from "../../../src/domain/types";
+import { toSessionId, type SessionDetail } from "../../../src/features/dashboard/domain/types";
 
 const baseDetail = (overrides: Partial<SessionDetail>): SessionDetail => ({
   session_id: toSessionId("abc123def"),

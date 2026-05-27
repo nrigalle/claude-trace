@@ -1,4 +1,4 @@
-import type { ToolStat } from "../../../../src/domain/types";
+import type { ToolStat } from "../../../../src/features/dashboard/domain/types";
 import { getToolColor } from "../icons.js";
 
 const NS = "http://www.w3.org/2000/svg";

@@ -1,0 +1,39 @@
+/* Responsive */
+
+@media (max-width: 900px) {
+  .charts-row { grid-template-columns: 1fr; }
+  .summary-cards { grid-template-columns: repeat(2, 1fr); }
+  .sidebar { width: 260px; }
+}
+
+@media (max-width: 600px) {
+  #app, .app-shell { flex-direction: column; }
+  .sidebar { width: 100%; height: auto; max-height: 50vh; }
+  .main-content { padding: 16px; }
+}
+
+/* Reduced motion */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* High contrast */
+
+@media (forced-colors: active) {
+  .session-item.active { border-left-color: Highlight; }
+  .filter-btn.active { background: Highlight; color: HighlightText; }
+  .search-input:focus-visible,
+  .session-item:focus-visible,
+  .event-row:focus-visible,
+  .filter-btn:focus-visible {
+    outline: 2px solid Highlight;
+  }
+}

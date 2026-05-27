@@ -1,0 +1,74 @@
+import * as fs from "fs";
+import * as path from "path";
+import { COCKPIT_HOOKS_DIR, COCKPIT_SIGNALS_DIR } from "../../../shared/config";
+import { buildCockpitHookSettings } from "./cockpitHooks";
+
+export type AttentionReason = "stop" | "notify" | "active";
+
+const SIGNAL_FILE = /^(.+)\.(stop|notify|active)$/;
+const SIGNALS_POLL_INTERVAL_MS = 1000;
+
+export const writeSessionHooks = (sessionId: string): string | null => {
+  try {
+    fs.mkdirSync(COCKPIT_HOOKS_DIR, { recursive: true });
+    fs.mkdirSync(COCKPIT_SIGNALS_DIR, { recursive: true });
+    const settings = buildCockpitHookSettings(sessionId, COCKPIT_SIGNALS_DIR);
+    const file = path.join(COCKPIT_HOOKS_DIR, `${sessionId}.json`);
+    fs.writeFileSync(file, JSON.stringify(settings), "utf8");
+    return file;
+  } catch {
+    return null;
+  }
+};
+
+export const removeSessionHooks = (sessionId: string): void => {
+  for (const f of [
+    path.join(COCKPIT_HOOKS_DIR, `${sessionId}.json`),
+    path.join(COCKPIT_SIGNALS_DIR, `${sessionId}.stop`),
+    path.join(COCKPIT_SIGNALS_DIR, `${sessionId}.notify`),
+    path.join(COCKPIT_SIGNALS_DIR, `${sessionId}.active`),
+  ]) {
+    try {
+      fs.rmSync(f, { force: true });
+    } catch {}
+  }
+};
+
+export const watchAttentionSignals = (
+  listener: (sessionId: string, reason: AttentionReason) => void,
+): { dispose(): void } => {
+  fs.mkdirSync(COCKPIT_SIGNALS_DIR, { recursive: true });
+  const poll = (): void => {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(COCKPIT_SIGNALS_DIR);
+    } catch {
+      return;
+    }
+    for (const name of entries) {
+      const match = SIGNAL_FILE.exec(name);
+      if (!match) continue;
+      try {
+        fs.rmSync(path.join(COCKPIT_SIGNALS_DIR, name), { force: true });
+      } catch {
+        continue;
+      }
+      listener(match[1]!, match[2] as AttentionReason);
+    }
+  };
+  const timer = setInterval(poll, SIGNALS_POLL_INTERVAL_MS);
+  return { dispose: () => clearInterval(timer) };
+};
+
+export const saveDroppedImage = (fileName: string, dataBase64: string): string | null => {
+  try {
+    const dir = path.join(COCKPIT_SIGNALS_DIR, "..", "dropped-images");
+    fs.mkdirSync(dir, { recursive: true });
+    const safe = fileName.replace(/[^A-Za-z0-9._-]/g, "_") || "image.png";
+    const file = path.join(dir, `${Date.now()}-${safe}`);
+    fs.writeFileSync(file, Buffer.from(dataBase64, "base64"));
+    return file;
+  } catch {
+    return null;
+  }
+};

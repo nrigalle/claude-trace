@@ -9,8 +9,16 @@
   },
   "include": [
     "media/src/**/*",
-    "src/protocol.ts",
-    "src/domain/types.ts"
+    "src/features/dashboard/protocol.ts",
+    "src/features/pipelines/protocol.ts",
+    "src/features/cockpit/protocol.ts",
+    "src/features/dashboard/domain/types.ts",
+    "src/shared/models.ts",
+    "src/shared/permissionModes.ts",
+    "src/shared/thinkingLevels.ts",
+    "src/features/pipelines/domain/types.ts",
+    "src/features/pipelines/domain/validate.ts",
+    "src/features/cockpit/domain/profiles.ts"
   ],
   "exclude": ["node_modules", "out", "bin", "test"]
 }

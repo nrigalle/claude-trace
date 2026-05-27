@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { HostToWebview, WebviewToHost } from "../../../src/protocol";
-import { toSessionId, type SessionId } from "../../../src/domain/types";
+import type { HostToWebview, WebviewToHost } from "../../../src/features/dashboard/protocol";
+import { toSessionId, type SessionId } from "../../../src/features/dashboard/domain/types";
 
 interface MockApi {
   postMessage(m: WebviewToHost): void;

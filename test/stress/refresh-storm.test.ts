@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { PROJECTS_DIR } from "../../src/config";
-import { SessionFileReader } from "../../src/infra/fs/SessionFileReader";
-import { RefreshScheduler } from "../../src/app/RefreshScheduler";
-import { toSessionId } from "../../src/domain/types";
-import type { SessionRef } from "../../src/infra/fs/paths";
+import { PROJECTS_DIR } from "../../src/shared/config";
+import { SessionFileReader } from "../../src/features/dashboard/infra/SessionFileReader";
+import { RefreshScheduler } from "../../src/features/dashboard/app/RefreshScheduler";
+import { toSessionId } from "../../src/features/dashboard/domain/types";
+import type { SessionRef } from "../../src/features/dashboard/infra/paths";
 
 const makeRef = (id: string): SessionRef => {
   const projectDirName = "-stress-test";

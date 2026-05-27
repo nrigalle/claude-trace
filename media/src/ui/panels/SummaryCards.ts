@@ -1,4 +1,4 @@
-import type { SessionDetail } from "../../../../src/domain/types";
+import type { SessionDetail } from "../../../../src/features/dashboard/domain/types";
 import { fmtCost, fmtDuration, fmtPct, fmtTokens } from "../format.js";
 import { h } from "../h.js";
 import { icon, type IconName } from "../icons.js";

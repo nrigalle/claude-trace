@@ -1,4 +1,4 @@
-import type { ChartPoint } from "../../../../src/domain/types";
+import type { ChartPoint } from "../../../../src/features/dashboard/domain/types";
 import { fmtTimeShort } from "../format.js";
 import { h } from "../h.js";
 

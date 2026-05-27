@@ -1,0 +1,712 @@
+import type {
+  Block,
+  BlockId,
+  BlockRun,
+  BlockSessionRecord,
+  BlockStatus,
+  OrchestratorDecision,
+  ParallelBlock,
+  ParallelRunState,
+  Pipeline,
+  RunId,
+  RunState,
+} from "./types";
+import { blockRunOutput, fromBlockId } from "./types";
+import { assertNever } from "../../../shared/assertNever";
+
+export const initialRunState = (
+  pipeline: Pipeline,
+  runId: RunId,
+  nowMs: number,
+): RunState => ({
+  runId,
+  pipelineId: pipeline.id,
+  pipelineSnapshot: pipeline,
+  startedAtMs: nowMs,
+  endedAtMs: null,
+  status: "running",
+  blocks: pipeline.blocks.map(initialBlockRun),
+  variables: {},
+});
+
+const initialBlockRun = (b: Block): BlockRun => ({
+  blockId: b.id,
+  status: "pending",
+  sessions: [],
+  parallel: b.kind === "parallel" ? initialParallelState(b) : null,
+  output: null,
+  stuckReason: null,
+  failureReason: null,
+  startedAtMs: null,
+  endedAtMs: null,
+});
+
+const initialParallelState = (b: ParallelBlock): ParallelRunState => ({
+  workerRuns: b.workers.map((w) => ({
+    workerBlockId: w.id,
+    status: "pending",
+    sessions: [],
+    stuckReason: null,
+    failureReason: null,
+    startedAtMs: null,
+    endedAtMs: null,
+  })),
+  mergerSessions: [],
+  mergerStatus: "pending",
+  mergerStuckReason: null,
+});
+
+export const nextPendingBlock = (state: RunState): BlockId | null => {
+  for (const b of state.blocks) {
+    if (b.status === "pending") return b.blockId;
+  }
+  return null;
+};
+
+export const stuckBlock = (state: RunState): BlockId | null => {
+  for (const b of state.blocks) {
+    if (b.status === "stuck") return b.blockId;
+  }
+  return null;
+};
+
+export const applyBlockSpawned = (
+  state: RunState,
+  blockId: BlockId,
+  sessionId: string,
+  promptSent: string,
+  nowMs: number,
+): RunState =>
+  mapBlock(state, blockId, (b) => {
+    const session: BlockSessionRecord = {
+      sessionId,
+      iteration: b.sessions.length,
+      promptSent,
+      summary: null,
+      workerOutput: null,
+      startedAtMs: nowMs,
+      endedAtMs: null,
+    };
+    return {
+      ...b,
+      status: "running",
+      sessions: [...b.sessions, session],
+      startedAtMs: b.startedAtMs ?? nowMs,
+    };
+  });
+
+export const applyBlockResumed = (
+  state: RunState,
+  blockId: BlockId,
+  promptSent: string,
+  nowMs: number,
+): RunState => {
+  const next = mapBlock(state, blockId, (b) => {
+    const lastIdx = b.sessions.length - 1;
+    if (lastIdx < 0) return b;
+    const last = b.sessions[lastIdx]!;
+    const sessions = [
+      ...b.sessions.slice(0, lastIdx),
+      { ...last, promptSent, endedAtMs: null },
+    ];
+    return {
+      ...b,
+      status: "running",
+      sessions,
+      stuckReason: null,
+      startedAtMs: b.startedAtMs ?? nowMs,
+    };
+  });
+  return {
+    ...next,
+    status: state.status === "paused-needs-input" ? "running" : state.status,
+  };
+};
+
+export const applyWorkerOutput = (
+  state: RunState,
+  blockId: BlockId,
+  workerOutput: string,
+): RunState =>
+  mapBlock(state, blockId, (b) => {
+    const lastIdx = b.sessions.length - 1;
+    if (lastIdx < 0) return b;
+    const last = b.sessions[lastIdx]!;
+    return {
+      ...b,
+      sessions: [...b.sessions.slice(0, lastIdx), { ...last, workerOutput }],
+    };
+  });
+
+export const applyParallelWorkerOutput = (
+  state: RunState,
+  blockId: BlockId,
+  workerBlockId: BlockId,
+  workerOutput: string,
+): RunState =>
+  mapParallel(state, blockId, (parallel, blockRun) => {
+    const workerRuns = parallel.workerRuns.map((w) => {
+      if (w.workerBlockId !== workerBlockId) return w;
+      const lastIdx = w.sessions.length - 1;
+      if (lastIdx < 0) return w;
+      const last = w.sessions[lastIdx]!;
+      return {
+        ...w,
+        sessions: [...w.sessions.slice(0, lastIdx), { ...last, workerOutput }],
+      };
+    });
+    return { ...blockRun, parallel: { ...parallel, workerRuns } };
+  });
+
+export const applyMergerOutput = (
+  state: RunState,
+  blockId: BlockId,
+  workerOutput: string,
+): RunState =>
+  mapParallel(state, blockId, (parallel, blockRun) => {
+    const lastIdx = parallel.mergerSessions.length - 1;
+    if (lastIdx < 0) return blockRun;
+    const last = parallel.mergerSessions[lastIdx]!;
+    const mergerSessions = [...parallel.mergerSessions.slice(0, lastIdx), { ...last, workerOutput }];
+    return { ...blockRun, parallel: { ...parallel, mergerSessions } };
+  });
+
+export const applyBlockStopped = (
+  state: RunState,
+  blockId: BlockId,
+  nowMs: number,
+): RunState =>
+  mapBlock(state, blockId, (b) => {
+    const lastIdx = b.sessions.length - 1;
+    if (lastIdx < 0) return { ...b, status: "judging" };
+    const last = b.sessions[lastIdx]!;
+    const sessions = [
+      ...b.sessions.slice(0, lastIdx),
+      { ...last, endedAtMs: nowMs },
+    ];
+    return { ...b, status: "judging", sessions };
+  });
+
+export const applyDecision = (
+  state: RunState,
+  blockId: BlockId,
+  decision: OrchestratorDecision,
+  nowMs: number,
+): RunState => {
+  switch (decision.kind) {
+    case "success":
+    case "loop-done":
+      return finalizeSuccess(state, blockId, decision.summary, nowMs);
+    case "needs-input":
+      return finalizeNeedsInput(state, blockId, decision.reason);
+    default:
+      return assertNever(decision);
+  }
+};
+
+export const applyBlockCrashed = (
+  state: RunState,
+  blockId: BlockId,
+  reason: string,
+  nowMs: number,
+): RunState => {
+  const next = mapBlock(state, blockId, (b) => {
+    const lastIdx = b.sessions.length - 1;
+    const sessions =
+      lastIdx >= 0
+        ? [...b.sessions.slice(0, lastIdx), { ...b.sessions[lastIdx]!, endedAtMs: nowMs }]
+        : b.sessions;
+    return {
+      ...b,
+      status: "failed",
+      sessions,
+      failureReason: reason,
+      endedAtMs: nowMs,
+    };
+  });
+  return { ...next, status: "failed", endedAtMs: nowMs };
+};
+
+export const applyInterrupted = (state: RunState, nowMs: number): RunState => ({
+  ...state,
+  status: "interrupted",
+  endedAtMs: nowMs,
+});
+
+export const resetBlocksForLoopIteration = (
+  state: RunState,
+  blockIdsInRange: readonly BlockId[],
+): RunState => ({
+  ...state,
+  status: state.status === "completed" ? "running" : state.status,
+  endedAtMs: state.status === "completed" ? null : state.endedAtMs,
+  blocks: state.blocks.map((b) =>
+    blockIdsInRange.includes(b.blockId)
+      ? { ...b, status: "pending", endedAtMs: null }
+      : b,
+  ),
+});
+
+export const applyParallelWorkerSpawned = (
+  state: RunState,
+  blockId: BlockId,
+  workerBlockId: BlockId,
+  sessionId: string,
+  promptSent: string,
+  nowMs: number,
+): RunState =>
+  mapParallel(state, blockId, (parallel, blockRun) => {
+    const workerRuns = parallel.workerRuns.map((w) => {
+      if (w.workerBlockId !== workerBlockId) return w;
+      const session: BlockSessionRecord = {
+        sessionId,
+        iteration: w.sessions.length,
+        promptSent,
+        summary: null,
+        workerOutput: null,
+        startedAtMs: nowMs,
+        endedAtMs: null,
+      };
+      return {
+        ...w,
+        status: "running" as BlockStatus,
+        sessions: [...w.sessions, session],
+        startedAtMs: w.startedAtMs ?? nowMs,
+      };
+    });
+    return {
+      ...blockRun,
+      status: "running",
+      startedAtMs: blockRun.startedAtMs ?? nowMs,
+      parallel: { ...parallel, workerRuns },
+    };
+  });
+
+export const applyParallelWorkerStopped = (
+  state: RunState,
+  blockId: BlockId,
+  workerBlockId: BlockId,
+  nowMs: number,
+): RunState =>
+  mapParallel(state, blockId, (parallel, blockRun) => {
+    const workerRuns = parallel.workerRuns.map((w) => {
+      if (w.workerBlockId !== workerBlockId) return w;
+      const lastIdx = w.sessions.length - 1;
+      const sessions =
+        lastIdx >= 0
+          ? [...w.sessions.slice(0, lastIdx), { ...w.sessions[lastIdx]!, endedAtMs: nowMs }]
+          : w.sessions;
+      return { ...w, status: "judging" as BlockStatus, sessions };
+    });
+    return { ...blockRun, parallel: { ...parallel, workerRuns } };
+  });
+
+export const applyParallelWorkerDecision = (
+  state: RunState,
+  blockId: BlockId,
+  workerBlockId: BlockId,
+  decision: OrchestratorDecision,
+  nowMs: number,
+): RunState =>
+  mapParallel(state, blockId, (parallel, blockRun) => {
+    const workerRuns = parallel.workerRuns.map((w) => {
+      if (w.workerBlockId !== workerBlockId) return w;
+      switch (decision.kind) {
+        case "success":
+        case "loop-done": {
+          const lastIdx = w.sessions.length - 1;
+          const sessions =
+            lastIdx >= 0
+              ? [
+                  ...w.sessions.slice(0, lastIdx),
+                  { ...w.sessions[lastIdx]!, summary: decision.summary },
+                ]
+              : w.sessions;
+          return {
+            ...w,
+            status: "done" as BlockStatus,
+            sessions,
+            endedAtMs: nowMs,
+            stuckReason: null,
+          };
+        }
+        case "needs-input":
+          return {
+            ...w,
+            status: "stuck" as BlockStatus,
+            stuckReason: decision.reason,
+          };
+        default:
+          return assertNever(decision);
+      }
+    });
+    return rebuildParallelBlockStatus({ ...blockRun, parallel: { ...parallel, workerRuns } });
+  });
+
+export const applyParallelWorkerCrashed = (
+  state: RunState,
+  blockId: BlockId,
+  workerBlockId: BlockId,
+  reason: string,
+  nowMs: number,
+): RunState =>
+  mapParallel(state, blockId, (parallel, blockRun) => {
+    const workerRuns = parallel.workerRuns.map((w) =>
+      w.workerBlockId === workerBlockId
+        ? { ...w, status: "failed" as BlockStatus, failureReason: reason, endedAtMs: nowMs }
+        : w,
+    );
+    const failed: BlockRun = {
+      ...blockRun,
+      status: "failed",
+      failureReason: reason,
+      endedAtMs: nowMs,
+      parallel: { ...parallel, workerRuns },
+    };
+    return { ...failed };
+  });
+
+export const applyMergerSpawned = (
+  state: RunState,
+  blockId: BlockId,
+  sessionId: string,
+  promptSent: string,
+  nowMs: number,
+): RunState =>
+  mapParallel(state, blockId, (parallel, blockRun) => {
+    const session: BlockSessionRecord = {
+      sessionId,
+      iteration: parallel.mergerSessions.length,
+      promptSent,
+      summary: null,
+      workerOutput: null,
+      startedAtMs: nowMs,
+      endedAtMs: null,
+    };
+    return {
+      ...blockRun,
+      status: "running",
+      parallel: {
+        ...parallel,
+        mergerSessions: [...parallel.mergerSessions, session],
+        mergerStatus: "running",
+        mergerStuckReason: null,
+      },
+    };
+  });
+
+export const applyMergerStopped = (
+  state: RunState,
+  blockId: BlockId,
+  nowMs: number,
+): RunState =>
+  mapParallel(state, blockId, (parallel, blockRun) => {
+    const lastIdx = parallel.mergerSessions.length - 1;
+    const mergerSessions =
+      lastIdx >= 0
+        ? [
+            ...parallel.mergerSessions.slice(0, lastIdx),
+            { ...parallel.mergerSessions[lastIdx]!, endedAtMs: nowMs },
+          ]
+        : parallel.mergerSessions;
+    return {
+      ...blockRun,
+      parallel: { ...parallel, mergerSessions, mergerStatus: "judging" },
+    };
+  });
+
+export const applyMergerDecision = (
+  state: RunState,
+  blockId: BlockId,
+  decision: OrchestratorDecision,
+  nowMs: number,
+): RunState => {
+  const next = mapParallel(state, blockId, (parallel, blockRun) => {
+    switch (decision.kind) {
+      case "success":
+      case "loop-done": {
+        const lastIdx = parallel.mergerSessions.length - 1;
+        const mergerSessions =
+          lastIdx >= 0
+            ? [
+                ...parallel.mergerSessions.slice(0, lastIdx),
+                { ...parallel.mergerSessions[lastIdx]!, summary: decision.summary },
+              ]
+            : parallel.mergerSessions;
+        return {
+          ...blockRun,
+          status: "done",
+          endedAtMs: nowMs,
+          stuckReason: null,
+          parallel: {
+            ...parallel,
+            mergerSessions,
+            mergerStatus: "done",
+            mergerStuckReason: null,
+          },
+        };
+      }
+      case "needs-input":
+        return {
+          ...blockRun,
+          status: "stuck",
+          stuckReason: decision.reason,
+          parallel: {
+            ...parallel,
+            mergerStatus: "stuck",
+            mergerStuckReason: decision.reason,
+          },
+        };
+      default:
+        return assertNever(decision);
+    }
+  });
+  if (decision.kind === "needs-input") {
+    return { ...next, status: "paused-needs-input" };
+  }
+  return finalizeRunIfComplete(next, nowMs);
+};
+
+export const applyMergerCrashed = (
+  state: RunState,
+  blockId: BlockId,
+  reason: string,
+  nowMs: number,
+): RunState =>
+  mapParallel(state, blockId, (parallel, blockRun) => ({
+    ...blockRun,
+    status: "failed",
+    failureReason: reason,
+    endedAtMs: nowMs,
+    parallel: { ...parallel, mergerStatus: "failed" },
+  }));
+
+const finalizeSuccess = (
+  state: RunState,
+  blockId: BlockId,
+  summary: string,
+  nowMs: number,
+): RunState => {
+  const after = mapBlock(state, blockId, (b) => {
+    const lastIdx = b.sessions.length - 1;
+    const sessions =
+      lastIdx >= 0
+        ? [...b.sessions.slice(0, lastIdx), { ...b.sessions[lastIdx]!, summary }]
+        : b.sessions;
+    return {
+      ...b,
+      status: "done",
+      sessions,
+      endedAtMs: nowMs,
+    };
+  });
+  return finalizeRunIfComplete(after, nowMs);
+};
+
+const finalizeNeedsInput = (
+  state: RunState,
+  blockId: BlockId,
+  reason: string,
+): RunState => {
+  const after = mapBlock(state, blockId, (b) => ({
+    ...b,
+    status: "stuck",
+    stuckReason: reason,
+  }));
+  return { ...after, status: "paused-needs-input" };
+};
+
+const finalizeRunIfComplete = (state: RunState, nowMs: number): RunState => {
+  const more = state.blocks.some((b) => b.status === "pending" || b.status === "stuck");
+  if (more) return state;
+  const anyFailed = state.blocks.some((b) => b.status === "failed");
+  if (anyFailed) return { ...state, status: "failed", endedAtMs: nowMs };
+  return { ...state, status: "completed", endedAtMs: nowMs };
+};
+
+const rebuildParallelBlockStatus = (blockRun: BlockRun): BlockRun => {
+  const p = blockRun.parallel;
+  if (!p) return blockRun;
+  const anyStuck = p.workerRuns.some((w) => w.status === "stuck") || p.mergerStatus === "stuck";
+  const anyFailed = p.workerRuns.some((w) => w.status === "failed") || p.mergerStatus === "failed";
+  if (anyFailed) return { ...blockRun, status: "failed" };
+  if (anyStuck) return { ...blockRun, status: "stuck", stuckReason: collectStuckReasons(p) };
+  return { ...blockRun, status: blockRun.status === "stuck" ? "running" : blockRun.status, stuckReason: null };
+};
+
+const collectStuckReasons = (p: ParallelRunState): string => {
+  const stuck: string[] = [];
+  for (const w of p.workerRuns) {
+    if (w.status === "stuck" && w.stuckReason) stuck.push(`${w.workerBlockId}: ${w.stuckReason}`);
+  }
+  if (p.mergerStatus === "stuck" && p.mergerStuckReason) stuck.push(`merger: ${p.mergerStuckReason}`);
+  return stuck.join(" | ");
+};
+
+const mapBlock = (
+  state: RunState,
+  blockId: BlockId,
+  fn: (b: BlockRun) => BlockRun,
+): RunState => ({
+  ...state,
+  blocks: state.blocks.map((b) => (b.blockId === blockId ? fn(b) : b)),
+});
+
+const mapParallel = (
+  state: RunState,
+  blockId: BlockId,
+  fn: (parallel: ParallelRunState, blockRun: BlockRun) => BlockRun,
+): RunState =>
+  mapBlock(state, blockId, (b) => {
+    if (!b.parallel) return b;
+    return fn(b.parallel, b);
+  });
+
+export const stuckParallelWorkers = (
+  blockRun: BlockRun,
+): readonly { workerBlockId: BlockId; reason: string }[] => {
+  if (!blockRun.parallel) return [];
+  const out: { workerBlockId: BlockId; reason: string }[] = [];
+  for (const w of blockRun.parallel.workerRuns) {
+    if (w.status === "stuck") out.push({ workerBlockId: w.workerBlockId, reason: w.stuckReason ?? "" });
+  }
+  return out;
+};
+
+export const applyDeterministicStarted = (
+  state: RunState,
+  blockId: BlockId,
+  nowMs: number,
+): RunState =>
+  mapBlock(state, blockId, (b) => ({
+    ...b,
+    status: "running",
+    startedAtMs: b.startedAtMs ?? nowMs,
+  }));
+
+export const applyDeterministicDone = (
+  state: RunState,
+  blockId: BlockId,
+  output: string,
+  nowMs: number,
+): RunState => {
+  const after = mapBlock(state, blockId, (b) => ({
+    ...b,
+    status: "done",
+    output,
+    endedAtMs: nowMs,
+  }));
+  return finalizeRunIfComplete(after, nowMs);
+};
+
+export const applyDeterministicFailed = (
+  state: RunState,
+  blockId: BlockId,
+  reason: string,
+  nowMs: number,
+): RunState => {
+  const after = mapBlock(state, blockId, (b) => ({
+    ...b,
+    status: "failed",
+    failureReason: reason,
+    endedAtMs: nowMs,
+  }));
+  return { ...after, status: "failed", endedAtMs: nowMs };
+};
+
+export const setVariable = (
+  state: RunState,
+  name: string,
+  value: string,
+): RunState => ({
+  ...state,
+  variables: { ...state.variables, [name]: value },
+});
+
+export const blockOutputsOf = (state: RunState): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const br of state.blocks) {
+    const value = blockRunOutput(br);
+    if (value !== null) out[fromBlockId(br.blockId)] = value;
+  }
+  return out;
+};
+
+export const applyApprovalPaused = (
+  state: RunState,
+  blockId: BlockId,
+  message: string,
+  nowMs: number,
+): RunState => {
+  const after = mapBlock(state, blockId, (b) => ({
+    ...b,
+    status: "stuck",
+    stuckReason: message,
+    startedAtMs: b.startedAtMs ?? nowMs,
+  }));
+  return { ...after, status: "paused-needs-input" };
+};
+
+export const applyApprovalApproved = (
+  state: RunState,
+  blockId: BlockId,
+  nowMs: number,
+): RunState => {
+  const after = mapBlock(state, blockId, (b) => ({
+    ...b,
+    status: "done",
+    stuckReason: null,
+    output: "approved",
+    endedAtMs: nowMs,
+  }));
+  return finalizeRunIfComplete({ ...after, status: "running" }, nowMs);
+};
+
+export const firstApprovalAwaitingInput = (
+  state: RunState,
+): BlockId | null => {
+  for (const b of state.blocks) {
+    if (b.status !== "stuck") continue;
+    const def = state.pipelineSnapshot.blocks.find((d) => d.id === b.blockId);
+    if (def && def.kind === "approval") return b.blockId;
+  }
+  return null;
+};
+
+export const applyBlocksSkipped = (
+  state: RunState,
+  blockIds: readonly BlockId[],
+  nowMs: number,
+): RunState => {
+  const skip = new Set<BlockId>(blockIds);
+  const after: RunState = {
+    ...state,
+    blocks: state.blocks.map((b) =>
+      skip.has(b.blockId) && b.status === "pending"
+        ? { ...b, status: "skipped", startedAtMs: b.startedAtMs ?? nowMs, endedAtMs: nowMs }
+        : b,
+    ),
+  };
+  return finalizeRunIfComplete(after, nowMs);
+};
+
+export const conditionSkipRange = (
+  blocks: readonly Block[],
+  conditionId: BlockId,
+  skipToBlockId: BlockId | null,
+): readonly BlockId[] => {
+  const startIdx = blocks.findIndex((b) => b.id === conditionId);
+  if (startIdx < 0) return [];
+  const endIdx =
+    skipToBlockId === null
+      ? blocks.length
+      : blocks.findIndex((b) => b.id === skipToBlockId);
+  const stop = endIdx < 0 ? blocks.length : endIdx;
+  if (stop <= startIdx + 1) return [];
+  return blocks.slice(startIdx + 1, stop).map((b) => b.id);
+};
+
+export const allParallelWorkersDone = (blockRun: BlockRun): boolean => {
+  if (!blockRun.parallel) return false;
+  return blockRun.parallel.workerRuns.every((w) => w.status === "done");
+};

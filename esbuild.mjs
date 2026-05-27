@@ -7,7 +7,7 @@ const extensionConfig = {
   entryPoints: ["src/extension.ts"],
   bundle: true,
   outfile: "out/extension.js",
-  external: ["vscode"],
+  external: ["vscode", "node-pty"],
   format: "cjs",
   platform: "node",
   target: "node18.17",

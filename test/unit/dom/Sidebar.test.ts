@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GlobalStats, SessionSummary, SessionId } from "../../../src/domain/types";
-import { toSessionId } from "../../../src/domain/types";
-import type { WebviewToHost } from "../../../src/protocol";
+import type { GlobalStats, SessionSummary, SessionId } from "../../../src/features/dashboard/domain/types";
+import { toSessionId } from "../../../src/features/dashboard/domain/types";
+import type { WebviewToHost } from "../../../src/features/dashboard/protocol";
 
 interface MockApi {
   postMessage(m: WebviewToHost): void;
@@ -53,7 +53,8 @@ const summary = (id: string): SessionSummary => ({
 const noopHandlers = {
   onSelect: (_: SessionId) => {},
   onTogglePin: (_: SessionId) => {},
-  onStartNewSession: () => {},
+  onCopyConversation: (_: SessionId) => {},
+  onResumeInCockpit: (_: SessionId) => {},
   onToggleCollapsed: () => {},
 };
 

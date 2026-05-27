@@ -1,8 +1,30 @@
-import type { SessionId } from "../../../src/domain/types";
+import type { SessionId } from "../../../src/features/dashboard/domain/types";
 import { clampSidebarWidth, SIDEBAR_DEFAULT_PX } from "../ui/layout/sidebarWidth.js";
 
 export type TimelineFilter = "all" | "tools" | "errors" | "conversation";
 export type DateFilter = "all" | "today" | "week" | "month" | "favorites";
+
+export type DetailBlockId = "cards" | "charts" | "cost" | "files" | "memory" | "timeline";
+
+export interface DetailBlock {
+  readonly id: DetailBlockId;
+  readonly label: string;
+}
+
+export const DETAIL_BLOCKS: readonly DetailBlock[] = [
+  { id: "cards", label: "Summary cards" },
+  { id: "charts", label: "Context & tool usage" },
+  { id: "cost", label: "Cost over time" },
+  { id: "files", label: "Files touched" },
+  { id: "memory", label: "Memory edits" },
+  { id: "timeline", label: "Activity timeline" },
+];
+
+export interface DetailBlockConfig {
+  readonly id: DetailBlockId;
+  readonly visible: boolean;
+  readonly span: 1 | 2;
+}
 
 export interface UiState {
   selectedId: SessionId | null;
@@ -18,6 +40,7 @@ export interface UiState {
   timelineCollapsed: boolean;
   sidebarWidth: number;
   sidebarCollapsed: boolean;
+  detailLayout: readonly DetailBlockConfig[];
 }
 
 interface VsCodeApi {
@@ -42,6 +65,28 @@ const DEFAULTS: UiState = {
   timelineCollapsed: false,
   sidebarWidth: SIDEBAR_DEFAULT_PX,
   sidebarCollapsed: false,
+  detailLayout: DETAIL_BLOCKS.map((b) => ({ id: b.id, visible: true, span: 2 as const })),
+};
+
+const KNOWN_BLOCKS: ReadonlySet<string> = new Set(DETAIL_BLOCKS.map((b) => b.id));
+
+export const normalizeDetailLayout = (value: unknown): DetailBlockConfig[] => {
+  const result: DetailBlockConfig[] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (item === null || typeof item !== "object") continue;
+      const id = (item as Record<string, unknown>)["id"];
+      if (typeof id !== "string" || !KNOWN_BLOCKS.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      const rec = item as Record<string, unknown>;
+      result.push({ id: id as DetailBlockId, visible: rec["visible"] !== false, span: rec["span"] === 1 ? 1 : 2 });
+    }
+  }
+  for (const b of DETAIL_BLOCKS) {
+    if (!seen.has(b.id)) result.push({ id: b.id, visible: true, span: 2 });
+  }
+  return result;
 };
 
 const normalizeFilter = (value: unknown): TimelineFilter =>
@@ -75,6 +120,7 @@ export class Store {
       timelineCollapsed: normalizeBool(saved?.timelineCollapsed),
       sidebarWidth: clampSidebarWidth(saved?.sidebarWidth),
       sidebarCollapsed: normalizeBool(saved?.sidebarCollapsed),
+      detailLayout: normalizeDetailLayout(saved?.detailLayout),
     };
   }
 
@@ -103,7 +149,7 @@ export class Store {
 
   private notify(): void {
     for (const l of this.listeners) {
-      try { l(this.current); } catch { }
+      try { l(this.current); } catch {}
     }
   }
 }

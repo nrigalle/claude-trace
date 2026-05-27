@@ -1,0 +1,133 @@
+/* Claude Trace — design tokens. An immersive, branded canvas independent of the
+   user's VS Code theme, built around the Claude orange (#d97757). */
+
+:root {
+  --ct-bg-0: #0b0b0f;
+  --ct-bg-1: #121218;
+  --ct-bg-2: #18181f;
+  --ct-bg-3: #23232c;
+  --ct-border: rgba(255, 255, 255, 0.07);
+  --ct-border-hover: rgba(255, 255, 255, 0.16);
+  --ct-text-primary: #ededf2;
+  --ct-text-secondary: #b6b6c2;
+  --ct-text-muted: #8b8b98;
+  --ct-text-dim: #61616d;
+  --ct-focus: #e8956f;
+  --ct-active-bg: rgba(217, 119, 87, 0.13);
+  --ct-active-fg: #f6d9cb;
+
+  --ct-claude: #d97757;
+  --ct-claude-light: #e89a7a;
+  --ct-claude-deep: #c2613d;
+  --ct-grad-orange: linear-gradient(135deg, #e88a64 0%, #cd6a48 100%);
+  --ct-grad-orange-hover: linear-gradient(135deg, #f3a07d 0%, #db7a59 100%);
+  --ct-halo: radial-gradient(120% 75% at 50% -12%, rgba(217, 119, 87, 0.32), transparent 60%),
+    radial-gradient(80% 55% at 105% 105%, rgba(217, 119, 87, 0.18), transparent 62%),
+    radial-gradient(70% 50% at -5% 100%, rgba(139, 92, 246, 0.1), transparent 60%);
+
+  --ct-rim: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --ct-rim-accent: inset 0 1px 0 rgba(255, 210, 188, 0.16);
+  --ct-elev-1: 0 0.5px 1px rgba(20, 8, 2, 0.5), 0 1px 2px rgba(20, 8, 2, 0.35);
+  --ct-elev-2: 0 1px 2px rgba(16, 6, 2, 0.4), 0 4px 10px rgba(16, 6, 2, 0.32),
+    0 12px 28px rgba(16, 6, 2, 0.3);
+  --ct-elev-3: 0 1px 2px rgba(12, 5, 2, 0.4), 0 6px 16px rgba(12, 5, 2, 0.34),
+    0 18px 40px rgba(12, 5, 2, 0.32);
+
+  --ct-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ct-ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ct-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --ct-purple: #8b5cf6;
+  --ct-blue: #7aa2f7;
+  --ct-teal: #14b8a6;
+  --ct-green: #10b981;
+  --ct-amber: #f59e0b;
+  --ct-red: #ef4444;
+  --ct-pink: #ec4899;
+  --ct-grid: #23232c;
+
+  --ct-radius: 14px;
+  --ct-radius-sm: 9px;
+  --ct-font: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif);
+  --ct-mono: var(--vscode-editor-font-family, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  color-scheme: dark;
+  accent-color: var(--ct-claude);
+  caret-color: var(--ct-claude);
+}
+
+body {
+  font-family: var(--ct-font);
+  background-color: var(--ct-bg-0);
+  background-image: var(--ct-halo);
+  background-repeat: no-repeat;
+  color: var(--ct-text-primary);
+  overflow: hidden;
+  height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  letter-spacing: -0.006em;
+}
+
+::selection {
+  background: rgba(217, 119, 87, 0.32);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ct-focus);
+  outline-offset: 2px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(217, 119, 87, 0.4);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

@@ -1,4 +1,4 @@
-import type { SessionDetail, ToolStat } from "../../../../src/domain/types";
+import type { SessionDetail, ToolStat } from "../../../../src/features/dashboard/domain/types";
 import { AreaChart } from "../charts/AreaChart.js";
 import { h } from "../h.js";
 import { icon, getToolColor } from "../icons.js";

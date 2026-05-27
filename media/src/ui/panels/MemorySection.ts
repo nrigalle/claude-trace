@@ -1,4 +1,4 @@
-import type { SessionDetail } from "../../../../src/domain/types";
+import type { SessionDetail } from "../../../../src/features/dashboard/domain/types";
 import { FileEditsListView } from "./FileEditsListView.js";
 
 export interface MemorySectionActions {

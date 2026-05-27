@@ -1,27 +1,88 @@
-import type { SessionId } from "../../../src/domain/types";
-import type { HostToWebview, WebviewToHost } from "../../../src/protocol";
+import type { SessionId } from "../../../src/features/dashboard/domain/types";
+import type {
+  PipelinesHostToWebview,
+  PipelinesWebviewToHost,
+} from "../../../src/features/pipelines/protocol";
+import type {
+  CockpitHostToWebview,
+  CockpitWebviewToHost,
+} from "../../../src/features/cockpit/protocol";
+import type { HostToWebview, WebviewToHost } from "../../../src/features/dashboard/protocol";
 import type { Store } from "../state/Store";
 
-type Handler = (msg: HostToWebview) => void;
+type SessionHandler = (msg: HostToWebview) => void;
+type PipelinesHandler = (msg: PipelinesHostToWebview) => void;
+type CockpitHandler = (msg: CockpitHostToWebview) => void;
+
+const SESSION_MESSAGE_TYPE_TABLE: Record<HostToWebview["type"], true> = {
+  update: true,
+  sessionDetail: true,
+  detailLayout: true,
+};
+const SESSION_MESSAGE_TYPES: ReadonlySet<HostToWebview["type"]> = new Set(
+  Object.keys(SESSION_MESSAGE_TYPE_TABLE) as HostToWebview["type"][],
+);
+
+const PIPELINES_MESSAGE_TYPE_TABLE: Record<PipelinesHostToWebview["type"], true> = {
+  pipelinesList: true,
+  pipelineDetail: true,
+  runUpdate: true,
+  validationFailed: true,
+  notice: true,
+};
+const PIPELINES_MESSAGE_TYPES: ReadonlySet<PipelinesHostToWebview["type"]> = new Set(
+  Object.keys(PIPELINES_MESSAGE_TYPE_TABLE) as PipelinesHostToWebview["type"][],
+);
+
+const COCKPIT_MESSAGE_TYPE_TABLE: Record<CockpitHostToWebview["type"], true> = {
+  cockpitState: true,
+  terminalData: true,
+  terminalExit: true,
+  terminalAttention: true,
+  terminalActive: true,
+  cockpitLayout: true,
+  cockpitProfileInvalid: true,
+  cockpitNotice: true,
+};
+const COCKPIT_MESSAGE_TYPES: ReadonlySet<CockpitHostToWebview["type"]> = new Set(
+  Object.keys(COCKPIT_MESSAGE_TYPE_TABLE) as CockpitHostToWebview["type"][],
+);
 
 export class MessageClient {
   private buffer: HostToWebview[] = [];
   private rafScheduled = false;
-  private handler: Handler | null = null;
+  private sessionHandler: SessionHandler | null = null;
+  private pipelinesHandler: PipelinesHandler | null = null;
+  private cockpitHandler: CockpitHandler | null = null;
 
   constructor(private readonly store: Store) {
     window.addEventListener("message", (e: MessageEvent<unknown>) => {
       const data = e.data;
       if (!data || typeof data !== "object" || !("type" in data)) return;
-      this.enqueue(data as HostToWebview);
+      const type = (data as { type: string }).type;
+      if (SESSION_MESSAGE_TYPES.has(type as HostToWebview["type"])) {
+        this.enqueue(data as HostToWebview);
+      } else if (PIPELINES_MESSAGE_TYPES.has(type as PipelinesHostToWebview["type"])) {
+        this.pipelinesHandler?.(data as PipelinesHostToWebview);
+      } else if (COCKPIT_MESSAGE_TYPES.has(type as CockpitHostToWebview["type"])) {
+        this.cockpitHandler?.(data as CockpitHostToWebview);
+      }
     });
   }
 
-  onUpdate(handler: Handler): void {
-    this.handler = handler;
+  onUpdate(handler: SessionHandler): void {
+    this.sessionHandler = handler;
   }
 
-  send(msg: WebviewToHost): void {
+  onPipelinesUpdate(handler: PipelinesHandler): void {
+    this.pipelinesHandler = handler;
+  }
+
+  onCockpitUpdate(handler: CockpitHandler): void {
+    this.cockpitHandler = handler;
+  }
+
+  send(msg: WebviewToHost | PipelinesWebviewToHost | CockpitWebviewToHost): void {
     this.store.vscode.postMessage(msg);
   }
 
@@ -38,9 +99,9 @@ export class MessageClient {
   private flush(): void {
     const coalesced = this.coalesce(this.buffer);
     this.buffer = [];
-    if (!this.handler) return;
+    if (!this.sessionHandler) return;
     for (const msg of coalesced) {
-      try { this.handler(msg); } catch (err) { console.error("handler error", err); }
+      try { this.sessionHandler(msg); } catch (err) { console.error("handler error", err); }
     }
   }
 

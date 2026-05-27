@@ -1,10 +1,13 @@
-import type { SessionId, SessionSummary } from "../../../../src/domain/types";
+import type { SessionId, SessionSummary } from "../../../../src/features/dashboard/domain/types";
 import { fmtCost, fmtDate, fmtDuration, shortId } from "../format.js";
 import { h } from "../h.js";
+import { ICONS } from "../icons.js";
 
 export interface SessionItemHandlers {
   onSelect(id: SessionId): void;
   onTogglePin(id: SessionId): void;
+  onCopyConversation(id: SessionId): void;
+  onResumeInCockpit(id: SessionId): void;
 }
 
 const deriveProject = (cwd: string | null): string => {
@@ -25,8 +28,37 @@ export const renderSessionItem = (
 ): HTMLButtonElement => {
   const title = deriveTitle(s);
   const project = deriveProject(s.cwd);
-  const model = s.model?.display_name ?? null;
   const lastActivityTs = s.ended_at ?? s.last_modified_ms;
+
+  const rowAction = (label: string, ariaLabel: string, svg: string, onClick: () => void): HTMLElement =>
+    h(
+      "span",
+      {
+        className: "session-item-action",
+        attrs: {
+          role: "button",
+          tabindex: "0",
+          "aria-label": `${ariaLabel} ${title}`,
+          title: ariaLabel,
+        },
+        on: {
+          click: (ev: Event) => {
+            ev.stopPropagation();
+            ev.preventDefault();
+            onClick();
+          },
+          keydown: (e: KeyboardEvent) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.stopPropagation();
+              e.preventDefault();
+              onClick();
+            }
+          },
+        },
+      },
+      h("span", { className: "session-item-action-icon", innerHTML: svg }),
+      h("span", { className: "session-item-action-label", textContent: label }),
+    );
 
   const pinHandler = (ev: Event): void => {
     ev.stopPropagation();
@@ -51,26 +83,13 @@ export const renderSessionItem = (
     },
   });
 
-  const item = h(
-    "button",
-    {
-      className: `session-item${isActive ? " active" : ""}${s.pinned ? " pinned" : ""}`,
-      attrs: {
-        type: "button",
-        "aria-pressed": String(isActive),
-        "aria-label": `${title}, ${project}, ${s.tool_count} tools, last active ${fmtDate(lastActivityTs)}`,
-      },
-      on: { click: () => handlers.onSelect(s.session_id) },
-    },
+  const content = h(
+    "div",
+    { className: "session-item-content" },
     h(
       "div",
       { className: "session-item-header" },
-      pin,
-      h("span", {
-        className: "session-item-name",
-        textContent: title,
-        attrs: { title },
-      }),
+      h("span", { className: "session-item-name", textContent: title, attrs: { title } }),
       lastActivityTs
         ? h("span", {
             className: "session-item-date",
@@ -89,17 +108,30 @@ export const renderSessionItem = (
       { className: "session-item-meta" },
       h("span", { textContent: `${s.tool_count} tools` }),
       h("span", { textContent: fmtDuration(s.duration_ms) }),
-      s.cost?.total_cost_usd
-        ? h("span", { textContent: fmtCost(s.cost.total_cost_usd) })
-        : null,
+      s.cost?.total_cost_usd ? h("span", { textContent: fmtCost(s.cost.total_cost_usd) }) : null,
     ),
-    model
-      ? h(
-          "div",
-          { className: "session-item-tags" },
-          h("span", { className: "tag", textContent: model }),
-        )
-      : null,
+    h(
+      "div",
+      { className: "session-item-actions" },
+      rowAction("Resume", "Resume in cockpit", ICONS.play, () => handlers.onResumeInCockpit(s.session_id)),
+      rowAction("Copy", "Copy conversation", ICONS.clipboard, () => handlers.onCopyConversation(s.session_id)),
+      rowAction("Details", "View info", ICONS.info, () => handlers.onSelect(s.session_id)),
+    ),
+  );
+
+  const item = h(
+    "button",
+    {
+      className: `session-item${isActive ? " active" : ""}${s.pinned ? " pinned" : ""}`,
+      attrs: {
+        type: "button",
+        "aria-pressed": String(isActive),
+        "aria-label": `${title}, ${project}, ${s.tool_count} tools, last active ${fmtDate(lastActivityTs)}`,
+      },
+      on: { click: () => handlers.onSelect(s.session_id) },
+    },
+    h("div", { className: "session-item-gutter" }, pin),
+    content,
   );
   item.dataset.sessionId = s.session_id;
   return item;

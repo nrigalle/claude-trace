@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemorySection } from "../../../media/src/ui/panels/MemorySection";
-import { toSessionId, type FileEditSummary, type SessionDetail } from "../../../src/domain/types";
+import { toSessionId, type FileEditSummary, type SessionDetail } from "../../../src/features/dashboard/domain/types";
 
 const baseDetail = (overrides: Partial<SessionDetail>): SessionDetail => ({
   session_id: toSessionId("s"),

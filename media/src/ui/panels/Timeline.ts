@@ -1,4 +1,4 @@
-import type { SessionDetail, TraceEvent } from "../../../../src/domain/types";
+import type { SessionDetail, TraceEvent } from "../../../../src/features/dashboard/domain/types";
 import { fmtTime } from "../format.js";
 import { h } from "../h.js";
 import { EVENT_ICONS, TOOL_ICONS, getToolColor, icon } from "../icons.js";

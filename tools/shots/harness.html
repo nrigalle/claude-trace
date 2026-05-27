@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="../../media/dashboard.css">
+  <title>Claude Trace harness</title>
+  <style>
+    :root {
+      --vscode-font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+      --vscode-editor-font-family: "SF Mono", "JetBrains Mono", Menlo, monospace;
+      --vscode-list-hoverBackground: rgba(255, 255, 255, 0.06);
+    }
+    html, body { height: 100%; }
+  </style>
+  <script>
+    const realGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (type, ...args) {
+      if (type === "webgl" || type === "webgl2" || type === "experimental-webgl") return null;
+      return realGetContext.call(this, type, ...args);
+    };
+    const outbound = [];
+    window.acquireVsCodeApi = () => ({
+      postMessage: (m) => { outbound.push(m); },
+      getState: () => undefined,
+      setState: () => {},
+    });
+    window.__ctOutbound = outbound;
+    window.__ctFeed = (msg) => window.postMessage(msg, "*");
+  </script>
+</head>
+<body>
+  <div id="app" aria-label="Claude Trace dashboard"></div>
+  <script src="../../media/dashboard.js"></script>
+</body>
+</html>

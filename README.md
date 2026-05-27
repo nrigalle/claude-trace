@@ -5,95 +5,97 @@
 [![Rating](https://img.shields.io/visual-studio-marketplace/r/nrigalle.claude-trace.svg)](https://marketplace.visualstudio.com/items?itemName=nrigalle.claude-trace)
 [![License: MIT](https://img.shields.io/github/license/nrigalle/claude-trace.svg)](LICENSE)
 
-> **Claude Code doesn't tell you what you spent. Or what it changed. Or what you started yesterday.**
-> Claude Trace does — from a sidebar in VS Code, reading the transcripts Claude Code already writes to your disk. Nothing leaves your machine.
+A cost dashboard, a multi-session terminal cockpit, and a visual agent workflow builder for [Claude Code](https://www.claude.com/product/claude-code). All inside VS Code, reading the session logs Claude Code already writes to your disk. Nothing leaves your machine.
 
-![Claude Trace dashboard](https://raw.githubusercontent.com/nrigalle/claude-trace/main/media/screenshot-dashboard.png)
+![Claude Trace cost and observability dashboard](https://raw.githubusercontent.com/nrigalle/claude-trace/main/media/shot-dashboard.png)
 
-## Install
+## The problem
+
+Claude Code is a black box about three things. You don't see what a session costs until the bill arrives, and Anthropic's usage page can lag by days. Someone left a session running overnight recently and woke up to a $6,000 charge with no live counter to warn them. When you keep four sessions open for four branches, they all look the same and you lose track of which one is doing what. And there is no built in way to chain agents together so one's output feeds the next.
+
+Claude Trace fixes all three from one panel. Press `Ctrl+Alt+T` (`Cmd+Alt+T` on macOS) to open it.
 
 ```bash
 code --install-extension nrigalle.claude-trace
 ```
 
-Press `Ctrl+Alt+T` to open the dashboard (`Cmd+Alt+T` on macOS). No config, no hooks, no API keys.
+No config, no hooks, no API keys.
 
-## Why this exists
+## See what every session costs
 
-[ccusage](https://github.com/ryoppippi/ccusage) has 10,000 stars on GitHub. It does one thing: parse the JSONL files Claude Code writes locally and tell you what you spent. Ten thousand stars because the official CLI shows a per-turn cost in the terminal and nothing else.
+The status bar shows what you spent today. It turns amber at 80 percent of your daily budget and red when you cross it. Set a per session or per day cap and it actually fires.
 
-People are reading their own transcripts to figure out their bill.
+Open any session and you get the full picture: cost over time, context window usage with a warning line at 80 percent, a breakdown of every tool call, and the files Claude touched. The diffs survive after the terminal closes, the context compacts, or the laptop reboots, so you can review what changed whenever you get to it. Cross project search, date filters, pinned favorites, and custom names turn `/resume` into something you click instead of a guessing game across folders.
 
-The same files that hold cost data also hold every tool call, every file Claude wrote, every prompt you sent. Claude Trace started by surfacing the cost and grew sideways. The dashboard reads the whole transcript and shows all of it: while sessions are running, and after they end.
+Cost is computed locally from the token counts in the transcript, at current Anthropic rates, including the 5 minute and 1 hour cache write tiers.
 
-## What you get
+## Run a cockpit of Claude sessions
 
-|  |  |
-|---|---|
-| **Live cost meter.** The status bar shows what you spent today. Amber at 80% of your daily budget, red when you cross it. Per-session and per-day caps that actually fire. | **Multi-session tiles.** New Claude sessions open as splits in the editor, like tmux but native. Run four agents in parallel without losing track of which window is doing what. |
-| **Diffs that survive the session.** Every file Claude touched gets a side-by-side diff against the current state. Reviewable after the terminal closes, the context compacts, or the laptop reboots. | **Sessions you can find again.** Cross-project search, date filters, pinned favorites, custom names. `/resume` becomes a thing you click, not a guessing game across folders. |
-| **Model picker on new sessions.** Opus 4.7, Sonnet 4.6, or Haiku 4.5, with the per-million-token rate printed under each option. Pick the model before the spend, not after the bill. | **Permission mode per session.** All six modes from the CLI surfaced as a QuickPick. Use `acceptEdits` for refactors, `plan` for unfamiliar codebases, skip `--dangerously-skip-permissions` for good. |
+![Multi-session terminal cockpit with attention indicator](https://raw.githubusercontent.com/nrigalle/claude-trace/main/media/shot-cockpit.png)
 
-Plus a timeline of every tool call, a chart of context usage with a warning line at 80%, a tool-distribution donut, file-touch summaries, memory-edit visibility, and a markdown export of any session's conversation.
+Launch many Claude Code sessions as tiled terminals in one view, like tmux but native to the editor. Group them into folders by project. A dot lights up on a session, and on its folder, the moment it finishes a turn or asks for your input, so you always know which window needs you without staring at all of them.
 
-## Who this is for
+The sessions run in detached tmux, so they keep working when you quit VS Code and they are still there when you come back. Spin up a batch from a saved profile, pick the model and permission mode per session, and drop an image straight onto a terminal.
 
-- You're $30 into a Sonnet session and didn't notice.
-- You're keeping four Claude windows open for four branches and they all look the same.
-- You opened VS Code on Monday, want to keep going on Wednesday's work, and have no idea which session that was.
+## Build workflows that chain agents
 
-If none of those are familiar, you might not need this yet.
+![Visual agent workflow orchestrator](https://raw.githubusercontent.com/nrigalle/claude-trace/main/media/shot-workflows.png)
+
+Wire several Claude sessions into a pipeline on a canvas. Run workers in sequence so each one picks up where the last left off. Fan out to parallel workers and merge their results. Loop a block until an evaluator decides the work is good enough. Add scripts, HTTP calls, file steps, and conditions between the agent steps. Kick a run off by hand, on a schedule, or with a webhook.
+
+Every step drives a real Claude Code session and passes its output to the next. The result is the kind of deterministic multi agent flow that subagents and agent teams don't give you, built visually instead of in code.
+
+## Run agents on your subscription, not the API meter
+
+This is the part worth reading twice. On June 15, 2026, Anthropic splits programmatic Claude Code into separate metered billing. The Agent SDK, `claude -p`, and GitHub Actions move to a small monthly credit pool ($20 on Pro, $100 on Max 5x, $200 on Max 20x) and then charge full API rates on top. Interactive Claude Code in the terminal and IDE keeps drawing from your normal subscription limits, [exactly as before](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
+
+Claude Trace runs its cockpit and its workflows through real interactive terminal sessions. So the orchestration you build here stays on your subscription instead of the metered API. If you were planning to coordinate agents through the SDK or headless mode, this is a direct way to keep doing that work without the new meter running.
+
+## Make the dashboard yours
+
+![Customize panel for showing and hiding dashboard sections](https://raw.githubusercontent.com/nrigalle/claude-trace/main/media/shot-customize.png)
+
+Hit Customize and toggle any section on or off: summary cards, context and tool usage, cost over time, files touched, memory edits, the activity timeline. Set a section to half or full width and drag to reorder. The layout you pick applies to every session.
 
 ## How it works
 
-Claude Code writes a complete JSONL transcript for every session under `~/.claude/projects/<encoded-path>/<session-id>.jsonl`. Each line is one event: a user prompt, an assistant turn, a tool call, a tool result.
+Claude Code writes a complete JSONL transcript for every session under `~/.claude/projects/<encoded-path>/<session-id>.jsonl`. Each line is one event: a prompt, an assistant turn, a tool call, a tool result.
 
-This extension watches that directory with `vscode.workspace.createFileSystemWatcher`, plus a one-second poll backstop for platforms where the watcher misses appends. When a file grows, only the new bytes are read and the delta is pushed to the webview. Updates batch through `requestAnimationFrame`, so even a flood of events stays under one render per frame.
+Claude Trace watches that directory and reads only the new bytes when a file grows, then pushes the delta to the panel. Updates batch through `requestAnimationFrame`, so even a flood of events stays under one render per frame. Context window size is detected per model: 200K by default, 1M for the models that support it or whenever observed input tokens cross 200K.
 
-Cost is computed locally from the token counts in the transcript, using current Anthropic rates including the 5-minute and 1-hour cache-write tiers. Context window is auto-detected: 200K by default, 1M for Opus 4.7, Opus 4.6, and Sonnet 4.6, or whenever observed input tokens cross 200K.
+## Your data stays yours
 
-Nothing leaves your machine. No network requests, no telemetry, no opt-out flag because there's nothing to opt out of.
+There are no network requests, no telemetry, and no opt out flag because there is nothing to opt out of. Everything is read from your local disk and rendered locally.
+
+## About the cost numbers
+
+The dollar figures are local estimates from the token counts in your transcripts at published Anthropic rates. They are accurate enough to catch a runaway session or compare projects, but treat your Anthropic billing page as the authority for what you actually owe.
 
 ## Settings
 
 | Setting | What it does |
 |---|---|
-| `claudeTrace.budgetPerSession` | Warn when a single session crosses this dollar amount. Default off. |
-| `claudeTrace.budgetPerDay` | Warn when today's total crosses this dollar amount. Default off. |
-| `CLAUDE_TRACE_PROJECTS_DIR` (env var) | Use this directory instead of `~/.claude/projects`. |
-
-## What it doesn't do
-
-- No per-team rollup or shared dashboard. This reads your local disk.
-- No prompt-content classification (e.g., "this many tokens were code, this many were prose"). For deeper token accounting, use [ccusage](https://github.com/ryoppippi/ccusage).
-- Windows works in light testing. If something breaks on Windows specifically, file an issue.
+| `claudeTrace.budgetPerSession` | Warn when a single session crosses this dollar amount. Off by default. |
+| `claudeTrace.budgetPerDay` | Warn when today's total crosses this dollar amount. Off by default. |
+| `claudeTrace.desktopNotifications` | Show a native OS notification when a session finishes a turn or needs you, even when VS Code is not focused. |
+| `claudeTrace.webhookPort` | Local port for the workflow webhook trigger. Set to 0 to disable. |
+| `CLAUDE_TRACE_PROJECTS_DIR` (env var) | Read from this directory instead of `~/.claude/projects`. |
 
 ## Requirements
 
-- VS Code 1.85 or newer
-- Claude Code 1.x or newer (the JSONL format has been stable since early 2026)
+VS Code 1.85 or newer, and Claude Code 1.x or newer. The cockpit and workflows use tmux for session persistence, which ships on macOS and Linux. The cost dashboard works everywhere.
 
-## For contributors
+## Building from source
 
 ```bash
 git clone https://github.com/nrigalle/claude-trace.git
 cd claude-trace
 npm install
-npm run compile       # build extension + webview bundles
-npm run watch         # rebuild on save
-npm run typecheck     # both targets
-npm run test:unit     # 395 tests, vitest
+npm run compile      # build the extension and webview bundles
+npm run test:unit    # 755 tests, vitest
 ```
 
-Press `F5` in VS Code to launch the extension in a development host.
-
-The codebase splits three ways:
-
-- `src/domain/`: pure logic (parsing, pricing, summaries). Zero `vscode` imports.
-- `src/infra/`: adapters touching VS Code APIs, the filesystem, the webview lifecycle.
-- `src/app/`: orchestration (session service, refresh scheduler, dashboard controller).
-
-The webview is its own TypeScript bundle under `media/src/`, sharing message types with the extension host through `src/protocol.ts`.
+Press `F5` in VS Code to launch a development host. The code is organized by feature under `src/features/` (dashboard, cockpit, pipelines), with pure logic in each `domain/`, VS Code and filesystem adapters in `infra/`, and orchestration in `app/`. The webview is its own TypeScript bundle under `media/src/`.
 
 ## Uninstall
 

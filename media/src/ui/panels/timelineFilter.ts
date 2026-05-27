@@ -1,4 +1,4 @@
-import type { TraceEvent } from "../../../../src/domain/types";
+import type { TraceEvent } from "../../../../src/features/dashboard/domain/types";
 import type { TimelineFilter } from "../../state/Store.js";
 
 export const isVisibleEvent = (e: TraceEvent): boolean =>

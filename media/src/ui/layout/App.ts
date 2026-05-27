@@ -3,8 +3,10 @@ import type {
   SessionDetail,
   SessionId,
   SessionSummary,
-} from "../../../../src/domain/types";
+} from "../../../../src/features/dashboard/domain/types";
 import type { Store } from "../../state/Store.js";
+import { DETAIL_BLOCKS, normalizeDetailLayout, type DetailBlockConfig, type DetailBlockId } from "../../state/Store.js";
+import type { DetailLayoutEntry } from "../../../../src/features/dashboard/protocol";
 import { DetailHeaderView } from "../panels/DetailHeader.js";
 import { FilesTouchedSection } from "../panels/FilesTouchedSection.js";
 import { MemorySection } from "../panels/MemorySection.js";
@@ -12,7 +14,7 @@ import { SummaryCardsView } from "../panels/SummaryCards.js";
 import { ChartsRowView, CostChartView } from "../panels/ChartsRow.js";
 import { Timeline } from "../panels/Timeline.js";
 import { h } from "../h.js";
-import { icon } from "../icons.js";
+import { ICONS, icon } from "../icons.js";
 import { renderEmptyState } from "./Empty.js";
 import { renderMainSkeleton } from "./Loading.js";
 import { Sidebar } from "./Sidebar.js";
@@ -26,8 +28,16 @@ export interface AppHandlers {
   onOpenFile(filePath: string): void;
   onViewFileDiff(id: SessionId, filePath: string): void;
   onExportChat(id: SessionId): void;
+  onCopyConversation(id: SessionId): void;
+  onResumeInCockpit(id: SessionId): void;
   onTogglePin(id: SessionId): void;
-  onStartNewSession(): void;
+  onBackToHome(): void;
+  onSaveDetailLayout(layout: readonly DetailBlockConfig[]): void;
+}
+
+export interface HomeView {
+  element(): HTMLElement;
+  fitActive(): void;
 }
 
 interface SectionSignatures {
@@ -55,6 +65,7 @@ export class App {
   private readonly sidebar: Sidebar;
   private readonly mainEl: HTMLElement;
   private readonly detailRoot: HTMLElement;
+  private readonly detailGrid: HTMLElement;
   private readonly emptyHost: HTMLElement;
   private readonly expandSidebarBtn: HTMLButtonElement;
 
@@ -72,13 +83,24 @@ export class App {
   private mode: "empty" | "detail" = "empty";
   private hasLoaded = false;
   private renderedEmptyKey: "skeleton" | "no-sessions" | "select-session" | null = null;
+  private readonly home: HomeView | null;
+  private readonly homeRoot: HTMLElement | null;
+  private detailBlocks!: Record<DetailBlockId, HTMLElement>;
+  private customizeOpen = false;
+  private customizePanel: HTMLElement | null = null;
+  private czDragFrom: number | null = null;
+  private readonly onSaveDetailLayout: (layout: readonly DetailBlockConfig[]) => void;
 
-  constructor(private readonly store: Store, handlers: AppHandlers) {
+  constructor(private readonly store: Store, handlers: AppHandlers, home?: HomeView) {
+    this.home = home ?? null;
+    this.homeRoot = home ? home.element() : null;
+    this.onSaveDetailLayout = handlers.onSaveDetailLayout;
     this.root = h("div", { className: "app-shell" });
     this.sidebar = new Sidebar(store, {
       onSelect: handlers.onSelect,
       onTogglePin: handlers.onTogglePin,
-      onStartNewSession: handlers.onStartNewSession,
+      onCopyConversation: handlers.onCopyConversation,
+      onResumeInCockpit: handlers.onResumeInCockpit,
       onToggleCollapsed: () => this.setSidebarCollapsed(!this.store.state.sidebarCollapsed),
     });
     this.sidebar.mount(this.root);
@@ -137,18 +159,54 @@ export class App {
       if (this.currentDetail) this.timeline.update(this.currentDetail);
     });
 
+    const backBtn = this.home
+      ? h("button", {
+          className: "detail-back-btn",
+          attrs: { type: "button", "aria-label": "Back to terminals" },
+          textContent: "← Terminals",
+          on: { click: () => handlers.onBackToHome() },
+        })
+      : null;
+    const customizeBtn = h(
+      "button",
+      {
+        className: "detail-customize-btn",
+        attrs: { type: "button", "aria-label": "Customize dashboard" },
+        on: { click: () => this.toggleCustomize() },
+      },
+      icon("sliders", 13),
+      h("span", { textContent: "Customize" }),
+    );
+    const toolbar = h("div", { className: "detail-toolbar" }, backBtn, h("div", { className: "detail-toolbar-spacer" }), customizeBtn);
+
+    this.detailBlocks = {
+      cards: this.summaryCards.element(),
+      charts: this.chartsRow.element(),
+      cost: this.costChart.element(),
+      files: this.filesSection.element(),
+      memory: this.memorySection.element(),
+      timeline: this.timeline.element(),
+    };
+
+    this.detailGrid = h(
+      "div",
+      { className: "detail-grid" },
+      this.detailBlocks.cards,
+      this.detailBlocks.charts,
+      this.detailBlocks.cost,
+      this.detailBlocks.memory,
+      this.detailBlocks.files,
+      this.detailBlocks.timeline,
+    );
     this.detailRoot = h(
       "div",
       { className: "detail-root" },
+      toolbar,
       this.detailHeader.element(),
-      this.summaryCards.element(),
-      this.chartsRow.element(),
-      this.costChart.element(),
-      this.memorySection.element(),
-      this.filesSection.element(),
-      this.timeline.element(),
+      this.detailGrid,
     );
     this.detailRoot.hidden = true;
+    this.applyDetailLayout();
 
     this.emptyHost = h("div", { className: "empty-host" });
 
@@ -158,6 +216,10 @@ export class App {
       this.emptyHost,
       this.detailRoot,
     );
+    if (this.homeRoot) {
+      this.homeRoot.hidden = true;
+      this.mainEl.appendChild(this.homeRoot);
+    }
 
     this.mainEl.scrollTop = this.store.state.mainScroll;
     this.mainEl.addEventListener("scroll", () => {
@@ -167,6 +229,116 @@ export class App {
     this.root.appendChild(this.mainEl);
     this.applySidebarCollapsed();
     this.showEmpty();
+  }
+
+  private applyDetailLayout(): void {
+    for (const cfg of this.store.state.detailLayout) {
+      const el = this.detailBlocks[cfg.id];
+      el.classList.toggle("ct-block-hidden", !cfg.visible);
+      el.classList.toggle("ct-block-half", cfg.span === 1);
+      el.style.gridColumn = cfg.span === 1 ? "span 1" : "1 / -1";
+      this.detailGrid.appendChild(el);
+    }
+  }
+
+  applyHostDetailLayout(layout: readonly DetailLayoutEntry[]): void {
+    if (layout.length === 0) return;
+    this.store.update({ detailLayout: normalizeDetailLayout(layout) });
+    this.applyDetailLayout();
+    if (this.customizeOpen) this.renderCustomizePanel();
+  }
+
+  private toggleCustomize(): void {
+    this.customizeOpen = !this.customizeOpen;
+    this.renderCustomizePanel();
+  }
+
+  private renderCustomizePanel(): void {
+    this.customizePanel?.remove();
+    this.customizePanel = null;
+    if (!this.customizeOpen) return;
+
+    const labelOf = (id: DetailBlockId): string =>
+      DETAIL_BLOCKS.find((b) => b.id === id)?.label ?? id;
+    const layout = [...this.store.state.detailLayout];
+    const commit = (next: readonly DetailBlockConfig[]): void => {
+      this.store.update({ detailLayout: next });
+      this.onSaveDetailLayout(next);
+      this.applyDetailLayout();
+      this.renderCustomizePanel();
+    };
+
+    const rows = layout.map((cfg, index) => {
+      const toggle = h("button", {
+        className: `ct-cz-switch${cfg.visible ? " on" : ""}`,
+        attrs: { type: "button", role: "switch", "aria-checked": String(cfg.visible) },
+        on: {
+          click: () =>
+            commit(layout.map((c) => (c.id === cfg.id ? { ...c, visible: !c.visible } : c))),
+        },
+      });
+      const width = h("button", {
+        className: "ct-cz-width",
+        attrs: { type: "button", title: cfg.span === 1 ? "Half width — click for full" : "Full width — click for half" },
+        textContent: cfg.span === 1 ? "½" : "▭",
+        on: {
+          click: () =>
+            commit(layout.map((c) => (c.id === cfg.id ? { ...c, span: c.span === 1 ? 2 : 1 } : c))),
+        },
+      });
+      const row = h(
+        "div",
+        { className: "ct-cz-row", attrs: { draggable: "true" }, dataset: { index: String(index) } },
+        h("span", { className: "ct-cz-grip", innerHTML: ICONS.grip }),
+        h("span", { className: "ct-cz-label", textContent: labelOf(cfg.id) }),
+        width,
+        toggle,
+      );
+      row.addEventListener("dragstart", (e) => {
+        this.czDragFrom = index;
+        row.classList.add("dragging");
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+      });
+      row.addEventListener("dragend", () => row.classList.remove("dragging"));
+      row.addEventListener("dragover", (e) => {
+        if (this.czDragFrom === null || this.czDragFrom === index) return;
+        e.preventDefault();
+      });
+      row.addEventListener("drop", (e) => {
+        if (this.czDragFrom === null || this.czDragFrom === index) return;
+        e.preventDefault();
+        const next = [...layout];
+        const [moved] = next.splice(this.czDragFrom, 1);
+        if (moved) next.splice(index, 0, moved);
+        this.czDragFrom = null;
+        commit(next);
+      });
+      return row;
+    });
+
+    const panel = h(
+      "div",
+      { className: "ct-cz-backdrop", on: { click: (e: Event) => { if (e.target === panel) this.toggleCustomize(); } } },
+      h(
+        "div",
+        { className: "ct-cz-sheet" },
+        h(
+          "div",
+          { className: "ct-cz-head" },
+          h("span", { className: "ct-cz-title", textContent: "Customize dashboard" }),
+          h("button", {
+            className: "ct-cz-done",
+            attrs: { type: "button" },
+            textContent: "Done",
+            on: { click: () => this.toggleCustomize() },
+          }),
+        ),
+        h("div", { className: "ct-cz-hint", textContent: "Toggle sections on or off and drag to reorder. Applies to every session." }),
+        h("div", { className: "ct-cz-list" }, ...rows),
+      ),
+    );
+    this.customizePanel = panel;
+    this.root.appendChild(panel);
   }
 
   mount(parent: HTMLElement): void {
@@ -215,10 +387,20 @@ export class App {
     this.mode = "empty";
     this.detailRoot.hidden = true;
     this.refreshEmptyMessage();
+    if (this.home && this.homeRoot && this.hasLoaded && !this.homeRoot.hidden) {
+      requestAnimationFrame(() => this.home?.fitActive());
+    }
     this.sigs = { ...EMPTY_SIGS };
   }
 
   private refreshEmptyMessage(): void {
+    if (this.home && this.homeRoot && this.hasLoaded) {
+      this.emptyHost.hidden = true;
+      this.mainEl.classList.remove("empty", "loading");
+      this.homeRoot.hidden = false;
+      this.renderedEmptyKey = null;
+      return;
+    }
     const key: "skeleton" | "no-sessions" | "select-session" = !this.hasLoaded
       ? "skeleton"
       : this.sessions.length === 0
@@ -244,6 +426,7 @@ export class App {
     if (this.mode !== "detail") {
       this.mode = "detail";
       this.emptyHost.hidden = true;
+      if (this.homeRoot) this.homeRoot.hidden = true;
       this.detailRoot.hidden = false;
       this.mainEl.classList.remove("empty");
       this.mainEl.classList.remove("loading");

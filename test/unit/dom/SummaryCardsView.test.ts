@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SummaryCardsView } from "../../../media/src/ui/panels/SummaryCards";
-import { toSessionId, type SessionDetail } from "../../../src/domain/types";
+import { toSessionId, type SessionDetail } from "../../../src/features/dashboard/domain/types";
 
 const makeDetail = (overrides: Partial<SessionDetail>): SessionDetail => ({
   session_id: toSessionId("s"),

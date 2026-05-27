@@ -1,4 +1,4 @@
-import type { FileEditSummary } from "../../../../src/domain/types";
+import type { FileEditSummary } from "../../../../src/features/dashboard/domain/types";
 import { fmtTimeShort } from "../format.js";
 import { h } from "../h.js";
 import { icon, type IconName } from "../icons.js";
