@@ -3,6 +3,7 @@ import type {
   CockpitLayout,
   CockpitState,
   CockpitWebviewToHost,
+  TerminalKind,
   TerminalSession,
 } from "../protocol";
 import { assertNeverCockpit } from "../protocol";
@@ -73,13 +74,14 @@ const DEFAULT_ROWS = 24;
 
 interface ManagedTerminal {
   readonly sessionId: string;
-  readonly windowId: string;
+  windowId: string;
   readonly name: string;
   spaceId: string | null;
   readonly cwd: string | null;
   readonly model: ModelChoice;
   readonly permissionMode: PermissionMode;
   readonly startedAtMs: number;
+  readonly kind: TerminalKind;
   exitCode: number | null;
 }
 
@@ -116,6 +118,7 @@ export class CockpitController {
         model: s.model,
         permissionMode: s.permissionMode,
         startedAtMs: s.startedAtMs,
+        kind: s.kind,
         exitCode: null,
       });
       deps.actions.setName(s.id, s.name);
@@ -133,6 +136,7 @@ export class CockpitController {
       model: m.model,
       permissionMode: m.permissionMode,
       startedAtMs: m.startedAtMs,
+      kind: m.kind,
     });
   }
 
@@ -205,6 +209,18 @@ export class CockpitController {
       case "cockpitAddTab":
         this.handleAddTab(msg.windowId);
         return;
+      case "cockpitNewTerminal":
+        this.spawnShell(msg.spaceId);
+        return;
+      case "cockpitDetachTab": {
+        const tab = this.managed.get(msg.sessionId);
+        if (tab && tab.windowId !== tab.sessionId) {
+          tab.windowId = tab.sessionId;
+          this.persist(tab);
+          this.broadcast();
+        }
+        return;
+      }
       case "cockpitMoveSession": {
         const moved = this.managed.get(msg.sessionId);
         if (moved) {
@@ -215,7 +231,7 @@ export class CockpitController {
         return;
       }
       case "cockpitAdoptSession":
-        this.handleAdopt(msg.sessionId, msg.name, msg.cwd);
+        this.handleAdopt(msg.sessionId, msg.name, msg.cwd, msg.spaceId);
         return;
       case "cockpitAttention":
         if (this.attentionActive.has(msg.sessionId)) return;
@@ -306,7 +322,7 @@ export class CockpitController {
         cwd: config.cwd,
         cols: DEFAULT_COLS,
         rows: DEFAULT_ROWS,
-        initialInput: `clear && exec ${command}\r`,
+        initialInput: `clear && ${command}\r`,
       });
       const managed: ManagedTerminal = {
         sessionId,
@@ -317,6 +333,7 @@ export class CockpitController {
         model: config.model,
         permissionMode: config.permissionMode,
         startedAtMs: this.deps.actions.now(),
+        kind: "claude",
         exitCode: null,
       };
       this.managed.set(sessionId, managed);
@@ -326,25 +343,52 @@ export class CockpitController {
     this.broadcast();
   }
 
+  private spawnShell(spaceId: string | null): void {
+    const sessionId = this.deps.actions.newSessionId();
+    const count = [...this.managed.values()].filter((m) => m.kind === "shell").length;
+    const name = count === 0 ? "Terminal" : `Terminal ${count + 1}`;
+    const cwd = this.deps.actions.defaultCwd();
+    this.deps.terminals.spawn({ sessionId, cwd, cols: DEFAULT_COLS, rows: DEFAULT_ROWS, initialInput: "" });
+    const managed: ManagedTerminal = {
+      sessionId,
+      windowId: sessionId,
+      name,
+      spaceId,
+      cwd,
+      model: "default",
+      permissionMode: "default",
+      startedAtMs: this.deps.actions.now(),
+      kind: "shell",
+      exitCode: null,
+    };
+    this.managed.set(sessionId, managed);
+    this.deps.actions.setName(sessionId, name);
+    this.persist(managed);
+    this.broadcast();
+  }
+
   private handleAddTab(windowId: string): void {
     const template = [...this.managed.values()].find((m) => m.windowId === windowId);
     if (!template) return;
     const tabCount = [...this.managed.values()].filter((m) => m.windowId === windowId).length;
     const sessionId = this.deps.actions.newSessionId();
     const name = `${template.name} · ${tabCount + 1}`;
-    const command = buildClaudeCommand({
-      mode: template.permissionMode,
-      model: template.model,
-      name,
-      sessionId,
-      settingsPath: this.deps.actions.prepareHooks(sessionId),
-    });
+    const initialInput =
+      template.kind === "shell"
+        ? ""
+        : `clear && ${buildClaudeCommand({
+            mode: template.permissionMode,
+            model: template.model,
+            name,
+            sessionId,
+            settingsPath: this.deps.actions.prepareHooks(sessionId),
+          })}\r`;
     this.deps.terminals.spawn({
       sessionId,
       cwd: template.cwd,
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
-      initialInput: `clear && exec ${command}\r`,
+      initialInput,
     });
     const managed: ManagedTerminal = {
       sessionId,
@@ -355,6 +399,7 @@ export class CockpitController {
       model: template.model,
       permissionMode: template.permissionMode,
       startedAtMs: this.deps.actions.now(),
+      kind: template.kind,
       exitCode: null,
     };
     this.managed.set(sessionId, managed);
@@ -367,17 +412,24 @@ export class CockpitController {
     if (this.spawnResume(key)) this.broadcast();
   }
 
-  private handleAdopt(sessionId: string, name: string, cwd: string | null): void {
-    if (!this.managed.has(sessionId)) {
+  private handleAdopt(sessionId: string, name: string, cwd: string | null, spaceId: string | null): void {
+    const existing = this.managed.get(sessionId);
+    if (existing) {
+      if (existing.spaceId !== spaceId) {
+        existing.spaceId = spaceId;
+        this.persist(existing);
+      }
+    } else {
       this.managed.set(sessionId, {
         sessionId,
         windowId: sessionId,
         name,
-        spaceId: null,
+        spaceId,
         cwd,
         model: "default",
         permissionMode: "default",
         startedAtMs: this.deps.actions.now(),
+        kind: "claude",
         exitCode: null,
       });
       this.deps.actions.setName(sessionId, name);
@@ -392,20 +444,24 @@ export class CockpitController {
     if (!managed) return false;
     if (this.deps.terminals.isAlive(key)) return false;
     managed.exitCode = null;
-    const hasTranscript = this.deps.actions.transcriptExists(managed.cwd, key);
-    const command = buildClaudeCommand({
-      mode: managed.permissionMode,
-      model: managed.model,
-      name: managed.name,
-      settingsPath: this.deps.actions.prepareHooks(key),
-      ...(hasTranscript ? { resumeId: key } : { sessionId: key }),
-    });
+    let initialInput = "";
+    if (managed.kind === "claude") {
+      const hasTranscript = this.deps.actions.transcriptExists(managed.cwd, key);
+      const command = buildClaudeCommand({
+        mode: managed.permissionMode,
+        model: managed.model,
+        name: managed.name,
+        settingsPath: this.deps.actions.prepareHooks(key),
+        ...(hasTranscript ? { resumeId: key } : { sessionId: key }),
+      });
+      initialInput = `clear && ${command}\r`;
+    }
     this.deps.terminals.spawn({
       sessionId: key,
       cwd: managed.cwd,
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
-      initialInput: `clear && exec ${command}\r`,
+      initialInput,
     });
     return true;
   }
@@ -444,6 +500,7 @@ export class CockpitController {
         alive: this.deps.terminals.isAlive(m.sessionId),
         exitCode: m.exitCode,
         startedAtMs: m.startedAtMs,
+        kind: m.kind,
       });
     }
     return { profiles: cfg.profiles, spaces: cfg.spaces, terminals };

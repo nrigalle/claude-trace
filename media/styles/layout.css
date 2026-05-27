@@ -204,3 +204,26 @@ body.sidebar-resizing * {
   display: contents;
 }
 
+
+.ct-tip {
+  position: fixed;
+  z-index: 9999;
+  max-width: 280px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  line-height: 1.42;
+  color: var(--ct-text-primary);
+  background: linear-gradient(180deg, #23232c, #17171d);
+  border: 0.5px solid var(--ct-border-hover);
+  box-shadow: var(--ct-elev-3);
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity 0.1s var(--ct-ease-out), transform 0.1s var(--ct-ease-out);
+  pointer-events: none;
+}
+
+.ct-tip.show {
+  opacity: 1;
+  transform: translateY(0);
+}

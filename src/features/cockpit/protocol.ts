@@ -7,6 +7,9 @@ import type {
 } from "./domain/profiles";
 import type { ModelChoice } from "../../shared/models";
 import type { PermissionMode } from "../../shared/permissionModes";
+import type { LayoutNode } from "./domain/splitTree";
+
+export type TerminalKind = "claude" | "shell";
 
 export interface TerminalSession {
   readonly sessionId: string;
@@ -17,6 +20,7 @@ export interface TerminalSession {
   readonly alive: boolean;
   readonly exitCode: number | null;
   readonly startedAtMs: number;
+  readonly kind: TerminalKind;
 }
 
 export interface CockpitState {
@@ -26,9 +30,7 @@ export interface CockpitState {
 }
 
 export interface CockpitLayout {
-  readonly columns: Record<string, number>;
-  readonly spans: Record<string, { readonly cols: number; readonly rows: number }>;
-  readonly order: readonly string[];
+  readonly trees: Record<string, LayoutNode>;
 }
 
 export type CockpitHostToWebview =
@@ -63,6 +65,8 @@ export type CockpitWebviewToHost =
   | { readonly type: "cockpitDeleteProfile"; readonly profileId: ProfileId }
   | { readonly type: "cockpitSaveSpace"; readonly space: Space }
   | { readonly type: "cockpitDeleteSpace"; readonly spaceId: SpaceId }
+  | { readonly type: "cockpitNewTerminal"; readonly spaceId: string | null }
+  | { readonly type: "cockpitDetachTab"; readonly sessionId: string }
   | { readonly type: "terminalInput"; readonly sessionId: string; readonly data: string }
   | { readonly type: "terminalResize"; readonly sessionId: string; readonly cols: number; readonly rows: number }
   | { readonly type: "terminalClose"; readonly sessionId: string }
@@ -74,6 +78,7 @@ export type CockpitWebviewToHost =
       readonly sessionId: string;
       readonly name: string;
       readonly cwd: string | null;
+      readonly spaceId: string | null;
     }
   | { readonly type: "cockpitAttention"; readonly sessionId: string; readonly name: string }
   | {

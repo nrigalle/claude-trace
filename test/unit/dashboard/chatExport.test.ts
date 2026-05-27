@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildChatMarkdown, chatExportFilename } from "../../../src/features/dashboard/domain/chatExport";
+import { buildChatMarkdown, chatExportFilename, conversationTurns } from "../../../src/features/dashboard/domain/chatExport";
 import { toSessionId, type SessionDetail, type TraceEvent } from "../../../src/features/dashboard/domain/types";
 
 const baseEvent = (overrides: Partial<TraceEvent>): TraceEvent => ({
@@ -117,6 +117,40 @@ describe("buildChatMarkdown", () => {
     expect(md.split("## You").length).toBe(1);
     expect(md).toContain("## Claude");
     expect(md).toContain("real");
+  });
+});
+
+describe("conversationTurns", () => {
+  it("returns the chat as ordered role-tagged turns, skipping tools, sidechains and empty text", () => {
+    const turns = conversationTurns(
+      detail({
+        events: [
+          baseEvent({ event: "UserPrompt", tool_result: "fix the bug" }),
+          baseEvent({ event: "PostToolUse", tool_name: "Bash", tool_input: { command: "ls" } }),
+          baseEvent({ event: "AssistantText", tool_result: "on it" }),
+          baseEvent({ event: "AssistantText", tool_result: "sub", is_sidechain: true }),
+          baseEvent({ event: "UserPrompt", tool_result: "  " }),
+        ],
+      }),
+    );
+    expect(turns).toEqual([
+      { role: "you", text: "fix the bug" },
+      { role: "claude", text: "on it" },
+    ]);
+  });
+
+  it("is the single source of truth behind the exported Markdown", () => {
+    const d = detail({
+      title: "x",
+      events: [
+        baseEvent({ event: "UserPrompt", tool_result: "q" }),
+        baseEvent({ event: "AssistantText", tool_result: "a" }),
+      ],
+    });
+    const turns = conversationTurns(d);
+    const md = buildChatMarkdown(d);
+    for (const t of turns) expect(md).toContain(t.text);
+    expect(turns).toHaveLength(2);
   });
 });
 

@@ -1,19 +1,32 @@
 import type { SessionDetail } from "./types";
 
+export interface ChatTurn {
+  readonly role: "you" | "claude";
+  readonly text: string;
+}
+
+export const conversationTurns = (detail: SessionDetail): ChatTurn[] => {
+  const turns: ChatTurn[] = [];
+  for (const ev of detail.events) {
+    if (ev.event !== "UserPrompt" && ev.event !== "AssistantText") continue;
+    if (ev.is_sidechain) continue;
+    const text = typeof ev.tool_result === "string" ? ev.tool_result : "";
+    if (text.trim().length === 0) continue;
+    turns.push({ role: ev.event === "UserPrompt" ? "you" : "claude", text });
+  }
+  return turns;
+};
+
 export const buildChatMarkdown = (detail: SessionDetail): string => {
   const lines: string[] = [];
   const title = detail.title?.trim() || `Session ${detail.session_id.slice(0, 8)}`;
   lines.push(`# ${title}`);
   lines.push("");
 
-  for (const ev of detail.events) {
-    if (ev.event !== "UserPrompt" && ev.event !== "AssistantText") continue;
-    if (ev.is_sidechain) continue;
-    const text = typeof ev.tool_result === "string" ? ev.tool_result : "";
-    if (text.trim().length === 0) continue;
-    lines.push(ev.event === "UserPrompt" ? "## You" : "## Claude");
+  for (const turn of conversationTurns(detail)) {
+    lines.push(turn.role === "you" ? "## You" : "## Claude");
     lines.push("");
-    lines.push(text);
+    lines.push(turn.text);
     lines.push("");
   }
 

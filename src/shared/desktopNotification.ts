@@ -9,6 +9,7 @@ export interface NotifyOptions {
   readonly alerterBin?: string | null;
   readonly terminalNotifierBin?: string | null;
   readonly iconPath?: string | null;
+  readonly group?: string | null;
 }
 
 export const desktopNotifyCommand = (
@@ -19,9 +20,10 @@ export const desktopNotifyCommand = (
 ): NotifyCommand | null => {
   const safeTitle = title.trim().length > 0 ? title : "Claude Trace";
   const safeMessage = message.trim().length > 0 ? message : safeTitle;
+  const group = opts.group && opts.group.length > 0 ? opts.group : "claude-trace";
   if (platform === "darwin") {
     if (opts.alerterBin) {
-      const args = ["--title", safeTitle, "--message", safeMessage, "--group", "claude-trace"];
+      const args = ["--title", safeTitle, "--message", safeMessage, "--group", group];
       if (opts.iconPath) args.push("--app-icon", opts.iconPath);
       return { command: opts.alerterBin, args };
     }
@@ -32,7 +34,7 @@ export const desktopNotifyCommand = (
         "-message",
         safeMessage,
         "-group",
-        "claude-trace",
+        group,
         "-ignoreDnD",
       ];
       if (opts.iconPath) args.push("-appIcon", opts.iconPath, "-contentImage", opts.iconPath);

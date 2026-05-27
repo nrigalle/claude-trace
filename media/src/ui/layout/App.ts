@@ -7,6 +7,7 @@ import type {
 import type { Store } from "../../state/Store.js";
 import { DETAIL_BLOCKS, normalizeDetailLayout, type DetailBlockConfig, type DetailBlockId } from "../../state/Store.js";
 import type { DetailLayoutEntry } from "../../../../src/features/dashboard/protocol";
+import { conversationTurns } from "../../../../src/features/dashboard/domain/chatExport";
 import { DetailHeaderView } from "../panels/DetailHeader.js";
 import { FilesTouchedSection } from "../panels/FilesTouchedSection.js";
 import { MemorySection } from "../panels/MemorySection.js";
@@ -88,6 +89,7 @@ export class App {
   private detailBlocks!: Record<DetailBlockId, HTMLElement>;
   private customizeOpen = false;
   private customizePanel: HTMLElement | null = null;
+  private chatPanel: HTMLElement | null = null;
   private czDragFrom: number | null = null;
   private readonly onSaveDetailLayout: (layout: readonly DetailBlockConfig[]) => void;
 
@@ -125,6 +127,9 @@ export class App {
       },
       onExportChat: () => {
         if (this.currentDetail) handlers.onExportChat(this.currentDetail.session_id);
+      },
+      onViewChat: () => {
+        if (this.currentDetail) this.showConversation(this.currentDetail);
       },
     });
 
@@ -339,6 +344,58 @@ export class App {
     );
     this.customizePanel = panel;
     this.root.appendChild(panel);
+  }
+
+  private showConversation(detail: SessionDetail): void {
+    this.chatPanel?.remove();
+    const turns = conversationTurns(detail);
+    const title = detail.title?.trim() || `Session ${detail.session_id.slice(0, 8)}`;
+
+    const close = (): void => {
+      document.removeEventListener("keydown", onKey);
+      this.chatPanel?.remove();
+      this.chatPanel = null;
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") close();
+    };
+
+    const messages =
+      turns.length === 0
+        ? [h("div", { className: "ct-chat-empty", textContent: "No conversation has been captured for this session yet." })]
+        : turns.map((t) =>
+            h(
+              "div",
+              { className: `ct-chat-turn ${t.role}` },
+              h("div", { className: "ct-chat-role", textContent: t.role === "you" ? "You" : "Claude" }),
+              h("div", { className: "ct-chat-text", textContent: t.text }),
+            ),
+          );
+
+    const panel = h(
+      "div",
+      { className: "ct-chat-backdrop", on: { click: (e: Event) => { if (e.target === panel) close(); } } },
+      h(
+        "div",
+        { className: "ct-chat-sheet" },
+        h(
+          "div",
+          { className: "ct-chat-head" },
+          h("span", { className: "ct-chat-title", textContent: title }),
+          h("span", { className: "ct-chat-count", textContent: `${turns.length} message${turns.length === 1 ? "" : "s"}` }),
+          h("button", {
+            className: "ct-chat-done",
+            attrs: { type: "button", "aria-label": "Close conversation" },
+            innerHTML: ICONS.close,
+            on: { click: close },
+          }),
+        ),
+        h("div", { className: "ct-chat-scroll" }, ...messages),
+      ),
+    );
+    this.chatPanel = panel;
+    this.root.appendChild(panel);
+    document.addEventListener("keydown", onKey);
   }
 
   mount(parent: HTMLElement): void {

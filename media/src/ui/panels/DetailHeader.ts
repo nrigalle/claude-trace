@@ -7,6 +7,7 @@ export interface DetailHeaderActions {
   onRename(): void;
   onResume(): void;
   onExportChat(): void;
+  onViewChat(): void;
 }
 
 interface Chip {
@@ -42,6 +43,7 @@ export class DetailHeaderView {
   private readonly modelChip = buildChip("cpu", "model");
   private readonly timeChip = buildChip("clock");
   private readonly renameBtn: HTMLButtonElement;
+  private readonly viewChatBtn: HTMLButtonElement;
   private readonly exportBtn: HTMLButtonElement;
   private readonly resumeBtn: HTMLButtonElement;
   private currentEndedAt: number | null = null;
@@ -61,6 +63,17 @@ export class DetailHeaderView {
       },
       icon("edit", 14),
       h("span", { textContent: "Rename" }),
+    );
+
+    this.viewChatBtn = h(
+      "button",
+      {
+        className: "detail-action-btn",
+        attrs: { type: "button", "aria-label": "View the full conversation" },
+        on: { click: () => this.actions.onViewChat() },
+      },
+      icon("list", 14),
+      h("span", { textContent: "View chat" }),
     );
 
     this.exportBtn = h(
@@ -89,7 +102,7 @@ export class DetailHeaderView {
       "div",
       { className: "detail-top-row" },
       this.titleEl,
-      h("div", { className: "detail-actions" }, this.renameBtn, this.exportBtn, this.resumeBtn),
+      h("div", { className: "detail-actions" }, this.renameBtn, this.viewChatBtn, this.exportBtn, this.resumeBtn),
     );
 
     const metaRow = h(
@@ -153,6 +166,7 @@ export class DetailHeaderView {
 
   private setActionsEnabled(enabled: boolean): void {
     this.renameBtn.disabled = !enabled;
+    this.viewChatBtn.disabled = !enabled;
     this.exportBtn.disabled = !enabled;
     this.resumeBtn.disabled = !enabled;
   }

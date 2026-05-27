@@ -131,7 +131,7 @@ beforeEach(() => {
   attentionNotices = [];
   cleanedHooks = [];
   attentionListener = null;
-  savedLayout = { columns: {}, spans: {}, order: [] };
+  savedLayout = { trees: {} };
   makeController();
 });
 
@@ -276,7 +276,7 @@ describe("CockpitController hook-driven attention — deterministic done/needs-y
 
 describe("CockpitController layout persistence (per-folder window display survives reload)", () => {
   it("sends the saved layout to the webview on cockpitReady", () => {
-    savedLayout = { columns: { __all__: 3, "space-x": 1 }, spans: { "uuid-1": { cols: 2, rows: 1 } }, order: ["uuid-1"] };
+    savedLayout = { trees: { __all__: { kind: "split", dir: "row", sizes: [2, 1], children: [{ kind: "leaf", id: "uuid-1" }, { kind: "leaf", id: "uuid-2" }] } } };
     backend = new FakeBackend();
     host = new FakeHost();
     makeController();
@@ -287,7 +287,7 @@ describe("CockpitController layout persistence (per-folder window display surviv
   });
 
   it("persists layout the webview sends via cockpitSaveLayout", () => {
-    const layout = { columns: { test: 4 }, spans: { w1: { cols: 1, rows: 2 } }, order: ["w1"] };
+    const layout = { trees: { test: { kind: "leaf" as const, id: "w1" } } };
     host.send({ type: "cockpitSaveLayout", layout });
     expect(savedLayout).toEqual(layout);
   });
@@ -496,5 +496,93 @@ describe("CockpitController quick launch — no saved profile required", () => {
       prompt: null,
     });
     expect(backend.spawns).toHaveLength(MAX_BATCH);
+  });
+});
+
+describe("CockpitController plain shell terminals", () => {
+  it("opens a shell with no claude command, named Terminal, kind shell", () => {
+    host.send({ type: "cockpitNewTerminal", spaceId: null });
+    expect(backend.spawns).toHaveLength(1);
+    expect(backend.spawns[0]!.initialInput).toBe("");
+    const t = host.lastState().state.terminals[0]!;
+    expect(t.name).toBe("Terminal");
+    expect(t.kind).toBe("shell");
+  });
+
+  it("numbers further shells and drops them in the active folder", () => {
+    host.send({ type: "cockpitNewTerminal", spaceId: null });
+    host.send({ type: "cockpitNewTerminal", spaceId: "space-a" });
+    const names = host.lastState().state.terminals.map((t) => t.name);
+    expect(names).toEqual(["Terminal", "Terminal 2"]);
+    expect(host.lastState().state.terminals[1]!.spaceId).toBe("space-a");
+  });
+
+  it("reattaches a closed shell with no claude command on resume", () => {
+    host.send({ type: "cockpitNewTerminal", spaceId: null });
+    const id = host.lastState().state.terminals[0]!.sessionId;
+    backend.emitExit(id, 0);
+    host.send({ type: "cockpitResumeSession", sessionId: id });
+    const resumeSpawn = backend.spawns.at(-1)!;
+    expect(resumeSpawn.sessionId).toBe(id);
+    expect(resumeSpawn.initialInput).toBe("");
+  });
+});
+
+describe("CockpitController shell-keepalive for claude sessions", () => {
+  beforeEach(() => {
+    store.saveProfile(defaultProfile(toProfileId("p1"), "Worker"));
+  });
+
+  it("runs claude as a child of the shell, never exec-replacing it", () => {
+    host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
+    expect(backend.spawns[0]!.initialInput).toContain("claude");
+    expect(backend.spawns[0]!.initialInput).not.toContain("exec ");
+  });
+});
+
+describe("CockpitController detach tab into its own window", () => {
+  beforeEach(() => {
+    store.saveProfile(defaultProfile(toProfileId("p1"), "Worker"));
+  });
+
+  it("moves a tab out of a shared window into a window of its own", () => {
+    host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
+    const first = host.lastState().state.terminals[0]!;
+    host.send({ type: "cockpitAddTab", windowId: first.windowId });
+    const tab = host.lastState().state.terminals.find((t) => t.sessionId !== first.sessionId)!;
+    expect(tab.windowId).toBe(first.windowId);
+
+    host.send({ type: "cockpitDetachTab", sessionId: tab.sessionId });
+    const detached = host.lastState().state.terminals.find((t) => t.sessionId === tab.sessionId)!;
+    expect(detached.windowId).toBe(tab.sessionId);
+    expect(host.lastState().state.terminals.find((t) => t.sessionId === first.sessionId)!.windowId).toBe(first.windowId);
+  });
+
+  it("leaves a single-tab window untouched (it is already its own window)", () => {
+    host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
+    const only = host.lastState().state.terminals[0]!;
+    const before = host.posted.length;
+    host.send({ type: "cockpitDetachTab", sessionId: only.sessionId });
+    expect(host.posted.length).toBe(before);
+  });
+});
+
+describe("CockpitController adopt a resumed session into the active folder", () => {
+  it("places the adopted session in the given folder (and thus in All too)", () => {
+    host.send({ type: "cockpitAdoptSession", sessionId: "r1", name: "Resumed", cwd: "/repo", spaceId: "space-x" });
+    const t = host.lastState().state.terminals.find((s) => s.sessionId === "r1")!;
+    expect(t.spaceId).toBe("space-x");
+    expect(t.kind).toBe("claude");
+  });
+
+  it("adopts into no folder when resumed from All (null spaceId)", () => {
+    host.send({ type: "cockpitAdoptSession", sessionId: "r2", name: "Resumed", cwd: "/repo", spaceId: null });
+    expect(host.lastState().state.terminals.find((s) => s.sessionId === "r2")!.spaceId).toBeNull();
+  });
+
+  it("re-adopting the same session into a different folder moves it there", () => {
+    host.send({ type: "cockpitAdoptSession", sessionId: "r3", name: "Resumed", cwd: "/repo", spaceId: "space-x" });
+    host.send({ type: "cockpitAdoptSession", sessionId: "r3", name: "Resumed", cwd: "/repo", spaceId: "space-y" });
+    expect(host.lastState().state.terminals.find((s) => s.sessionId === "r3")!.spaceId).toBe("space-y");
   });
 });

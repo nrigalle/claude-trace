@@ -35,7 +35,13 @@ const run = async () => {
     await feed(page, [D.update]);
     await sleep(200);
     await feed(page, [
-      { type: "cockpitLayout", layout: { columns: { __all__: 2 }, spans: {}, order: [] } },
+      { type: "cockpitLayout", layout: { trees: { __all__: {
+        kind: "split", dir: "row", sizes: [1, 1],
+        children: [
+          { kind: "split", dir: "col", sizes: [1, 1], children: [{ kind: "leaf", id: "t1" }, { kind: "leaf", id: "t3" }] },
+          { kind: "split", dir: "col", sizes: [1, 1], children: [{ kind: "leaf", id: "t2" }, { kind: "leaf", id: "t4" }] },
+        ],
+      } } } },
       D.cockpitState,
     ]);
     await sleep(400);

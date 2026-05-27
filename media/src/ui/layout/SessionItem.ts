@@ -2,6 +2,7 @@ import type { SessionId, SessionSummary } from "../../../../src/features/dashboa
 import { fmtCost, fmtDate, fmtDuration, shortId } from "../format.js";
 import { h } from "../h.js";
 import { ICONS } from "../icons.js";
+import { attachTip } from "../tooltip.js";
 
 export interface SessionItemHandlers {
   onSelect(id: SessionId): void;
@@ -30,16 +31,16 @@ export const renderSessionItem = (
   const project = deriveProject(s.cwd);
   const lastActivityTs = s.ended_at ?? s.last_modified_ms;
 
-  const rowAction = (label: string, ariaLabel: string, svg: string, onClick: () => void): HTMLElement =>
-    h(
+  const rowAction = (label: string, ariaLabel: string, tooltip: string, svg: string, onClick: () => void): HTMLElement => {
+    const el = h(
       "span",
       {
         className: "session-item-action",
+        dataset: { tip: tooltip },
         attrs: {
           role: "button",
           tabindex: "0",
-          "aria-label": `${ariaLabel} ${title}`,
-          title: ariaLabel,
+          "aria-label": `${ariaLabel}: ${title}`,
         },
         on: {
           click: (ev: Event) => {
@@ -59,6 +60,9 @@ export const renderSessionItem = (
       h("span", { className: "session-item-action-icon", innerHTML: svg }),
       h("span", { className: "session-item-action-label", textContent: label }),
     );
+    attachTip(el);
+    return el;
+  };
 
   const pinHandler = (ev: Event): void => {
     ev.stopPropagation();
@@ -113,9 +117,27 @@ export const renderSessionItem = (
     h(
       "div",
       { className: "session-item-actions" },
-      rowAction("Resume", "Resume in cockpit", ICONS.play, () => handlers.onResumeInCockpit(s.session_id)),
-      rowAction("Copy", "Copy conversation", ICONS.clipboard, () => handlers.onCopyConversation(s.session_id)),
-      rowAction("Details", "View info", ICONS.info, () => handlers.onSelect(s.session_id)),
+      rowAction(
+        "Resume",
+        "Resume session",
+        "Reopen this session as a live terminal in the cockpit and keep working in it (runs claude --resume).",
+        ICONS.play,
+        () => handlers.onResumeInCockpit(s.session_id),
+      ),
+      rowAction(
+        "Copy chat",
+        "Copy conversation",
+        "Copy the full conversation (your prompts and Claude's replies) to the clipboard as Markdown.",
+        ICONS.clipboard,
+        () => handlers.onCopyConversation(s.session_id),
+      ),
+      rowAction(
+        "Details",
+        "Open details",
+        "Open this session's read-only dashboard: cost, tokens, the tool timeline, and the files it changed.",
+        ICONS.info,
+        () => handlers.onSelect(s.session_id),
+      ),
     ),
   );
 

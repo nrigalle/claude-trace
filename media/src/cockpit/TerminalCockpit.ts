@@ -19,6 +19,7 @@ import type {
   TerminalSession,
 } from "../../../src/features/cockpit/protocol";
 import { assertNeverCockpit } from "../../../src/features/cockpit/protocol";
+import { dock, syncTree, type DropEdge, type LayoutNode } from "../../../src/features/cockpit/domain/splitTree";
 import type { ModelChoice } from "../../../src/shared/models";
 import type { PermissionMode } from "../../../src/shared/permissionModes";
 import { ICONS } from "../ui/icons.js";
@@ -49,9 +50,9 @@ interface WindowTile {
 }
 
 const ALL_FOLDER = "__all__";
-const MAX_COLUMNS = 6;
 const CHUNKY_WHEEL_PX = 40;
 const TRACKPAD_SCROLL_SENSITIVITY = 2.5;
+const ROW_HEIGHT_PER_WEIGHT = 150;
 
 const TERM_THEME: ITheme = {
   background: "#100f14",
@@ -93,8 +94,6 @@ export class TerminalCockpit {
 
   private state: CockpitState = { profiles: [], spaces: [], terminals: [] };
   private loaded = false;
-  private order: string[] = [];
-  private draggingWindow: string | null = null;
   private activeFolder: string = ALL_FOLDER;
   private launcherOpen = false;
   private creatingFolder = false;
@@ -104,10 +103,8 @@ export class TerminalCockpit {
   private quickPrefill: SessionProfile | null = null;
   private resizing = false;
   private fitTimer: number | null = null;
-  private readonly layout = new Map<string, { cols: number; rows: number }>();
   private readonly attention = new Set<string>();
-  private readonly folderColumns = new Map<string, number>();
-  private savedOrder: string[] = [];
+  private readonly trees = new Map<string, LayoutNode | null>();
   private saveLayoutTimer: number | null = null;
   private fullscreen = false;
   private readonly resizeObserver: ResizeObserver;
@@ -125,7 +122,6 @@ export class TerminalCockpit {
     );
     this.resizeObserver = new ResizeObserver(() => this.scheduleFit());
     this.resizeObserver.observe(this.gridEl);
-    this.applyColumns();
     this.renderFolders();
     this.renderGrid();
   }
@@ -139,8 +135,8 @@ export class TerminalCockpit {
   }
 
   adopt(sessionId: string, name: string, cwd: string | null): void {
-    this.activeFolder = ALL_FOLDER;
-    this.deps.send({ type: "cockpitAdoptSession", sessionId, name, cwd });
+    const spaceId = this.activeFolder === ALL_FOLDER ? null : this.activeFolder;
+    this.deps.send({ type: "cockpitAdoptSession", sessionId, name, cwd, spaceId });
     this.renderFolders();
   }
 
@@ -209,10 +205,10 @@ export class TerminalCockpit {
   }
 
   private windowsInFolder(): string[] {
-    return this.order.filter((wid) => {
-      if (this.activeFolder === ALL_FOLDER) return true;
-      return (this.windowFolder(wid) ?? "") === this.activeFolder;
-    });
+    const wins = [...new Set(this.state.terminals.map((t) => t.windowId))];
+    return wins.filter(
+      (wid) => this.activeFolder === ALL_FOLDER || (this.windowFolder(wid) ?? "") === this.activeFolder,
+    );
   }
 
   private syncTerminals(terminals: readonly TerminalSession[]): void {
@@ -231,23 +227,12 @@ export class TerminalCockpit {
       if (!presentWindows.has(wid)) {
         tile.tile.remove();
         this.tiles.delete(wid);
-        this.layout.delete(wid);
       }
     }
-    this.order = this.order.filter((wid) => presentWindows.has(wid));
-
     for (const t of terminals) {
       if (!this.views.has(t.sessionId)) this.createTerminalView(t);
       else this.views.get(t.sessionId)!.windowId = t.windowId;
       if (!this.tiles.has(t.windowId)) this.createWindowTile(t.windowId);
-      if (!this.order.includes(t.windowId)) this.order.push(t.windowId);
-    }
-    if (this.savedOrder.length > 0) {
-      const rank = (wid: string): number => {
-        const i = this.savedOrder.indexOf(wid);
-        return i === -1 ? Number.MAX_SAFE_INTEGER : i;
-      };
-      this.order.sort((a, b) => rank(a) - rank(b));
     }
   }
 
@@ -320,7 +305,7 @@ export class TerminalCockpit {
       innerHTML: ICONS.plus,
       on: { click: () => this.deps.send({ type: "cockpitAddTab", windowId }) },
     });
-    const head = h("div", { className: "tc-tile-head", attrs: { draggable: "true", title: "Drag to move or drop on a folder" } }, grip, tabStrip, addTab);
+    const head = h("div", { className: "tc-tile-head", attrs: { title: "Drag to swap places, or drop on a folder" } }, grip, tabStrip, addTab);
     const termMount = h("div", { className: "tc-tile-termmount" });
     const resumeOverlay = h(
       "div",
@@ -340,39 +325,9 @@ export class TerminalCockpit {
       h("div", { className: "tc-tile-booting-text", textContent: "Resuming session…" }),
     );
     const body = h("div", { className: "tc-tile-body" }, termMount, resumeOverlay, bootingOverlay);
-    const edgeRight = h("div", { className: "tc-edge tc-edge-r" });
-    const edgeLeft = h("div", { className: "tc-edge tc-edge-l" });
-    const edgeBottom = h("div", { className: "tc-edge tc-edge-b" });
-    const edgeTop = h("div", { className: "tc-edge tc-edge-t" });
-    const tile = h(
-      "div",
-      { className: "tc-tile", dataset: { windowId } },
-      head,
-      body,
-      edgeRight,
-      edgeLeft,
-      edgeBottom,
-      edgeTop,
-    );
+    const tile = h("div", { className: "tc-tile", dataset: { windowId } }, head, body);
 
-    head.addEventListener("dragstart", (e) => {
-      this.draggingWindow = windowId;
-      tile.classList.add("dragging");
-      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-    });
-    head.addEventListener("dragend", () => {
-      this.draggingWindow = null;
-      tile.classList.remove("dragging");
-    });
-    tile.addEventListener("dragover", (e) => {
-      if (this.draggingWindow === null || this.draggingWindow === windowId) return;
-      e.preventDefault();
-      this.reorder(this.draggingWindow, windowId);
-    });
-    this.wireResize(edgeRight, tile, windowId, "r");
-    this.wireResize(edgeLeft, tile, windowId, "l");
-    this.wireResize(edgeBottom, tile, windowId, "b");
-    this.wireResize(edgeTop, tile, windowId, "t");
+    this.wireWindowDrag(head, tile, windowId);
 
     this.tiles.set(windowId, { tile, tabStrip, termMount, resumeOverlay, bootingOverlay, activeId: "" });
   }
@@ -425,51 +380,99 @@ export class TerminalCockpit {
     }
   }
 
-  private wireResize(handle: HTMLElement, tile: HTMLElement, windowId: string, edge: "r" | "l" | "t" | "b"): void {
-    handle.addEventListener("pointerdown", (e: PointerEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      handle.setPointerCapture(e.pointerId);
-      this.resizing = true;
-      const rect = tile.getBoundingClientRect();
-      const current = this.layout.get(windowId) ?? { cols: 1, rows: 1 };
-      const cellW = rect.width / current.cols;
-      const cellH = rect.height / current.rows;
+  private wireWindowDrag(head: HTMLElement, tile: HTMLElement, windowId: string): void {
+    head.addEventListener("pointerdown", (e: PointerEvent) => {
+      if (e.button !== 0 || (e.target instanceof Element && e.target.closest(".tc-tab, .tc-tab-add"))) return;
       const startX = e.clientX;
       const startY = e.clientY;
-      const move = (ev: PointerEvent): void => {
-        const dx = ev.clientX - startX;
-        const dy = ev.clientY - startY;
-        let cols = current.cols;
-        let rows = current.rows;
-        if (edge === "r") cols = current.cols + Math.round(dx / cellW);
-        else if (edge === "l") cols = current.cols - Math.round(dx / cellW);
-        else if (edge === "b") rows = current.rows + Math.round(dy / cellH);
-        else rows = current.rows - Math.round(dy / cellH);
-        cols = Math.max(1, Math.min(this.currentColumns(), cols));
-        rows = Math.max(1, Math.min(4, rows));
-        this.layout.set(windowId, { cols, rows });
-        tile.style.gridColumn = `span ${cols}`;
-        tile.style.gridRow = `span ${rows}`;
+      let dragging = false;
+      const onMove = (ev: PointerEvent): void => {
+        if (!dragging) {
+          if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
+          dragging = true;
+          tile.classList.add("tc-tile-dragging");
+          document.body.classList.add("tc-dragging-window");
+        }
+        tile.style.transform = `translate(${ev.clientX - startX}px, ${ev.clientY - startY}px)`;
+        this.highlightDrop(ev, windowId);
       };
-      const up = (): void => {
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        this.resizing = false;
-        this.fitVisible();
-        this.saveLayout();
+      const onUp = (ev: PointerEvent): void => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        tile.style.transform = "";
+        tile.classList.remove("tc-tile-dragging");
+        document.body.classList.remove("tc-dragging-window");
+        this.clearDropHint();
+        if (!dragging) return;
+        const folder = this.folderUnder(ev);
+        if (folder !== null) {
+          this.moveWindowToFolder(windowId, folder);
+          return;
+        }
+        const hit = this.windowUnder(ev, windowId);
+        if (hit) this.dockWindow(windowId, hit.id, hit.edge);
       };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
     });
   }
 
-  private reorder(dragWin: string, targetWin: string): void {
-    const from = this.order.indexOf(dragWin);
-    const to = this.order.indexOf(targetWin);
-    if (from === -1 || to === -1 || from === to) return;
-    this.order.splice(from, 1);
-    this.order.splice(to, 0, dragWin);
+  private windowUnder(ev: PointerEvent, self: string): { id: string; edge: DropEdge } | null {
+    const el = document.elementFromPoint(ev.clientX, ev.clientY);
+    const tile = el instanceof Element ? (el.closest(".tc-tile[data-window-id]") as HTMLElement | null) : null;
+    const id = tile?.dataset["windowId"] ?? null;
+    if (!id || id === self) return null;
+    return { id, edge: this.edgeOf(tile!, ev) };
+  }
+
+  private edgeOf(tile: HTMLElement, ev: PointerEvent): DropEdge {
+    const r = tile.getBoundingClientRect();
+    const nx = (ev.clientX - (r.left + r.width / 2)) / (r.width / 2);
+    const ny = (ev.clientY - (r.top + r.height / 2)) / (r.height / 2);
+    if (Math.abs(nx) >= Math.abs(ny)) return nx >= 0 ? "right" : "left";
+    return ny >= 0 ? "bottom" : "top";
+  }
+
+  private folderUnder(ev: PointerEvent): string | null {
+    const el = document.elementFromPoint(ev.clientX, ev.clientY);
+    const chip = el instanceof Element ? (el.closest(".tc-folder[data-folder]") as HTMLElement | null) : null;
+    return chip?.getAttribute("data-folder") ?? null;
+  }
+
+  private highlightDrop(ev: PointerEvent, self: string): void {
+    this.clearDropHint();
+    const hit = this.windowUnder(ev, self);
+    if (hit) {
+      const tile = this.tiles.get(hit.id)?.tile;
+      tile?.classList.add("tc-drop-target");
+      tile?.setAttribute("data-drop-edge", hit.edge);
+      return;
+    }
+    const folder = this.folderUnder(ev);
+    if (folder !== null) {
+      for (const chip of this.folderBar.querySelectorAll(`[data-folder="${folder}"]`)) chip.classList.add("drop-target");
+    }
+  }
+
+  private clearDropHint(): void {
+    for (const t of this.tiles.values()) {
+      t.tile.classList.remove("tc-drop-target");
+      t.tile.removeAttribute("data-drop-edge");
+    }
+    for (const chip of this.folderBar.querySelectorAll(".drop-target")) chip.classList.remove("drop-target");
+  }
+
+  private moveWindowToFolder(windowId: string, folder: string): void {
+    const spaceId = folder === ALL_FOLDER ? null : folder;
+    for (const t of this.state.terminals.filter((s) => s.windowId === windowId)) {
+      this.deps.send({ type: "cockpitMoveSession", sessionId: t.sessionId, spaceId });
+    }
+  }
+
+  private dockWindow(dragged: string, target: string, edge: DropEdge): void {
+    const tree = this.trees.get(this.activeFolder);
+    if (!tree) return;
+    this.trees.set(this.activeFolder, dock(tree, dragged, target, edge));
     this.renderGrid();
     this.saveLayout();
   }
@@ -495,15 +498,8 @@ export class TerminalCockpit {
     });
   }
 
-  private currentColumns(): number {
-    return this.folderColumns.get(this.activeFolder) ?? 2;
-  }
-
   private applyLayout(layout: CockpitLayout): void {
-    for (const [folder, n] of Object.entries(layout.columns)) this.folderColumns.set(folder, n);
-    for (const [wid, span] of Object.entries(layout.spans)) this.layout.set(wid, span);
-    this.savedOrder = [...layout.order];
-    this.applyColumns();
+    for (const [folder, tree] of Object.entries(layout.trees)) this.trees.set(folder, tree);
     this.renderGrid();
   }
 
@@ -511,23 +507,69 @@ export class TerminalCockpit {
     if (this.saveLayoutTimer !== null) clearTimeout(this.saveLayoutTimer);
     this.saveLayoutTimer = setTimeout(() => {
       this.saveLayoutTimer = null;
-      const columns: Record<string, number> = {};
-      for (const [k, v] of this.folderColumns) columns[k] = v;
-      const spans: Record<string, { cols: number; rows: number }> = {};
-      for (const [k, v] of this.layout) spans[k] = v;
-      this.savedOrder = [...this.order];
-      this.deps.send({ type: "cockpitSaveLayout", layout: { columns, spans, order: [...this.order] } });
+      const trees: Record<string, LayoutNode> = {};
+      for (const [k, v] of this.trees) if (v) trees[k] = v;
+      this.deps.send({ type: "cockpitSaveLayout", layout: { trees } });
     }, 500) as unknown as number;
   }
 
-  private applyColumns(): void {
-    this.gridEl.style.gridTemplateColumns = `repeat(${this.currentColumns()}, minmax(0, 1fr))`;
+  private buildNode(node: LayoutNode): HTMLElement {
+    if (node.kind === "leaf") {
+      const tile = this.tiles.get(node.id)?.tile;
+      return tile ?? h("div");
+    }
+    const container = h("div", { className: `tc-split tc-split-${node.dir}` });
+    node.children.forEach((child, i) => {
+      if (i > 0) container.appendChild(this.makeDivider(node, i - 1));
+      const weight = node.sizes[i] ?? 1;
+      const cell = h("div", { className: "tc-split-cell" }, this.buildNode(child));
+      cell.style.flexGrow = String(weight);
+      if (node.dir === "col") cell.style.minHeight = `${weight * ROW_HEIGHT_PER_WEIGHT}px`;
+      container.appendChild(cell);
+    });
+    return container;
   }
 
-  private applySpan(tile: HTMLElement, windowId: string): void {
-    const span = this.layout.get(windowId);
-    tile.style.gridColumn = span ? `span ${Math.min(span.cols, this.currentColumns())}` : "";
-    tile.style.gridRow = span ? `span ${span.rows}` : "";
+  private makeDivider(node: { dir: "row" | "col"; sizes: number[] }, index: number): HTMLElement {
+    const horizontal = node.dir === "row";
+    const handle = h("div", { className: `tc-divider tc-divider-${horizontal ? "v" : "h"}` });
+    handle.addEventListener("pointerdown", (e: PointerEvent) => {
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      this.resizing = true;
+      const prev = handle.previousElementSibling as HTMLElement;
+      const next = handle.nextElementSibling as HTMLElement;
+      const startPos = horizontal ? e.clientX : e.clientY;
+      const prevPx = horizontal ? prev.offsetWidth : prev.offsetHeight;
+      const nextPx = horizontal ? next.offsetWidth : next.offsetHeight;
+      const totalPx = prevPx + nextPx;
+      const totalW = (node.sizes[index] ?? 1) + (node.sizes[index + 1] ?? 1);
+      const move = (ev: PointerEvent): void => {
+        const delta = (horizontal ? ev.clientX : ev.clientY) - startPos;
+        const np = Math.max(80, Math.min(totalPx - 80, prevPx + delta));
+        const ratio = np / totalPx;
+        const a = totalW * ratio;
+        const b = totalW * (1 - ratio);
+        node.sizes[index] = a;
+        node.sizes[index + 1] = b;
+        prev.style.flexGrow = String(a);
+        next.style.flexGrow = String(b);
+        if (!horizontal) {
+          prev.style.minHeight = `${a * ROW_HEIGHT_PER_WEIGHT}px`;
+          next.style.minHeight = `${b * ROW_HEIGHT_PER_WEIGHT}px`;
+        }
+      };
+      const up = (): void => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        this.resizing = false;
+        this.fitVisible();
+        this.saveLayout();
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    });
+    return handle;
   }
 
   private renderFolders(): void {
@@ -573,20 +615,6 @@ export class TerminalCockpit {
           }),
         );
       }
-      el.addEventListener("dragover", (e) => {
-        if (this.draggingWindow === null) return;
-        e.preventDefault();
-        el.classList.add("drop-target");
-      });
-      el.addEventListener("dragleave", () => el.classList.remove("drop-target"));
-      el.addEventListener("drop", (e) => {
-        if (this.draggingWindow === null) return;
-        e.preventDefault();
-        el.classList.remove("drop-target");
-        for (const t of this.state.terminals.filter((s) => s.windowId === this.draggingWindow)) {
-          this.deps.send({ type: "cockpitMoveSession", sessionId: t.sessionId, spaceId: value === ALL_FOLDER ? null : value });
-        }
-      });
       return el;
     };
 
@@ -627,11 +655,11 @@ export class TerminalCockpit {
     this.folderBar.appendChild(h("span", { className: "tc-folder-spacer" }));
 
     this.folderBar.appendChild(
-      this.stepper(this.currentColumns(), 1, MAX_COLUMNS, ICONS.columns, "Columns", (v) => {
-        this.folderColumns.set(this.activeFolder, v);
-        this.applyColumns();
-        this.scheduleFit();
-        this.saveLayout();
+      h("button", {
+        className: "tc-newterminal",
+        attrs: { type: "button", title: "Open a plain shell terminal" },
+        innerHTML: `<span class="tc-btn-icon">${ICONS.terminal}</span><span>Terminal</span>`,
+        on: { click: () => this.deps.send({ type: "cockpitNewTerminal", spaceId: this.activeFolder === ALL_FOLDER ? null : this.activeFolder }) },
       }),
     );
 
@@ -728,15 +756,13 @@ export class TerminalCockpit {
       this.renderSkeleton();
       return;
     }
-    for (const skel of this.gridEl.querySelectorAll(".tc-skel-tile")) skel.remove();
-    this.applyColumns();
     const groups = this.groupWindows();
-    const visible = new Set(this.windowsInFolder());
+    const visibleIds = this.windowsInFolder();
 
-    for (const [wid, tile] of this.tiles) {
+    for (const wid of visibleIds) {
+      const tile = this.tiles.get(wid);
       const terminals = groups.get(wid) ?? [];
-      tile.tile.classList.toggle("hidden", !visible.has(wid));
-      if (terminals.length === 0) continue;
+      if (!tile || terminals.length === 0) continue;
       if (!terminals.some((t) => t.sessionId === tile.activeId)) tile.activeId = terminals[0]!.sessionId;
       this.renderTabs(tile, wid, terminals);
       this.mountWindow(tile, terminals);
@@ -748,21 +774,17 @@ export class TerminalCockpit {
       tile.bootingOverlay.classList.toggle("hidden", !active.alive || (view?.gotData ?? false));
     }
 
-    let prev: Element | null = null;
-    for (const wid of this.order) {
-      const tile = this.tiles.get(wid);
-      if (!tile) continue;
-      this.applySpan(tile.tile, wid);
-      const ref: Element | null = prev ? prev.nextElementSibling : this.gridEl.firstElementChild;
-      if (tile.tile !== ref) this.gridEl.insertBefore(tile.tile, ref);
-      prev = tile.tile;
-    }
+    const tree = syncTree(this.trees.get(this.activeFolder) ?? null, visibleIds);
+    this.trees.set(this.activeFolder, tree);
 
-    let center = this.gridEl.querySelector(".tc-center");
-    if (visible.size === 0) {
+    clear(this.gridEl);
+    if (tree) {
+      this.gridEl.classList.remove("empty");
+      this.gridEl.appendChild(this.buildNode(tree));
+    } else {
       this.gridEl.classList.add("empty");
-      if (!center) {
-        center = h(
+      this.gridEl.appendChild(
+        h(
           "div",
           { className: "tc-center" },
           h("button", {
@@ -772,13 +794,9 @@ export class TerminalCockpit {
             on: { click: () => { this.launcherOpen = true; this.renderFolders(); this.renderLauncher(); } },
           }),
           h("div", { className: "tc-center-title", textContent: "Start a Claude session" }),
-          h("div", { className: "tc-center-desc", textContent: "Spin up one or many terminals. They tile here side by side, and you can add tabs to any window to run more in the same pane." }),
-        );
-        this.gridEl.appendChild(center);
-      }
-    } else {
-      this.gridEl.classList.remove("empty");
-      if (center) center.remove();
+          h("div", { className: "tc-center-desc", textContent: "Spin up one or many terminals. Drag a window onto another's edge to split, and drag the divider between them to resize." }),
+        ),
+      );
     }
 
     for (const view of this.views.values()) {
@@ -801,7 +819,6 @@ export class TerminalCockpit {
           className: `tc-tab${t.sessionId === tile.activeId ? " active" : ""}${t.alive ? "" : " exited"}`,
           dataset: { tab: t.sessionId },
           attrs: { type: "button", title: t.name },
-          on: { click: () => this.switchTab(windowId, t.sessionId) },
         },
         h("span", { className: "tc-tab-dot" }),
         h("span", { className: "tc-tab-name", textContent: t.name }),
@@ -821,8 +838,51 @@ export class TerminalCockpit {
           },
         }),
       );
+      this.wireTabDrag(chip, tile, windowId, t.sessionId, terminals.length > 1);
       tile.tabStrip.appendChild(chip);
     }
+  }
+
+  private wireTabDrag(chip: HTMLElement, tile: WindowTile, windowId: string, sessionId: string, canDetach: boolean): void {
+    chip.addEventListener("pointerdown", (e: PointerEvent) => {
+      if (e.button !== 0 || (e.target instanceof Element && e.target.closest(".tc-tab-close"))) return;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let tearing = false;
+      let ghost: HTMLElement | null = null;
+      const outside = (ev: PointerEvent): boolean => {
+        const r = tile.tabStrip.getBoundingClientRect();
+        return ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom;
+      };
+      const move = (ev: PointerEvent): void => {
+        if (!tearing) {
+          if (!canDetach || Math.hypot(ev.clientX - startX, ev.clientY - startY) < 8) return;
+          tearing = true;
+          chip.classList.add("tearing");
+          document.body.classList.add("tc-tearing");
+          ghost = h("div", { className: "tc-tab-ghost", textContent: chip.textContent ?? "" });
+          document.body.appendChild(ghost);
+        }
+        if (ghost) {
+          ghost.style.transform = `translate(${ev.clientX + 12}px, ${ev.clientY + 8}px)`;
+          ghost.classList.toggle("out", outside(ev));
+        }
+      };
+      const up = (ev: PointerEvent): void => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        ghost?.remove();
+        chip.classList.remove("tearing");
+        document.body.classList.remove("tc-tearing");
+        if (!tearing) {
+          this.switchTab(windowId, sessionId);
+        } else if (outside(ev)) {
+          this.deps.send({ type: "cockpitDetachTab", sessionId });
+        }
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    });
   }
 
   private mountWindow(tile: WindowTile, terminals: readonly TerminalSession[]): void {

@@ -73,6 +73,7 @@ const term = (
   alive: true,
   exitCode: null,
   startedAtMs: 0,
+  kind: "claude",
   ...extra,
 });
 
@@ -137,7 +138,7 @@ describe("TerminalCockpit — windows, tabs and folders", () => {
     expect(sent).toContainEqual({ type: "cockpitAddTab", windowId: "a" });
   });
 
-  it("filters tiles by the selected folder, keeping others mounted but hidden", () => {
+  it("shows only the active folder's windows and preserves the tile element across folder switches", () => {
     cockpit.receive({
       type: "cockpitState",
       state: state(
@@ -145,12 +146,16 @@ describe("TerminalCockpit — windows, tabs and folders", () => {
         [{ id: "s1" as never, name: "Work" }],
       ),
     });
-    expect(visibleTiles()).toHaveLength(2);
-    const folderBtns = Array.from(document.querySelectorAll<HTMLElement>(".tc-folder"));
-    const work = folderBtns.find((b) => b.textContent?.includes("Work"))!;
-    work.click();
-    expect(visibleTiles()).toHaveLength(1);
     expect(tiles()).toHaveLength(2);
+    const tileA = document.querySelector('.tc-tile[data-window-id="a"]');
+    const folder = (label: string) =>
+      Array.from(document.querySelectorAll<HTMLElement>(".tc-folder")).find((b) => b.textContent?.includes(label))!;
+    folder("Work").click();
+    expect(tiles()).toHaveLength(1);
+    expect(document.querySelector('.tc-tile[data-window-id="a"]')).toBe(tileA);
+    folder("All").click();
+    expect(tiles()).toHaveLength(2);
+    expect(document.querySelector('.tc-tile[data-window-id="a"]')).toBe(tileA);
   });
 });
 
@@ -223,66 +228,78 @@ describe("TerminalCockpit — renaming folders after creation", () => {
   });
 });
 
-describe("TerminalCockpit — columns are free, not capped at 3", () => {
-  it("the column stepper drives grid-template-columns and goes past 3", () => {
+describe("TerminalCockpit — split-tree layout", () => {
+  const tile = (wid: string): HTMLElement | null => document.querySelector(`.tc-tile[data-window-id="${wid}"]`);
+  const rootSplit = (): HTMLElement | null => document.querySelector(".tc-grid > .tc-split");
+
+  it("a single window fills the grid with no split or divider", () => {
     cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "X")]) });
-    const grid = document.querySelector(".tc-grid") as HTMLElement;
-    const plus = Array.from(document.querySelectorAll<HTMLElement>(".tc-stepper-btn")).find(
-      (b) => b.textContent === "+",
-    )!;
-    for (let i = 0; i < 4; i++) plus.click();
-    expect(grid.style.gridTemplateColumns).toContain("repeat(6");
+    expect(document.querySelector(".tc-grid > .tc-tile[data-window-id='a']")).not.toBeNull();
+    expect(rootSplit()).toBeNull();
+    expect(document.querySelector(".tc-divider")).toBeNull();
   });
 
-  it("saves the column count PER FOLDER, not globally", () => {
-    cockpit.receive({
-      type: "cockpitState",
-      state: state(
-        [term("a", "a", "X", { spaceId: "s1" }), term("b", "b", "Y")],
-        [{ id: "s1" as never, name: "Work" }],
-      ),
-    });
-    const grid = document.querySelector(".tc-grid") as HTMLElement;
-    const colStepper = (): HTMLElement =>
-      Array.from(document.querySelectorAll<HTMLElement>(".tc-stepper")).find((s) =>
-        s.querySelector(".tc-stepper-icon"),
-      )!;
-    const plusOf = (stepper: HTMLElement): HTMLElement =>
-      Array.from(stepper.querySelectorAll<HTMLElement>(".tc-stepper-btn")).find((b) => b.textContent === "+")!;
-
-    plusOf(colStepper()).click();
-    expect(grid.style.gridTemplateColumns).toContain("repeat(3");
-
-    Array.from(document.querySelectorAll<HTMLElement>(".tc-folder"))
-      .find((b) => b.textContent?.includes("Work"))!
-      .click();
-    expect(grid.style.gridTemplateColumns).toContain("repeat(2");
-
-    Array.from(document.querySelectorAll<HTMLElement>(".tc-folder"))
-      .find((b) => b.textContent?.includes("All"))!
-      .click();
-    expect(grid.style.gridTemplateColumns).toContain("repeat(3");
+  it("two windows render a row split with one divider between them", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "A"), term("b", "b", "B")]) });
+    expect(rootSplit()!.classList.contains("tc-split-row")).toBe(true);
+    expect(document.querySelectorAll(".tc-divider")).toHaveLength(1);
+    expect(document.querySelector(".tc-divider")!.classList.contains("tc-divider-v")).toBe(true);
+    expect(tile("a")).not.toBeNull();
+    expect(tile("b")).not.toBeNull();
   });
 
-  it("RESTORES the saved per-folder column count on reload (regression: window display reset to default)", () => {
-    cockpit.receive({ type: "cockpitLayout", layout: { columns: { __all__: 5 }, spans: {}, order: [] } });
-    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "X")]) });
-    const grid = document.querySelector(".tc-grid") as HTMLElement;
-    expect(grid.style.gridTemplateColumns).toContain("repeat(5");
+  it("a third window joins the root split, giving two dividers", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "A"), term("b", "b", "B"), term("c", "c", "C")]) });
+    expect(document.querySelectorAll(".tc-tile")).toHaveLength(3);
+    expect(document.querySelectorAll(".tc-divider")).toHaveLength(2);
   });
 
-  it("RESTORES saved window order and span on reload", () => {
+  it("restores a saved split tree on reload (a column split renders a horizontal divider)", () => {
     cockpit.receive({
       type: "cockpitLayout",
-      layout: { columns: {}, spans: { b: { cols: 2, rows: 1 } }, order: ["b", "a"] },
+      layout: {
+        trees: {
+          __all__: {
+            kind: "split",
+            dir: "col",
+            sizes: [2, 1],
+            children: [
+              { kind: "leaf", id: "a" },
+              { kind: "leaf", id: "b" },
+            ],
+          },
+        },
+      },
     });
     cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "A"), term("b", "b", "B")]) });
-    const order = Array.from(document.querySelectorAll<HTMLElement>(".tc-tile:not(.hidden)")).map(
-      (t) => t.dataset["windowId"],
-    );
-    expect(order).toEqual(["b", "a"]);
-    const tileB = document.querySelector('.tc-tile[data-window-id="b"]') as HTMLElement;
-    expect(tileB.style.gridColumn).toContain("span 2");
+    expect(rootSplit()!.classList.contains("tc-split-col")).toBe(true);
+    expect(document.querySelector(".tc-divider")!.classList.contains("tc-divider-h")).toBe(true);
+    const cells = document.querySelectorAll<HTMLElement>(".tc-split-cell");
+    expect(cells[0]!.style.flexGrow).toBe("2");
+    expect(cells[1]!.style.flexGrow).toBe("1");
+  });
+
+  it("renders nested splits (a column nested inside the root row)", () => {
+    cockpit.receive({
+      type: "cockpitLayout",
+      layout: {
+        trees: {
+          __all__: {
+            kind: "split",
+            dir: "row",
+            sizes: [1, 1],
+            children: [
+              { kind: "split", dir: "col", sizes: [1, 1], children: [{ kind: "leaf", id: "a" }, { kind: "leaf", id: "b" }] },
+              { kind: "leaf", id: "c" },
+            ],
+          },
+        },
+      },
+    });
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "A"), term("b", "b", "B"), term("c", "c", "C")]) });
+    const root = document.querySelector(".tc-grid > .tc-split.tc-split-row");
+    expect(root).not.toBeNull();
+    expect(root!.querySelector(".tc-split.tc-split-col")).not.toBeNull();
   });
 });
 
@@ -501,5 +518,66 @@ describe("TerminalCockpit — device-aware scroll sensitivity (trackpad vs mouse
     expect(t.options.scrollSensitivity).toBe(1);
     expect(t.wheelCb!(wheel(5, PIXEL))).toBe(true);
     expect(t.options.scrollSensitivity).toBe(boosted);
+  });
+});
+
+describe("TerminalCockpit — tab tear-off (drag a tab into its own window)", () => {
+  const down = (el: HTMLElement, x: number, y: number) =>
+    el.dispatchEvent(new PointerEvent("pointerdown", { clientX: x, clientY: y, button: 0, bubbles: true }));
+  const winMove = (x: number, y: number) =>
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: x, clientY: y, bubbles: true }));
+  const winUp = (x: number, y: number) =>
+    window.dispatchEvent(new PointerEvent("pointerup", { clientX: x, clientY: y, bubbles: true }));
+
+  it("detaches a tab dragged out of a multi-tab strip", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "w", "Main"), term("b", "w", "Second")]) });
+    down(document.querySelector('.tc-tab[data-tab="b"]') as HTMLElement, 0, 0);
+    winMove(60, 200);
+    winUp(60, 200);
+    expect(sent).toContainEqual({ type: "cockpitDetachTab", sessionId: "b" });
+  });
+
+  it("does not detach a lone tab (its window is already its own)", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "Solo")]) });
+    down(document.querySelector('.tc-tab[data-tab="a"]') as HTMLElement, 0, 0);
+    winMove(60, 200);
+    winUp(60, 200);
+    expect(sent.some((m) => m.type === "cockpitDetachTab")).toBe(false);
+  });
+
+  it("treats a press with no drag as a tab switch, never a detach", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "w", "Main"), term("b", "w", "Second")]) });
+    down(document.querySelector('.tc-tab[data-tab="b"]') as HTMLElement, 5, 5);
+    winUp(5, 5);
+    expect(sent.some((m) => m.type === "cockpitDetachTab")).toBe(false);
+    expect((document.querySelector('.tc-tab[data-tab="b"]') as HTMLElement).classList.contains("active")).toBe(true);
+  });
+});
+
+describe("TerminalCockpit — resume keeps the active folder", () => {
+  const folder = (label: string): HTMLElement =>
+    Array.from(document.querySelectorAll<HTMLElement>(".tc-folder")).find((b) => b.textContent?.includes(label))!;
+
+  it("adopts a resumed session into the active folder without switching the view to All", () => {
+    cockpit.receive({
+      type: "cockpitState",
+      state: state([term("a", "a", "X", { spaceId: "s1" })], [{ id: "s1" as never, name: "Work" }]),
+    });
+    folder("Work").click();
+    cockpit.adopt("resumed-1", "Resumed", "/repo");
+    expect(sent).toContainEqual({
+      type: "cockpitAdoptSession",
+      sessionId: "resumed-1",
+      name: "Resumed",
+      cwd: "/repo",
+      spaceId: "s1",
+    });
+    expect(folder("Work").classList.contains("active")).toBe(true);
+  });
+
+  it("adopts with no folder when All is the active view", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "X")]) });
+    cockpit.adopt("resumed-2", "Resumed", null);
+    expect(sent.find((m) => m.type === "cockpitAdoptSession")).toMatchObject({ spaceId: null });
   });
 });

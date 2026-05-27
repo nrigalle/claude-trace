@@ -13,6 +13,8 @@ const COCKPIT_MESSAGE_TYPE_TABLE: Record<CockpitWebviewToHost["type"], true> = {
   cockpitDeleteProfile: true,
   cockpitSaveSpace: true,
   cockpitDeleteSpace: true,
+  cockpitNewTerminal: true,
+  cockpitDetachTab: true,
   terminalInput: true,
   terminalResize: true,
   terminalClose: true,

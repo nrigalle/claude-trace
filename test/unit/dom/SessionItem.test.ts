@@ -29,13 +29,17 @@ const handlers = {
 };
 
 describe("renderSessionItem — actions row", () => {
-  it("renders Resume, Copy and View-info action buttons, and never the model tag or session id", () => {
+  const labelOf = (a: HTMLElement): string => a.querySelector(".session-item-action-label")?.textContent ?? "";
+  const byLabel = (node: HTMLElement, label: string): HTMLElement =>
+    [...node.querySelectorAll<HTMLElement>(".session-item-action")].find((a) => labelOf(a) === label)!;
+
+  it("renders Resume, Copy chat and Details buttons with tooltips that explain exactly what each does", () => {
     const node = renderSessionItem(base({}), false, handlers);
-    const actions = node.querySelectorAll<HTMLElement>(".session-item-action");
-    const labels = [...actions].map((a) => a.getAttribute("title"));
-    expect(labels).toContain("Resume in cockpit");
-    expect(labels).toContain("Copy conversation");
-    expect(labels).toContain("View info");
+    const actions = [...node.querySelectorAll<HTMLElement>(".session-item-action")];
+    expect(actions.map(labelOf)).toEqual(["Resume", "Copy chat", "Details"]);
+    expect(byLabel(node, "Resume").dataset["tip"]).toMatch(/claude --resume/);
+    expect(byLabel(node, "Copy chat").dataset["tip"]).toMatch(/clipboard/i);
+    expect(byLabel(node, "Details").dataset["tip"]).toMatch(/read-only/i);
     expect(node.querySelector(".session-item-tags")).toBeNull();
     expect(node.querySelector(".tag")).toBeNull();
     expect(node.textContent).not.toContain("Claude Opus 4.7");
@@ -56,24 +60,18 @@ describe("renderSessionItem — actions row", () => {
       onResumeInCockpit,
     });
     document.body.appendChild(node);
-    const resume = [...node.querySelectorAll<HTMLElement>(".session-item-action")].find(
-      (a) => a.getAttribute("title") === "Resume in cockpit",
-    )!;
-    resume.click();
+    byLabel(node, "Resume").click();
     expect(onResumeInCockpit).toHaveBeenCalledTimes(1);
     expect(onSelect).not.toHaveBeenCalled();
     node.remove();
   });
 
-  it("the Copy button calls onCopyConversation and stops the row from also selecting", () => {
+  it("the Copy chat button calls onCopyConversation and stops the row from also selecting", () => {
     const onSelect = vi.fn();
     const onCopyConversation = vi.fn();
     const node = renderSessionItem(base({}), false, { onSelect, onTogglePin: vi.fn(), onCopyConversation, onResumeInCockpit: vi.fn() });
     document.body.appendChild(node);
-    const copy = [...node.querySelectorAll<HTMLElement>(".session-item-action")].find(
-      (a) => a.getAttribute("title") === "Copy conversation",
-    )!;
-    copy.click();
+    byLabel(node, "Copy chat").click();
     expect(onCopyConversation).toHaveBeenCalledTimes(1);
     expect(onSelect).not.toHaveBeenCalled();
     node.remove();

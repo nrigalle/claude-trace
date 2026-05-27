@@ -69,4 +69,17 @@ describe("desktopNotifyCommand — OS-level notification so it shows even when V
     const cmd = desktopNotifyCommand("darwin", "Claude Trace", "hi", { terminalNotifierBin: null });
     expect(cmd!.command).toBe("osascript");
   });
+
+  it("uses a caller-supplied group so distinct finishes stack instead of replacing one another", () => {
+    const a = desktopNotifyCommand("darwin", "Claude Trace", "Reviewer 1 is ready", {
+      alerterBin: "/opt/homebrew/bin/alerter",
+      group: "claude-trace-1",
+    });
+    const b = desktopNotifyCommand("darwin", "Claude Trace", "Reviewer 2 is ready", {
+      alerterBin: "/opt/homebrew/bin/alerter",
+      group: "claude-trace-2",
+    });
+    expect(a!.args[a!.args.indexOf("--group") + 1]).toBe("claude-trace-1");
+    expect(b!.args[b!.args.indexOf("--group") + 1]).toBe("claude-trace-2");
+  });
 });

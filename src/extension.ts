@@ -80,13 +80,16 @@ let notifierBin: string | null = null;
 let notifierIcon: string | null = null;
 let notifierHintedThisSession = false;
 
-const fireDesktopNotification = (title: string, message: string): void => {
+let notificationSeq = 0;
+
+const fireDesktopNotification = (title: string, message: string, group?: string): void => {
   const enabled = vscode.workspace.getConfiguration("claudeTrace").get<boolean>("desktopNotifications", true);
   if (!enabled) return;
   const cmd = desktopNotifyCommand(process.platform, title, message, {
     alerterBin,
     terminalNotifierBin: notifierBin,
     iconPath: notifierIcon,
+    group: group ?? `claude-trace-${++notificationSeq}`,
   });
   if (!cmd) return;
   try {
@@ -411,9 +414,7 @@ export function activate(context: vscode.ExtensionContext): void {
       saveDroppedImage: (fileName, dataBase64) => saveDroppedImage(fileName, dataBase64),
       loadCockpitLayout: () => {
         const saved = context.globalState.get<CockpitLayout>("ct.cockpitLayout");
-        return saved && typeof saved === "object"
-          ? { columns: saved.columns ?? {}, spans: saved.spans ?? {}, order: saved.order ?? [] }
-          : { columns: {}, spans: {}, order: [] };
+        return saved && typeof saved === "object" && saved.trees ? { trees: saved.trees } : { trees: {} };
       },
       saveCockpitLayout: (layout) => void context.globalState.update("ct.cockpitLayout", layout),
       now: () => Date.now(),
