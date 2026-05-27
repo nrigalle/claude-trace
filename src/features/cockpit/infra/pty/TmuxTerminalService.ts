@@ -1,5 +1,6 @@
 import * as os from "os";
 import * as fs from "fs";
+import * as path from "path";
 import { execFileSync } from "child_process";
 import * as pty from "node-pty";
 import type { TerminalSpawnSpec } from "../../app/CockpitController";
@@ -27,11 +28,15 @@ const TMUX_CONF = [
 
 export const tmuxSessionName = (sessionId: string): string => `ct-${sessionId}`;
 
-export const tmuxAttachArgs = (confPath: string, name: string, cols: number, rows: number): string[] => [
+export const tmuxAttachArgs = (
+  confPath: string | null,
+  name: string,
+  cols: number,
+  rows: number,
+): string[] => [
   "-L",
   SOCKET,
-  "-f",
-  confPath,
+  ...(confPath ? ["-f", confPath] : []),
   "new-session",
   "-A",
   "-s",
@@ -58,9 +63,17 @@ export class TmuxTerminalService extends TerminalServiceBase {
     private readonly confPath: string,
   ) {
     super();
+    this.ensureConf();
+  }
+
+  private ensureConf(): string | null {
     try {
+      fs.mkdirSync(path.dirname(this.confPath), { recursive: true });
       fs.writeFileSync(this.confPath, TMUX_CONF, "utf8");
-    } catch {}
+      return this.confPath;
+    } catch {
+      return fs.existsSync(this.confPath) ? this.confPath : null;
+    }
   }
 
   private tmux(args: readonly string[]): void {
@@ -77,13 +90,14 @@ export class TmuxTerminalService extends TerminalServiceBase {
   }
 
   spawn(spec: TerminalSpawnSpec): void {
+    const conf = this.ensureConf();
     const name = tmuxSessionName(spec.sessionId);
     const alreadyRunning = this.sessionExists(name);
     const env = { ...process.env, CLAUDE_CODE_NO_FLICKER: "1" } as Record<string, string>;
     delete env["TMUX"];
     const proc = pty.spawn(
       this.tmuxBin,
-      tmuxAttachArgs(this.confPath, name, spec.cols, spec.rows),
+      tmuxAttachArgs(conf, name, spec.cols, spec.rows),
       { name: "xterm-256color", cols: spec.cols, rows: spec.rows, cwd: spec.cwd ?? os.homedir(), env },
     );
     this.track(spec.sessionId, proc, alreadyRunning ? undefined : spec.initialInput);
