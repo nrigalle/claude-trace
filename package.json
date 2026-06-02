@@ -2,7 +2,7 @@
   "name": "claude-trace",
   "displayName": "Claude Trace: Cost, Sessions & Agent Workflows for Claude Code",
   "version": "1.2.2",
-  "description": "Cost dashboard, multi-session terminal cockpit, and visual agent workflows for Claude Code. See what you spend, run many sessions at once, and orchestrate agents on your subscription. Everything stays on your machine.",
+  "description": "Cost dashboard, multi-session terminal cockpit, visual agent workflows, and a skills and agents library for Claude Code. Track spend, run many sessions at once, orchestrate agents on your subscription, and manage every skill and agent in one place. Nothing leaves your machine.",
   "publisher": "nrigalle",
   "license": "MIT",
   "author": {
