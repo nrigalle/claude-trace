@@ -18,6 +18,7 @@ export interface ToolbarHost {
   killRun(runId: RunId): void;
   resumeRun(runId: RunId): void;
   navigateToPipeline(draft: Pipeline, view: PipelineView): void;
+  onAssistant(): void;
 }
 
 export class PipelineToolbar {
@@ -89,6 +90,14 @@ export class PipelineToolbar {
 
     const secondaryActions = h("div", { className: "pl-header-actions" });
     if (view === "editor") {
+      secondaryActions.appendChild(
+        h("button", {
+          className: "pl-btn primary",
+          attrs: { type: "button", title: "Build this workflow with an AI assistant" },
+          innerHTML: '<span>✦ Build with AI</span>',
+          on: { click: () => this.host.onAssistant() },
+        }),
+      );
       const triggerCount = draft.triggers.length;
       secondaryActions.appendChild(
         h("button", {

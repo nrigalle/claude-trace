@@ -14,6 +14,7 @@ import {
   clampCount,
   fromProfileId,
   fromSpaceId,
+  nextTabName,
   validateProfile,
   type ProfileId,
   type SessionProfile,
@@ -404,11 +405,11 @@ export class CockpitController {
   }
 
   private handleAddTab(windowId: string): void {
-    const template = [...this.managed.values()].find((m) => m.windowId === windowId);
+    const inWindow = [...this.managed.values()].filter((m) => m.windowId === windowId);
+    const template = inWindow[0];
     if (!template) return;
-    const tabCount = [...this.managed.values()].filter((m) => m.windowId === windowId).length;
     const sessionId = this.deps.actions.newSessionId();
-    const name = `${template.name} · ${tabCount + 1}`;
+    const name = nextTabName(inWindow.map((m) => m.name), template.name);
     const initialInput =
       template.kind === "shell"
         ? ""

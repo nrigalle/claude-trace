@@ -250,7 +250,7 @@ export class TerminalCockpit {
       innerHTML: ICONS.plus,
       on: { click: () => this.deps.send({ type: "cockpitAddTab", windowId }) },
     });
-    const head = h("div", { className: "tc-tile-head", attrs: { title: "Drag to swap places, or drop on a folder" } }, grip, tabStrip, pauseBtn, addTab);
+    const head = h("div", { className: "tc-tile-head", attrs: { title: "Drag to swap places, or drop on a workspace" } }, grip, tabStrip, pauseBtn, addTab);
     const termMount = h("div", { className: "tc-tile-termmount" });
     const resumeOverlay = h(
       "div",
@@ -544,7 +544,7 @@ export class TerminalCockpit {
         "button",
         {
           className: `tc-folder${this.activeFolder === value ? " active" : ""}`,
-          attrs: { type: "button", "data-folder": value, ...(renamable ? { title: "Double-click to rename. Drop a session here to file it in this folder." } : {}) },
+          attrs: { type: "button", "data-folder": value, ...(renamable ? { title: "Double-click to rename. Drop a session here to file it in this workspace." } : {}) },
           on: { click: () => { this.activeFolder = value; this.renderFolders(); this.renderGrid(); } },
         },
         h("span", { className: "tc-folder-icon", innerHTML: ICONS.folder }),
@@ -564,7 +564,7 @@ export class TerminalCockpit {
         el.appendChild(
           h("span", {
             className: "tc-folder-del",
-            attrs: { role: "button", title: "Delete folder", "aria-label": `Delete folder ${label}` },
+            attrs: { role: "button", title: "Delete workspace", "aria-label": `Delete workspace ${label}` },
             innerHTML: ICONS.close,
             on: {
               click: (e: Event) => {
@@ -589,7 +589,7 @@ export class TerminalCockpit {
     }
 
     if (this.creatingFolder) {
-      const input = h("input", { className: "tc-folder-input", attrs: { type: "text", placeholder: "Folder name" } }) as HTMLInputElement;
+      const input = h("input", { className: "tc-folder-input", attrs: { type: "text", placeholder: "Workspace name" } }) as HTMLInputElement;
       input.addEventListener("keydown", (e: KeyboardEvent) => {
         if (e.key === "Enter" && input.value.trim().length > 0) {
           this.deps.send({ type: "cockpitSaveSpace", space: { id: toSpaceId(newId()), name: input.value.trim() } });
@@ -606,16 +606,16 @@ export class TerminalCockpit {
       this.folderBar.appendChild(
         h("button", {
           className: "tc-folder-add",
-          attrs: { type: "button", title: "Create a folder to group your sessions", "aria-label": "New folder" },
+          attrs: { type: "button", title: "Create a workspace to group your sessions", "aria-label": "New workspace" },
           on: { click: () => { this.creatingFolder = true; this.renderFolders(); } },
         },
           h("span", { className: "tc-folder-add-icon", innerHTML: ICONS.plus }),
-          h("span", { textContent: "New folder" }),
+          h("span", { textContent: "New workspace" }),
         ),
       );
       if (this.state.spaces.length === 0) {
         this.folderBar.appendChild(
-          h("span", { className: "tc-folder-hint", textContent: "Group sessions into folders" }),
+          h("span", { className: "tc-folder-hint", textContent: "Group sessions into workspaces" }),
         );
       }
     }
@@ -670,7 +670,7 @@ export class TerminalCockpit {
   private folderRenameInput(spaceId: string, currentName: string): HTMLElement {
     const input = h("input", {
       className: "tc-folder-input",
-      attrs: { type: "text", value: currentName, "aria-label": "Rename folder" },
+      attrs: { type: "text", value: currentName, "aria-label": "Rename workspace" },
     }) as HTMLInputElement;
     let done = false;
     const commit = (save: boolean): void => {

@@ -45,6 +45,12 @@ Wire several Claude sessions into a pipeline on a canvas. Run workers in sequenc
 
 Every step drives a real Claude Code session and passes its output to the next. The result is the kind of deterministic multi agent flow that subagents and agent teams don't give you, built visually instead of in code.
 
+You don't have to draw every workflow by hand either. Press Build with AI, describe what you want or point it at the scripts you already have, and the assistant reads your repo, asks the questions it needs to get the design right, then proposes a complete workflow you drop onto the canvas in one click. Changed your mind? Undo puts the canvas back exactly as it was.
+
+![Describe a workflow and the assistant builds it](https://raw.githubusercontent.com/nrigalle/claude-trace/main/media/shot-workflow-assistant.png)
+
+And it remembers. Every workflow keeps its own chats, named and resumable, so when you reopen one next week the whole design conversation is still there instead of gone the moment you closed the panel.
+
 ## Keep your skills and agents in one place
 
 ![Centralized skills and agents library](https://raw.githubusercontent.com/nrigalle/claude-trace/main/media/shot-library.png)
@@ -104,7 +110,7 @@ git clone https://github.com/nrigalle/claude-trace.git
 cd claude-trace
 npm install
 npm run compile      # build the extension and webview bundles
-npm run test:unit    # 1095 tests, vitest
+npm run test:unit    # 1124 tests, vitest
 ```
 
 Press `F5` in VS Code to launch a development host. The code is organized by feature under `src/features/` (dashboard, cockpit, pipelines, library), with pure logic in each `domain/`, VS Code and filesystem adapters in `infra/`, and orchestration in `app/`. The webview is its own TypeScript bundle under `media/src/`.

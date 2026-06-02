@@ -47,6 +47,7 @@ import { RunDetailPanel } from "./runDetailPanel.js";
 import { PipelineCanvas } from "./pipelineCanvas.js";
 import { PipelineSidebar } from "./pipelineSidebar.js";
 import { PipelineToolbar } from "./pipelineToolbar.js";
+import { WorkflowAssistantPanel } from "./workflowAssistantPanel.js";
 
 export interface PipelinesAppDeps {
   send(msg: PipelinesWebviewToHost): void;
@@ -93,6 +94,7 @@ export class PipelinesApp {
   private readonly canvas: PipelineCanvas;
   private readonly sidebar: PipelineSidebar;
   private readonly toolbar: PipelineToolbar;
+  private readonly assistant: WorkflowAssistantPanel;
 
   constructor(private readonly deps: PipelinesAppDeps) {
     this.sidebarListEl = h("div", { className: "pl-sidebar-list" });
@@ -166,12 +168,19 @@ export class PipelinesApp {
     );
     const zoomHost = h("div", { className: "pl-zoom-controls-host" }, zoomControls);
 
+    this.assistant = new WorkflowAssistantPanel({
+      send: (msg) => this.deps.send(msg),
+      getPipeline: () => (this.selection.kind === "pipeline" ? this.selection.draft : null),
+      onApply: (pipeline) => this.applyProposedPipeline(pipeline),
+    });
+
     const canvasBody = h(
       "div",
       { className: "pl-canvas-body" },
       this.canvasEl,
       zoomHost,
       this.panelEl,
+      this.assistant.element(),
     );
 
     this.canvasArea = h(
@@ -257,6 +266,7 @@ export class PipelinesApp {
       handleDelete: () => this.handleDelete(),
       killRun: (runId) => this.deps.send({ type: "killRun", runId }),
       resumeRun: (runId) => this.deps.send({ type: "resumeRun", runId }),
+      onAssistant: () => this.assistant.setOpen(!this.assistant.isOpen()),
       navigateToPipeline: (draft, view) => {
         this.selection = { kind: "pipeline", draft, dirty: false, view };
         this.panel = { kind: "none" };
@@ -320,6 +330,14 @@ export class PipelinesApp {
         return;
       case "notice":
         this.showNotice(msg.level, msg.message);
+        return;
+      case "pipelineAssistantReply":
+      case "pipelineAssistantProgress":
+      case "pipelineAssistantHistory":
+      case "pipelineAssistantError":
+      case "pipelineAssistantBusy":
+      case "pipelineAssistantConversations":
+        this.assistant.receive(msg);
         return;
       default:
         assertNeverPipelines(msg);
@@ -401,6 +419,7 @@ export class PipelinesApp {
     const draft = this.selection.draft;
     const view = this.selection.view ?? "editor";
     this.toolbar.render(draft, view);
+    this.assistant.switchPipeline();
     clear(this.canvasEl);
 
     if (view === "runs") {
@@ -893,6 +912,18 @@ export class PipelinesApp {
   private handleSave(): void {
     if (this.selection.kind !== "pipeline") return;
     this.deps.send({ type: "savePipeline", pipeline: this.selection.draft });
+  }
+
+  private applyProposedPipeline(proposed: Pipeline): Pipeline | null {
+    const previous = this.selection.kind === "pipeline" ? this.selection.draft : null;
+    this.selection = { kind: "pipeline", draft: proposed, dirty: false };
+    this.panel = { kind: "none" };
+    this.deps.send({ type: "savePipeline", pipeline: proposed });
+    this.sidebar.render();
+    this.renderEditor();
+    this.renderPanel();
+    this.showNotice("info", "Workflow applied from the assistant.");
+    return previous;
   }
 
   private handleRun(): void {

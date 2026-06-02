@@ -804,6 +804,50 @@
   outline: 2px solid var(--ct-focus);
   outline-offset: 1px;
 }
+.lib-asst-newchat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--ct-border);
+  border-radius: 7px;
+  background: var(--ct-bg-2);
+  color: var(--ct-text-primary);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.lib-asst-newchat:hover {
+  border-color: var(--ct-claude);
+  color: var(--ct-claude);
+}
+.lib-asst-newchat:focus-visible {
+  outline: 2px solid var(--ct-focus);
+  outline-offset: 1px;
+}
+.lib-asst-newchat > span:first-child {
+  font-size: 14px;
+  line-height: 1;
+}
+.lib-asst-chat-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ct-border);
+}
+.lib-asst-chat-bar .lib-asst-pick-group {
+  flex: 1;
+}
+.lib-asst-chat-select {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+}
 .lib-asst-head-text {
   flex: 1;
   min-width: 0;
@@ -1100,6 +1144,10 @@
   border-radius: 50%;
   background: #5ec98a;
   flex-shrink: 0;
+}
+.lib-asst-applied-done {
+  font-weight: 600;
+  color: #5ec98a;
 }
 
 .ct-modal-overlay {

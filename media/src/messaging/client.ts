@@ -34,6 +34,12 @@ const PIPELINES_MESSAGE_TYPE_TABLE: Record<PipelinesHostToWebview["type"], true>
   runUpdate: true,
   validationFailed: true,
   notice: true,
+  pipelineAssistantReply: true,
+  pipelineAssistantProgress: true,
+  pipelineAssistantHistory: true,
+  pipelineAssistantError: true,
+  pipelineAssistantBusy: true,
+  pipelineAssistantConversations: true,
 };
 const PIPELINES_MESSAGE_TYPES: ReadonlySet<PipelinesHostToWebview["type"]> = new Set(
   Object.keys(PIPELINES_MESSAGE_TYPE_TABLE) as PipelinesHostToWebview["type"][],

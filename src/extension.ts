@@ -10,6 +10,8 @@ import {
   newRunIdFromClock,
   type PipelinesActions,
 } from "./features/pipelines/app/PipelinesController";
+import { PipelineAssistant } from "./features/pipelines/infra/PipelineAssistant";
+import { AssistantSessionStore } from "./features/pipelines/infra/AssistantSessionStore";
 import { CockpitController, type CockpitActions } from "./features/cockpit/app/CockpitController";
 import type { CockpitLayout } from "./features/cockpit/protocol";
 import { ProfileStore } from "./features/cockpit/infra/ProfileStore";
@@ -458,6 +460,9 @@ export function activate(context: vscode.ExtensionContext): void {
       clock: () => Date.now(),
       newRunId: () => newRunIdFromClock(Date.now()),
       onPipelinesChanged: () => triggerScheduler.reconcile(),
+      assistant: new PipelineAssistant(),
+      assistantSessions: new AssistantSessionStore(),
+      workspaceCwd: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null,
     });
     triggerScheduler.reconcile();
     webhookServer.start();

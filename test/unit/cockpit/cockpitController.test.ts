@@ -502,6 +502,24 @@ describe("CockpitController tabs — adding a tab clones the window's config int
     expect(terminals[1]!.name).toBe("Rev 1 · 2");
   });
 
+  it("adding tabs increments the suffix · 2, · 3, · 4 instead of repeating · 2", () => {
+    host.send({ type: "cockpitAddTab", windowId: "uuid-1" });
+    host.send({ type: "cockpitAddTab", windowId: "uuid-1" });
+    host.send({ type: "cockpitAddTab", windowId: "uuid-1" });
+    const names = host.lastState().state.terminals.map((t) => t.name);
+    expect(names).toEqual(["Rev 1", "Rev 1 · 2", "Rev 1 · 3", "Rev 1 · 4"]);
+  });
+
+  it("keeps incrementing (no double suffix) after the base tab is closed", () => {
+    host.send({ type: "cockpitAddTab", windowId: "uuid-1" }); // Rev 1 · 2
+    host.send({ type: "cockpitAddTab", windowId: "uuid-1" }); // Rev 1 · 3
+    host.send({ type: "terminalClose", sessionId: "uuid-1" }); // close base "Rev 1"
+    host.send({ type: "cockpitAddTab", windowId: "uuid-1" });
+    const names = host.lastState().state.terminals.map((t) => t.name);
+    expect(names).toContain("Rev 1 · 4");
+    expect(names.some((n) => n.includes("· 2 ·") || n.includes("· 3 ·"))).toBe(false);
+  });
+
   it("the added tab persists and is restored into the same window on reload", () => {
     host.send({ type: "cockpitAddTab", windowId: "uuid-1" });
     const saved = sessionStore.load();

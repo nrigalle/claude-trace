@@ -6,6 +6,8 @@ import {
   clampCount,
   defaultProfile,
   expandNameTemplate,
+  nextTabName,
+  stripTabSuffix,
   toProfileId,
   validateProfile,
 } from "../../../src/features/cockpit/domain/profiles";
@@ -63,6 +65,30 @@ describe("batchNames", () => {
         },
       ),
     );
+  });
+});
+
+describe("nextTabName", () => {
+  it("starts at · 2 for the first added tab", () => {
+    expect(nextTabName(["Rev 1"], "Rev 1")).toBe("Rev 1 · 2");
+  });
+
+  it("increments to · 3, · 4 as more tabs exist (not stuck at · 2)", () => {
+    expect(nextTabName(["Rev 1", "Rev 1 · 2"], "Rev 1")).toBe("Rev 1 · 3");
+    expect(nextTabName(["Rev 1", "Rev 1 · 2", "Rev 1 · 3"], "Rev 1")).toBe("Rev 1 · 4");
+  });
+
+  it("uses the highest existing index so it never collides after a middle tab is closed", () => {
+    expect(nextTabName(["Rev 1", "Rev 1 · 4"], "Rev 1")).toBe("Rev 1 · 5");
+  });
+
+  it("strips an existing suffix from the template so a closed base never yields a double suffix", () => {
+    expect(nextTabName(["Rev 1 · 2", "Rev 1 · 3"], "Rev 1 · 2")).toBe("Rev 1 · 4");
+  });
+
+  it("treats a name that ends in non-numeric text after the separator as the base", () => {
+    expect(stripTabSuffix("Build · prod")).toBe("Build · prod");
+    expect(nextTabName(["Build · prod"], "Build · prod")).toBe("Build · prod · 2");
   });
 });
 

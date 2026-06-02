@@ -65,6 +65,29 @@ export const batchNames = (
     expandNameTemplate(template, { profileName, index: startIndex + i }).trim(),
   );
 
+export const TAB_NAME_SEP = " · ";
+
+export const stripTabSuffix = (name: string): string => {
+  const idx = name.lastIndexOf(TAB_NAME_SEP);
+  if (idx < 0) return name;
+  return /^\d+$/.test(name.slice(idx + TAB_NAME_SEP.length)) ? name.slice(0, idx) : name;
+};
+
+const tabIndexFor = (name: string, base: string): number => {
+  if (name === base) return 1;
+  if (name.startsWith(base + TAB_NAME_SEP)) {
+    const rest = name.slice(base.length + TAB_NAME_SEP.length);
+    if (/^\d+$/.test(rest)) return Number(rest);
+  }
+  return 1;
+};
+
+export const nextTabName = (existingNames: readonly string[], templateName: string): string => {
+  const base = stripTabSuffix(templateName);
+  const maxIndex = existingNames.reduce((mx, n) => Math.max(mx, tabIndexFor(n, base)), 1);
+  return `${base}${TAB_NAME_SEP}${maxIndex + 1}`;
+};
+
 export interface ProfileValidationError {
   readonly field: "name" | "nameTemplate" | "defaultCount";
   readonly message: string;

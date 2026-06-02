@@ -22,6 +22,9 @@ import {
   type RunId,
 } from "../domain/types";
 import { validatePipeline } from "../domain/validate";
+import type { PipelineAssistant } from "../infra/PipelineAssistant";
+import type { AssistantSessionStore } from "../infra/AssistantSessionStore";
+import type { EffortChoice, ModelChoice } from "../../../shared/models";
 
 export interface PipelinesHost {
   postMessage(msg: PipelinesHostToWebview): void;
@@ -46,6 +49,9 @@ export interface PipelinesControllerDeps {
   readonly clock: () => number;
   readonly newRunId: () => RunId;
   readonly onPipelinesChanged?: () => void;
+  readonly assistant?: PipelineAssistant;
+  readonly assistantSessions?: AssistantSessionStore;
+  readonly workspaceCwd?: () => string | null;
 }
 
 
@@ -64,6 +70,7 @@ export class PipelinesController {
     if (this.disposed) return;
     this.disposed = true;
     this.engine.disposeActive();
+    this.deps.assistant?.dispose();
     this.deps.runner.dispose();
     for (const d of this.disposables) {
       try { d.dispose(); } catch {}
@@ -84,6 +91,19 @@ export class PipelinesController {
       case "revealSession": this.handleReveal(msg.runId, msg.blockId, msg.target, msg.sessionId); return;
       case "loadRun": this.handleLoadRun(msg.runId); return;
       case "resumeRun": void this.handleResumeRun(msg.runId); return;
+      case "pipelineAssistantAsk": void this.handleAssistantAsk(msg.pipeline, msg.conversationId, msg.message, msg.model, msg.effort); return;
+      case "pipelineAssistantListConversations": this.handleAssistantListConversations(msg.pipelineId); return;
+      case "pipelineAssistantLoadHistory": this.handleAssistantHistory(msg.pipelineId, msg.conversationId); return;
+      case "pipelineAssistantCancel": this.deps.assistant?.cancel(msg.conversationId); return;
+      case "pipelineAssistantRenameConversation":
+        this.deps.assistantSessions?.rename(msg.pipelineId, msg.conversationId, conversationTitle(msg.title));
+        this.handleAssistantListConversations(msg.pipelineId);
+        return;
+      case "pipelineAssistantDeleteConversation":
+        this.deps.assistant?.reset(msg.conversationId);
+        this.deps.assistantSessions?.delete(msg.pipelineId, msg.conversationId);
+        this.handleAssistantListConversations(msg.pipelineId);
+        return;
       default: return assertNeverPipelines(msg);
     }
   }
@@ -221,12 +241,119 @@ export class PipelinesController {
     await this.engine.run(applyApprovalApproved(state, approvalId, this.deps.clock()));
   }
 
+  private adoptIfSaved(pipelineId: PipelineId, conversationId: string): void {
+    const assistant = this.deps.assistant;
+    if (!assistant || assistant.sessionInfo(conversationId)) return;
+    const saved = this.deps.assistantSessions?.get(pipelineId, conversationId);
+    if (saved) assistant.adopt(conversationId, saved.sessionId, saved.cwd);
+  }
+
+  private handleAssistantListConversations(pipelineId: PipelineId): void {
+    const conversations = (this.deps.assistantSessions?.list(pipelineId) ?? []).map((c) => ({
+      id: c.id,
+      title: c.title,
+      createdAtMs: c.createdAtMs,
+      updatedAtMs: c.updatedAtMs,
+    }));
+    this.deps.host.postMessage({ type: "pipelineAssistantConversations", pipelineId, conversations });
+  }
+
+  private async handleAssistantAsk(
+    pipeline: Pipeline,
+    conversationId: string,
+    message: string,
+    model: ModelChoice,
+    effort: EffortChoice,
+  ): Promise<void> {
+    const assistant = this.deps.assistant;
+    if (!assistant) {
+      this.notice("error", "The workflow assistant is not available.");
+      return;
+    }
+    const pipelineId = pipeline.id;
+    this.adoptIfSaved(pipelineId, conversationId);
+    this.deps.host.postMessage({ type: "pipelineAssistantBusy", pipelineId, conversationId, busy: true });
+    try {
+      const result = await assistant.ask(
+        conversationId,
+        {
+          pipeline,
+          workspaceCwd: this.deps.workspaceCwd?.() ?? null,
+          otherPipelines: this.deps.pipelineStore.list().filter((p) => p.id !== pipelineId),
+        },
+        message,
+        {
+          model,
+          effort,
+          onProgress: (events) =>
+            this.deps.host.postMessage({ type: "pipelineAssistantProgress", pipelineId, conversationId, events }),
+        },
+      );
+      this.persistConversation(pipelineId, conversationId, message);
+      this.deps.host.postMessage({
+        type: "pipelineAssistantReply",
+        pipelineId,
+        conversationId,
+        events: result.events,
+        text: result.text,
+        proposedPipeline: result.proposal.pipeline,
+        proposalErrors: result.proposal.errors,
+      });
+      this.handleAssistantListConversations(pipelineId);
+    } catch (err) {
+      this.deps.host.postMessage({
+        type: "pipelineAssistantError",
+        pipelineId,
+        conversationId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      this.deps.host.postMessage({ type: "pipelineAssistantBusy", pipelineId, conversationId, busy: false });
+    }
+  }
+
+  private persistConversation(pipelineId: PipelineId, conversationId: string, latestMessage: string): void {
+    const assistant = this.deps.assistant;
+    const store = this.deps.assistantSessions;
+    if (!assistant || !store) return;
+    const info = assistant.sessionInfo(conversationId);
+    if (!info) return;
+    const now = this.deps.clock();
+    const existing = store.get(pipelineId, conversationId);
+    store.upsert(pipelineId, {
+      id: conversationId,
+      sessionId: info.sessionId,
+      cwd: info.cwd,
+      title: existing?.title ?? conversationTitle(latestMessage),
+      createdAtMs: existing?.createdAtMs ?? now,
+      updatedAtMs: now,
+    });
+  }
+
+  private handleAssistantHistory(pipelineId: PipelineId, conversationId: string): void {
+    const assistant = this.deps.assistant;
+    if (!assistant) return;
+    this.adoptIfSaved(pipelineId, conversationId);
+    this.deps.host.postMessage({
+      type: "pipelineAssistantHistory",
+      pipelineId,
+      conversationId,
+      events: assistant.history(conversationId),
+    });
+  }
+
   private notice(level: "info" | "warning" | "error", message: string): void {
     this.deps.host.postMessage({ type: "notice", level, message });
   }
 
 }
 
+
+const conversationTitle = (firstMessage: string): string => {
+  const oneLine = firstMessage.replace(/\s+/g, " ").trim();
+  if (oneLine.length === 0) return "New chat";
+  return oneLine.length > 48 ? `${oneLine.slice(0, 47)}…` : oneLine;
+};
 
 const newPipelineId = (name: string, nowMs: number): PipelineId => {
   const slug = name

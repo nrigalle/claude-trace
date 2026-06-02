@@ -89,7 +89,7 @@ export class CockpitLauncher {
     modelSel.addEventListener("change", refreshEffort);
     const modeSel = this.selectFrom(PERMISSION_MODES.map((m) => ({ value: m.mode, label: m.label })), pre?.permissionMode ?? "default");
     const spaceSel = this.selectFrom(
-      [{ value: "", label: "No folder" }, ...state.spaces.map((s) => ({ value: s.id, label: s.name }))],
+      [{ value: "", label: "No workspace" }, ...state.spaces.map((s) => ({ value: s.id, label: s.name }))],
       pre?.spaceId ?? (activeFolder === ALL_FOLDER ? "" : activeFolder),
     );
     const promptDeco = decorateTextarea({
@@ -149,7 +149,7 @@ export class CockpitLauncher {
       field("Model", modelSel),
       field("Effort", effortSel),
       field("Permissions", modeSel),
-      field("Folder", spaceSel),
+      field("Workspace", spaceSel),
       field("Working folder", cwdField),
       field("Terminals", countStepper),
     );
@@ -279,7 +279,7 @@ export class CockpitLauncher {
     const modeSel = this.selectFrom(PERMISSION_MODES.map((m) => ({ value: m.mode, label: m.label })), draft.permissionMode);
     modeSel.addEventListener("change", () => set({ permissionMode: modeSel.value as SessionProfile["permissionMode"] }));
     const spaceSel = this.selectFrom(
-      [{ value: "", label: "No folder" }, ...state.spaces.map((s) => ({ value: s.id, label: s.name }))],
+      [{ value: "", label: "No workspace" }, ...state.spaces.map((s) => ({ value: s.id, label: s.name }))],
       draft.spaceId ?? "",
     );
     spaceSel.addEventListener("change", () => set({ spaceId: spaceSel.value === "" ? null : toSpaceId(spaceSel.value) }));
@@ -306,7 +306,7 @@ export class CockpitLauncher {
       textField("Name template", draft.nameTemplate, (v) => set({ nameTemplate: v }), "{profile} {n}"),
       textField("Initial prompt", draft.initialPrompt ?? "", (v) => set({ initialPrompt: v.trim() === "" ? null : v }), "Optional"),
       h("label", { className: "tc-field" }, h("span", { textContent: "Default count" }), countInput),
-      h("label", { className: "tc-field" }, h("span", { textContent: "Folder" }), spaceSel),
+      h("label", { className: "tc-field" }, h("span", { textContent: "Workspace" }), spaceSel),
       h("div", { className: "tc-form-actions" }, save, cancel, del),
     );
   }

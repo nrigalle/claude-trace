@@ -35,7 +35,7 @@ import {
 import { MODEL_CHOICES, type ModelChoice } from "../../../shared/models";
 import { assertNever } from "../../../shared/assertNever";
 
-const PIPELINE_SCHEMA_VERSION = 1;
+export const PIPELINE_SCHEMA_VERSION = 1;
 const RUN_SCHEMA_VERSION = 1;
 
 const MODEL_VALUES: readonly ModelChoice[] = MODEL_CHOICES;

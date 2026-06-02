@@ -17,6 +17,12 @@ const PIPELINES_MESSAGE_TYPE_TABLE: Record<PipelinesWebviewToHost["type"], true>
   revealSession: true,
   loadRun: true,
   resumeRun: true,
+  pipelineAssistantAsk: true,
+  pipelineAssistantListConversations: true,
+  pipelineAssistantLoadHistory: true,
+  pipelineAssistantCancel: true,
+  pipelineAssistantRenameConversation: true,
+  pipelineAssistantDeleteConversation: true,
 };
 const PIPELINES_MESSAGE_TYPES: ReadonlySet<PipelinesWebviewToHost["type"]> = new Set(
   Object.keys(PIPELINES_MESSAGE_TYPE_TABLE) as PipelinesWebviewToHost["type"][],
