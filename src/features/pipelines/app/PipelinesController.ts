@@ -6,6 +6,7 @@ import type { RunStore } from "../infra/RunStore";
 import type {
   PipelinesHostToWebview,
   PipelinesWebviewToHost,
+  TimelineEvent,
 } from "../protocol";
 import { assertNeverPipelines, type SessionTarget } from "../protocol";
 import {
@@ -274,21 +275,21 @@ export class PipelinesController {
     this.adoptIfSaved(pipelineId, conversationId);
     this.deps.host.postMessage({ type: "pipelineAssistantBusy", pipelineId, conversationId, busy: true });
     try {
-      const result = await assistant.ask(
-        conversationId,
-        {
-          pipeline,
-          workspaceCwd: this.deps.workspaceCwd?.() ?? null,
-          otherPipelines: this.deps.pipelineStore.list().filter((p) => p.id !== pipelineId),
-        },
-        message,
-        {
-          model,
-          effort,
-          onProgress: (events) =>
-            this.deps.host.postMessage({ type: "pipelineAssistantProgress", pipelineId, conversationId, events }),
-        },
-      );
+      const context = {
+        pipeline,
+        workspaceCwd: this.deps.workspaceCwd?.() ?? null,
+        otherPipelines: this.deps.pipelineStore.list().filter((p) => p.id !== pipelineId),
+      };
+      const options = {
+        model,
+        effort,
+        onProgress: (events: readonly TimelineEvent[]) =>
+          this.deps.host.postMessage({ type: "pipelineAssistantProgress", pipelineId, conversationId, events }),
+      };
+      let result = await assistant.ask(conversationId, context, message, options);
+      if (!result.proposal.hadJson && looksLikeForbiddenArtifact(result.text)) {
+        result = await assistant.ask(conversationId, context, CORRECTION_PROMPT, options);
+      }
       this.persistConversation(pipelineId, conversationId, message);
       this.deps.host.postMessage({
         type: "pipelineAssistantReply",
@@ -346,6 +347,12 @@ export class PipelinesController {
 
 }
 
+
+const CORRECTION_PROMPT =
+  "That is not a Claude Trace workflow and cannot be applied to the canvas. Do not produce GitHub Actions, YAML, or a file to save. Output the workflow now as a single fenced ```json block in the Claude Trace schema (name, blocks, triggers) and nothing else.";
+
+const looksLikeForbiddenArtifact = (text: string): boolean =>
+  /```\s*ya?ml|workflow_dispatch|github\s*actions|\bjobs:\s|runs-on:|\.ya?ml\b/i.test(text);
 
 const conversationTitle = (firstMessage: string): string => {
   const oneLine = firstMessage.replace(/\s+/g, " ").trim();

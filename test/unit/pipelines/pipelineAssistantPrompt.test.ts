@@ -42,4 +42,12 @@ describe("workflow assistant system prompt", () => {
     expect(prompt).toContain("never call AskUserQuestion");
     expect(prompt.toLowerCase()).toContain("plain text");
   });
+
+  it("pins the assistant to producing a Claude Trace JSON workflow, never files or CI YAML", () => {
+    const prompt = systemPromptFor(pipeline("p1", "Only one"), []);
+    expect(prompt).toContain("Claude Trace Workflow Builder");
+    expect(prompt).toContain("GitHub Actions");
+    expect(prompt.toLowerCase()).toContain("read-only reference");
+    expect(prompt.toLowerCase()).toContain("intentionally disabled");
+  });
 });

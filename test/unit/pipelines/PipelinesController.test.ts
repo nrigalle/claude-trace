@@ -12,6 +12,8 @@ import { StubAutomationRunner } from "../../stubs/StubAutomationRunner";
 import { StubDeterministicRunner } from "../../stubs/StubDeterministicRunner";
 import { PipelineStore } from "../../../src/features/pipelines/infra/PipelineStore";
 import { RunStore } from "../../../src/features/pipelines/infra/RunStore";
+import { AssistantSessionStore } from "../../../src/features/pipelines/infra/AssistantSessionStore";
+import type { PipelineAssistant } from "../../../src/features/pipelines/infra/PipelineAssistant";
 import {
   toBlockId,
   toPipelineId,
@@ -950,5 +952,72 @@ describe("PipelinesController — dispose", () => {
     const summaries = runStore.list();
     expect(summaries).toHaveLength(1);
     expect(summaries[0]!.status).toBe("interrupted");
+  });
+});
+
+describe("PipelinesController — workflow assistant enforcement", () => {
+  class FakeAssistant {
+    readonly asks: string[] = [];
+    constructor(private readonly scripted: { text: string; pipeline: Pipeline | null; hadJson: boolean }[]) {}
+    sessionInfo(): { sessionId: string; cwd: string } | null { return { sessionId: "s1", cwd: "/tmp/x" }; }
+    adopt(): void {}
+    cancel(): void {}
+    reset(): void {}
+    dispose(): void {}
+    history(): readonly never[] { return []; }
+    ask(_conversationId: string, _ctx: unknown, message: string): Promise<{ events: readonly never[]; text: string; proposal: { pipeline: Pipeline | null; hadJson: boolean; errors: readonly string[] } }> {
+      this.asks.push(message);
+      const step = this.scripted[Math.min(this.asks.length - 1, this.scripted.length - 1)]!;
+      return Promise.resolve({ events: [], text: step.text, proposal: { pipeline: step.pipeline, hadJson: step.hadJson, errors: [] } });
+    }
+  }
+
+  const proposed = pipeline("p1", "Enrich", [block("b1", "Clean", "Validate emails")]);
+
+  const makeWithAssistant = (fake: FakeAssistant) =>
+    new PipelinesController({
+      host,
+      pipelineStore,
+      runStore,
+      runner: new StubAutomationRunner({ workerDurationMs: 1, judgeDurationMs: 1 }),
+      deterministic: new StubDeterministicRunner(),
+      actions: makeActions(),
+      clock: tick,
+      newRunId,
+      assistant: fake as unknown as PipelineAssistant,
+      assistantSessions: new AssistantSessionStore(path.join(tmp, "asst-sessions.json")),
+      workspaceCwd: () => null,
+    });
+
+  it("auto-corrects a YAML / GitHub Actions answer into a Claude Trace JSON proposal", async () => {
+    const fake = new FakeAssistant([
+      { text: "Here is the file to save:\n```yaml\nname: enrich\non:\n  workflow_dispatch:\n```", pipeline: null, hadJson: false },
+      { text: "```json\n{...}\n```", pipeline: proposed, hadJson: true },
+    ]);
+    makeWithAssistant(fake);
+
+    host.send({ type: "pipelineAssistantAsk", pipeline: proposed, conversationId: "c1", message: "build it", model: "default", effort: "default" });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(fake.asks).toHaveLength(2);
+    expect(fake.asks[1]).toContain("single fenced");
+    const replies = host.messagesOfType("pipelineAssistantReply");
+    expect(replies).toHaveLength(1);
+    expect(replies[0]!.proposedPipeline).not.toBeNull();
+    expect(replies[0]!.proposedPipeline!.name).toBe("Enrich");
+  });
+
+  it("does not auto-correct a normal interview question with no code block", async () => {
+    const fake = new FakeAssistant([
+      { text: "Which trigger do you want: manual, schedule, or webhook?", pipeline: null, hadJson: false },
+    ]);
+    makeWithAssistant(fake);
+
+    host.send({ type: "pipelineAssistantAsk", pipeline: proposed, conversationId: "c1", message: "help me", model: "default", effort: "default" });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(fake.asks).toHaveLength(1);
+    const replies = host.messagesOfType("pipelineAssistantReply");
+    expect(replies[0]!.proposedPipeline).toBeNull();
   });
 });
