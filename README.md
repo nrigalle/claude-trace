@@ -1,8 +1,8 @@
 # Claude Trace
 
-[![VS Marketplace](https://img.shields.io/visual-studio-marketplace/v/nrigalle.claude-trace.svg?label=VS%20Marketplace&color=2D7DD2)](https://marketplace.visualstudio.com/items?itemName=nrigalle.claude-trace)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/nrigalle.claude-trace.svg)](https://marketplace.visualstudio.com/items?itemName=nrigalle.claude-trace)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/nrigalle.claude-trace.svg)](https://marketplace.visualstudio.com/items?itemName=nrigalle.claude-trace)
+[![VS Marketplace](https://vsmarketplacebadges.dev/version-short/nrigalle.claude-trace.svg?label=VS%20Marketplace&color=2D7DD2)](https://marketplace.visualstudio.com/items?itemName=nrigalle.claude-trace)
+[![Installs](https://vsmarketplacebadges.dev/installs-short/nrigalle.claude-trace.svg?label=Installs&color=2D7DD2)](https://marketplace.visualstudio.com/items?itemName=nrigalle.claude-trace)
+[![Open VSX](https://img.shields.io/open-vsx/v/nrigalle/claude-trace?label=Open%20VSX&color=a60ee5)](https://open-vsx.org/extension/nrigalle/claude-trace)
 [![License: MIT](https://img.shields.io/github/license/nrigalle/claude-trace.svg)](LICENSE)
 
 A cost dashboard, a multi-session terminal cockpit, a visual agent workflow builder, and a home for your skills and agents. All for [Claude Code](https://www.claude.com/product/claude-code), inside VS Code, reading the session logs Claude Code already writes to your disk. Nothing leaves your machine.
