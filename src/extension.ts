@@ -129,7 +129,31 @@ const fireDesktopNotification = (title: string, message: string, group?: string)
   }
 };
 
+// vsce packaging drops the executable bit on node-pty's spawn-helper, so the
+// extracted binary fails posix_spawnp. Restore it at startup before any pty opens.
+function ensureSpawnHelperExecutable(): void {
+  if (process.platform === "win32") return;
+  const roots: string[] = [];
+  try {
+    roots.push(path.join(path.dirname(require.resolve("node-pty")), ".."));
+  } catch {}
+  roots.push(path.join(__dirname, "..", "node_modules", "node-pty"));
+  const relative = [
+    path.join("prebuilds", `${process.platform}-${process.arch}`, "spawn-helper"),
+    path.join("build", "Release", "spawn-helper"),
+  ];
+  for (const root of roots) {
+    for (const rel of relative) {
+      const helper = path.join(root, rel);
+      try {
+        if (fs.existsSync(helper)) fs.chmodSync(helper, 0o755);
+      } catch {}
+    }
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
+  ensureSpawnHelperExecutable();
   ensureProjectsDirExists(PROJECTS_DIR);
 
   const installNotifier = (): void => {
