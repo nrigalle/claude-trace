@@ -10,4 +10,6 @@
 @import url("./styles/xterm.css");
 @import url("./styles/cockpit.css");
 @import url("./styles/customize.css");
+@import url("./styles/textarea.css");
+@import url("./styles/library.css");
 @import url("./styles/responsive.css");

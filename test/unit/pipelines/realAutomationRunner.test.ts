@@ -12,8 +12,12 @@ describe("encodeCwdForProjects", () => {
     );
   });
 
-  it("preserves any non-slash characters verbatim", () => {
+  it("preserves any non-separator characters verbatim", () => {
     expect(encodeCwdForProjects("/a/b c/d.e_f")).toBe("-a-b c-d.e_f");
+  });
+
+  it("encodes Windows drive separators and backslashes into a single path segment", () => {
+    expect(encodeCwdForProjects("C:\\Users\\alex\\project")).toBe("C--Users-alex-project");
   });
 });
 

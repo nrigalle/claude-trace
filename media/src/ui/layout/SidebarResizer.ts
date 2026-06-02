@@ -1,10 +1,9 @@
 import { h } from "../h.js";
-import { clampSidebarWidth } from "./sidebarWidth.js";
+import { clampSidebarWidth, SIDEBAR_DEFAULT_PX } from "./sidebarWidth.js";
 
 export interface SidebarResizerOptions {
   readonly target: HTMLElement;
   readonly initialPx: number;
-  readonly onLivePx: (px: number) => void;
   readonly onCommitPx: (px: number) => void;
 }
 
@@ -28,14 +27,9 @@ export class SidebarResizer {
     });
   }
 
-  setWidth(px: number): void {
-    this.applyWidth(px);
-  }
-
   private applyWidth(px: number): void {
     const clamped = clampSidebarWidth(px);
     this.opts.target.style.setProperty("--ct-sidebar-width", `${clamped}px`);
-    this.opts.onLivePx(clamped);
   }
 
   private onPointerDown(e: PointerEvent): void {
@@ -64,7 +58,7 @@ export class SidebarResizer {
   }
 
   private onDoubleClick(): void {
-    this.applyWidth(300);
-    this.opts.onCommitPx(300);
+    this.applyWidth(SIDEBAR_DEFAULT_PX);
+    this.opts.onCommitPx(SIDEBAR_DEFAULT_PX);
   }
 }

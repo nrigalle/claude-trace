@@ -1,4 +1,11 @@
-import { MODEL_OPTIONS, type ModelChoice } from "../../../shared/models";
+import {
+  DEFAULT_MODEL_CHOICE,
+  EFFORT_OPTIONS,
+  MODEL_CHOICES,
+  normalizeModelChoice,
+  type EffortChoice,
+  type ModelChoice,
+} from "../../../shared/models";
 import { PERMISSION_MODES, type PermissionMode } from "../../../shared/permissionModes";
 
 export type ProfileId = string & { readonly __brand: "ProfileId" };
@@ -13,6 +20,7 @@ export interface SessionProfile {
   readonly id: ProfileId;
   readonly name: string;
   readonly model: ModelChoice;
+  readonly effort: EffortChoice;
   readonly permissionMode: PermissionMode;
   readonly cwd: string | null;
   readonly nameTemplate: string;
@@ -81,8 +89,9 @@ export const validateProfile = (
   return errors;
 };
 
-const MODEL_IDS: ReadonlySet<string> = new Set(MODEL_OPTIONS.map((o) => o.id));
+const MODEL_IDS: ReadonlySet<string> = new Set(MODEL_CHOICES);
 const MODE_IDS: ReadonlySet<string> = new Set(PERMISSION_MODES.map((o) => o.mode));
+const EFFORT_IDS: ReadonlySet<string> = new Set(EFFORT_OPTIONS.map((o) => o.id));
 
 const asRecord = (raw: unknown): Record<string, unknown> | null =>
   raw !== null && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
@@ -102,10 +111,13 @@ export const parseProfile = (raw: unknown): SessionProfile | null => {
   if (permissionMode === null || !MODE_IDS.has(permissionMode)) return null;
   const defaultCount = typeof r["defaultCount"] === "number" ? clampCount(r["defaultCount"]) : 1;
   const spaceIdRaw = str(r["spaceId"]);
+  const effortRaw = str(r["effort"]);
+  const effort: EffortChoice = effortRaw !== null && EFFORT_IDS.has(effortRaw) ? (effortRaw as EffortChoice) : "default";
   return {
     id: toProfileId(id),
     name,
-    model: model as ModelChoice,
+    model: normalizeModelChoice(model as ModelChoice),
+    effort,
     permissionMode: permissionMode as PermissionMode,
     cwd: str(r["cwd"]),
     nameTemplate,
@@ -127,7 +139,8 @@ export const parseSpace = (raw: unknown): Space | null => {
 export const defaultProfile = (id: ProfileId, name: string): SessionProfile => ({
   id,
   name,
-  model: "default",
+  model: DEFAULT_MODEL_CHOICE,
+  effort: "default",
   permissionMode: "default",
   cwd: null,
   nameTemplate: DEFAULT_NAME_TEMPLATE,

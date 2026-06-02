@@ -16,13 +16,15 @@ const TMUX_CONF = [
   "set -g destroy-unattached off",
   "set -g exit-empty off",
   "setw -g aggressive-resize on",
-  "set -g history-limit 10000",
+  "set -g history-limit 15000",
   "set -g focus-events on",
-  "set -g mouse on",
+  "set -g mouse off",
+  "set -g set-clipboard on",
+  "set -g extended-keys always",
+  "set -g alternate-screen on",
   'set -g default-terminal "tmux-256color"',
-  'set -as terminal-features ",xterm-256color:RGB"',
+  'set -as terminal-features ",xterm-256color:RGB,xterm-256color:clipboard,tmux-256color:RGB,tmux-256color:clipboard"',
   'set -ga terminal-overrides ",xterm-256color:Tc"',
-  "set -g allow-passthrough on",
   "",
 ].join("\n");
 
@@ -46,6 +48,20 @@ export const tmuxAttachArgs = (
   "-y",
   String(rows),
 ];
+
+const tmuxCapturePaneArgs = (name: string): string[] => [
+  "capture-pane",
+  "-p",
+  "-J",
+  "-S",
+  "-",
+  "-t",
+  name,
+];
+
+export const tmuxCaptureArgs = (name: string): string[] => ["-L", SOCKET, ...tmuxCapturePaneArgs(name)];
+export const tmuxAlternateOnArgs = (name: string): string[] => ["-L", SOCKET, "display-message", "-p", "-t", name, "#{alternate_on}"];
+export const tmuxConfigText = (): string => TMUX_CONF;
 
 export const findTmux = (): string | null => {
   for (const bin of ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux", "tmux"]) {
@@ -80,12 +96,25 @@ export class TmuxTerminalService extends TerminalServiceBase {
     execFileSync(this.tmuxBin, ["-L", SOCKET, ...args], { stdio: "ignore" });
   }
 
+  private tmuxOutput(args: readonly string[]): string {
+    return execFileSync(this.tmuxBin, ["-L", SOCKET, ...args], { encoding: "utf8" });
+  }
+
   private sessionExists(name: string): boolean {
     try {
       this.tmux(["has-session", "-t", name]);
       return true;
     } catch {
       return false;
+    }
+  }
+
+  private sourceConf(conf: string | null): void {
+    if (!conf) return;
+    try {
+      this.tmux(["source-file", conf]);
+    } catch {
+      return;
     }
   }
 
@@ -100,10 +129,23 @@ export class TmuxTerminalService extends TerminalServiceBase {
       tmuxAttachArgs(conf, name, spec.cols, spec.rows),
       { name: "xterm-256color", cols: spec.cols, rows: spec.rows, cwd: spec.cwd ?? os.homedir(), env },
     );
-    this.track(spec.sessionId, proc, alreadyRunning ? undefined : spec.initialInput);
+    this.sourceConf(conf);
+    this.track(spec.sessionId, proc, alreadyRunning && spec.forceInitialInput !== true ? undefined : spec.initialInput);
+  }
+
+  override captureHistory(sessionId: string): string | null {
+    try {
+      const name = tmuxSessionName(sessionId);
+      if (this.tmuxOutput(["display-message", "-p", "-t", name, "#{alternate_on}"]).trim() === "1") return "";
+      const text = this.tmuxOutput(tmuxCapturePaneArgs(name));
+      return normalizeCapturedText(text);
+    } catch {
+      return null;
+    }
   }
 
   kill(sessionId: string): void {
+    this.notifyExit(sessionId, 0);
     const proc = this.forget(sessionId);
     try {
       this.tmux(["kill-session", "-t", tmuxSessionName(sessionId)]);
@@ -113,3 +155,6 @@ export class TmuxTerminalService extends TerminalServiceBase {
     } catch {}
   }
 }
+
+const normalizeCapturedText = (text: string): string =>
+  text.length === 0 ? "" : text.replace(/\r?\n/g, "\r\n");

@@ -17,8 +17,13 @@ import { renderSidebarSkeletons } from "./Loading.js";
 import { renderSessionItem, type SessionItemHandlers } from "./SessionItem.js";
 import { SidebarResizer } from "./SidebarResizer.js";
 
-export interface SidebarHandlers extends SessionItemHandlers {
+export interface SidebarHandlers {
+  onSelect(id: SessionId): void;
+  onTogglePin(id: SessionId): void;
+  onCopyConversation(id: SessionId): void;
+  onResumeInCockpit(id: SessionId): void;
   onToggleCollapsed(): void;
+  onDeleteSessions(ids: readonly SessionId[], permanent?: boolean): void;
 }
 
 export class Sidebar {
@@ -34,11 +39,30 @@ export class Sidebar {
   private byIdCache: Map<string, SessionSummary> | null = null;
   private byIdCacheFor: readonly SessionSummary[] | null = null;
   private hasLoaded = false;
+  private selectMode = false;
+  private readonly selectedIds = new Set<string>();
+  private readonly itemHandlers: SessionItemHandlers;
+  private selectToggle!: HTMLButtonElement;
+  private selectRow!: HTMLElement;
+  private bulkCount!: HTMLElement;
+  private bulkRemoveBtn!: HTMLButtonElement;
+  private bulkDeleteBtn!: HTMLButtonElement;
 
   constructor(
     private readonly store: Store,
     private readonly handlers: SidebarHandlers,
   ) {
+    this.itemHandlers = {
+      onSelect: (id) => {
+        if (this.selectMode) this.toggleSelect(id);
+        else this.handlers.onSelect(id);
+      },
+      onTogglePin: (id) => this.handlers.onTogglePin(id),
+      onCopyConversation: (id) => this.handlers.onCopyConversation(id),
+      onResumeInCockpit: (id) => this.handlers.onResumeInCockpit(id),
+      onDeleteSession: (id) => this.handlers.onDeleteSessions([id], false),
+      onToggleSelect: (id) => this.toggleSelect(id),
+    };
     this.root = h("nav", {
       className: "sidebar",
       attrs: { "aria-label": "Claude Code sessions" },
@@ -94,6 +118,7 @@ export class Sidebar {
     this.root.appendChild(searchBox);
 
     this.root.appendChild(this.buildDateFilters());
+    this.root.appendChild(this.buildSelectBar());
 
     this.listContainer = h("div", {
       className: "session-list",
@@ -105,7 +130,6 @@ export class Sidebar {
     const resizer = new SidebarResizer({
       target: this.root,
       initialPx: this.store.state.sidebarWidth,
-      onLivePx: () => {},
       onCommitPx: (px) => this.store.update({ sidebarWidth: px }),
     });
     this.root.appendChild(resizer.element);
@@ -132,6 +156,8 @@ export class Sidebar {
     this.sessions = sessions;
     this.byIdCache = null;
     this.byIdCacheFor = null;
+    const liveIds = new Set<string>(sessions.map((s) => s.session_id));
+    for (const id of [...this.selectedIds]) if (!liveIds.has(id)) this.selectedIds.delete(id);
 
     if (!this.hasLoaded) {
       this.listContainer.querySelectorAll(".session-item-skeleton").forEach((el) => el.remove());
@@ -164,7 +190,9 @@ export class Sidebar {
       let node: HTMLButtonElement;
 
       if (needsRebuild) {
-        node = renderSessionItem(s, isActive, this.handlers);
+        node = renderSessionItem(s, isActive, this.itemHandlers, {
+          selected: this.selectMode && this.selectedIds.has(s.session_id),
+        });
         if (cached) {
           cached.replaceWith(node);
         } else if (prevNode && prevNode.nextSibling) {
@@ -194,7 +222,100 @@ export class Sidebar {
     }
     this.listContainer.querySelector(".empty-list-hint")?.remove();
     this.applyFilter();
+    this.renderBulkBar();
     this.restoreFocus(previousFocusedId);
+  }
+
+  private buildSelectBar(): HTMLElement {
+    this.selectToggle = h("button", {
+      className: "sidebar-select-btn",
+      attrs: { type: "button", title: "Select multiple sessions to remove from the dashboard" },
+      textContent: "Select",
+      on: { click: () => this.toggleSelectMode() },
+    });
+    this.bulkCount = h("span", { className: "sidebar-bulk-count" });
+    this.bulkRemoveBtn = h("button", {
+      className: "sidebar-bulk-remove",
+      attrs: { type: "button", title: "Hide the selected sessions from the dashboard (reversible; transcripts kept)" },
+      textContent: "Remove",
+      on: { click: () => this.removeSelected() },
+    });
+    this.bulkDeleteBtn = h("button", {
+      className: "sidebar-bulk-delete",
+      attrs: { type: "button", title: "Delete the selected transcripts from disk (moves to Trash, also removes them from Claude Code)" },
+      textContent: "Delete files",
+      on: { click: () => this.deleteFilesSelected() },
+    });
+    const buttons = h(
+      "div",
+      { className: "sidebar-bulk-buttons" },
+      this.selectToggle,
+      this.bulkDeleteBtn,
+      this.bulkRemoveBtn,
+    );
+    this.selectRow = h("div", { className: "sidebar-selectrow" }, this.bulkCount, buttons);
+    return this.selectRow;
+  }
+
+  private toggleSelectMode(): void {
+    this.selectMode = !this.selectMode;
+    this.listContainer.classList.toggle("select-mode", this.selectMode);
+    this.selectToggle.textContent = this.selectMode ? "Done" : "Select";
+    this.selectToggle.classList.toggle("active", this.selectMode);
+    if (!this.selectMode) this.clearSelectionDom();
+    this.renderBulkBar();
+  }
+
+  private toggleSelect(id: string): void {
+    const has = this.selectedIds.has(id);
+    if (has) this.selectedIds.delete(id);
+    else this.selectedIds.add(id);
+    const node = this.listContainer.querySelector(`.session-item[data-session-id="${CSS.escape(id)}"]`);
+    if (node) {
+      node.classList.toggle("selected", !has);
+      const check = node.querySelector(".session-item-check");
+      check?.classList.toggle("checked", !has);
+      check?.setAttribute("aria-pressed", String(!has));
+    }
+    this.renderBulkBar();
+  }
+
+  private removeSelected(): void {
+    const ids = [...this.selectedIds] as SessionId[];
+    if (ids.length === 0) return;
+    this.handlers.onDeleteSessions(ids, false);
+    this.selectMode = false;
+    this.listContainer.classList.remove("select-mode");
+    this.selectToggle.textContent = "Select";
+    this.selectToggle.classList.remove("active");
+    this.clearSelectionDom();
+    this.renderBulkBar();
+  }
+
+  private deleteFilesSelected(): void {
+    const ids = [...this.selectedIds] as SessionId[];
+    if (ids.length === 0) return;
+    this.handlers.onDeleteSessions(ids, true);
+  }
+
+  private clearSelectionDom(): void {
+    this.selectedIds.clear();
+    this.listContainer.querySelectorAll(".session-item.selected").forEach((n) => n.classList.remove("selected"));
+    this.listContainer.querySelectorAll(".session-item-check.checked").forEach((n) => {
+      n.classList.remove("checked");
+      n.setAttribute("aria-pressed", "false");
+    });
+  }
+
+  private renderBulkBar(): void {
+    this.selectRow.classList.toggle("select-active", this.selectMode);
+    if (!this.selectMode) return;
+    const count = this.selectedIds.size;
+    this.bulkCount.textContent = count === 0 ? "Tap sessions to select" : `${count} selected`;
+    this.bulkRemoveBtn.textContent = count > 0 ? `Remove ${count}` : "Remove";
+    this.bulkRemoveBtn.disabled = count === 0;
+    this.bulkDeleteBtn.textContent = count > 0 ? `Delete ${count}` : "Delete files";
+    this.bulkDeleteBtn.disabled = count === 0;
   }
 
   private applyFilter(): void {
@@ -221,12 +342,8 @@ export class Sidebar {
           return;
         }
       }
-      const searchHit =
-        !q ||
-        session.session_id.toLowerCase().includes(q) ||
-        (session.cwd?.toLowerCase().includes(q) ?? false) ||
-        (session.title?.toLowerCase().includes(q) ?? false) ||
-        session.searchable_text.toLowerCase().includes(q);
+      const title = session.title?.trim() || `Session ${session.session_id.slice(0, 8)}`;
+      const searchHit = !q || title.toLowerCase().includes(q);
       el.style.display = searchHit ? "" : "none";
     });
   }
@@ -297,4 +414,3 @@ export class Sidebar {
     );
   }
 }
-

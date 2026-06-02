@@ -5,7 +5,7 @@ import type {
   Space,
   SpaceId,
 } from "./domain/profiles";
-import type { ModelChoice } from "../../shared/models";
+import type { EffortChoice, ModelChoice } from "../../shared/models";
 import type { PermissionMode } from "../../shared/permissionModes";
 import type { LayoutNode } from "./domain/splitTree";
 
@@ -41,7 +41,8 @@ export type CockpitHostToWebview =
   | { readonly type: "terminalActive"; readonly sessionId: string }
   | { readonly type: "cockpitLayout"; readonly layout: CockpitLayout }
   | { readonly type: "cockpitProfileInvalid"; readonly errors: readonly ProfileValidationError[] }
-  | { readonly type: "cockpitNotice"; readonly level: "info" | "warning" | "error"; readonly message: string };
+  | { readonly type: "cockpitNotice"; readonly level: "info" | "warning" | "error"; readonly message: string }
+  | { readonly type: "cockpitFolderPicked"; readonly context: string; readonly path: string | null };
 
 export type CockpitWebviewToHost =
   | { readonly type: "cockpitReady" }
@@ -55,6 +56,7 @@ export type CockpitWebviewToHost =
       readonly type: "cockpitQuickLaunch";
       readonly name: string;
       readonly model: ModelChoice;
+      readonly effort: EffortChoice;
       readonly permissionMode: PermissionMode;
       readonly cwd: string | null;
       readonly spaceId: string | null;
@@ -67,10 +69,12 @@ export type CockpitWebviewToHost =
   | { readonly type: "cockpitDeleteSpace"; readonly spaceId: SpaceId }
   | { readonly type: "cockpitNewTerminal"; readonly spaceId: string | null }
   | { readonly type: "cockpitDetachTab"; readonly sessionId: string }
+  | { readonly type: "cockpitPickFolder"; readonly context: string }
   | { readonly type: "terminalInput"; readonly sessionId: string; readonly data: string }
   | { readonly type: "terminalResize"; readonly sessionId: string; readonly cols: number; readonly rows: number }
   | { readonly type: "terminalClose"; readonly sessionId: string }
   | { readonly type: "cockpitResumeSession"; readonly sessionId: string }
+  | { readonly type: "cockpitPauseSession"; readonly sessionId: string }
   | { readonly type: "cockpitAddTab"; readonly windowId: string }
   | { readonly type: "cockpitMoveSession"; readonly sessionId: string; readonly spaceId: string | null }
   | {

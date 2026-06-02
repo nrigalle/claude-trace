@@ -52,6 +52,65 @@ export const __reset = (): void => {
   terminalCounter = 0;
 };
 
+export const __waitForProcessesToExit = async (timeoutMs = 2000): Promise<void> => {
+  const start = Date.now();
+  while (__testState.processes.size > 0 && Date.now() - start < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  if (__testState.processes.size > 0) throw new Error("mock terminal processes did not exit");
+};
+
+const parseShellArgs = (input: string): string[] => {
+  const args: string[] = [];
+  let current = "";
+  let quote: "'" | "\"" | null = null;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]!;
+    if (quote === "'") {
+      if (ch === "'") {
+        if (input[i + 1] === "'") {
+          current += "'";
+          i += 1;
+        } else {
+          quote = null;
+        }
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (quote === "\"") {
+      if (ch === "\"") quote = null;
+      else current += ch;
+      continue;
+    }
+    if (ch === "'" || ch === "\"") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "\\") {
+      const next = input[i + 1];
+      if (next !== undefined) {
+        current += next;
+        i += 1;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current.length > 0) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (current.length > 0) args.push(current);
+  return args;
+};
+
 const makeTerminal = (opts: { name?: string; cwd?: string }): FakeTerminal => {
   const id = ++terminalCounter;
   const cwd = opts.cwd ?? process.cwd();
@@ -76,12 +135,10 @@ const makeTerminal = (opts: { name?: string; cwd?: string }): FakeTerminal => {
       const mockBinary = __testState.mockBinary;
       if (mockBinary && trimmed.startsWith("MOCK_CLAUDE")) {
         const remainder = trimmed.slice("MOCK_CLAUDE".length).trim();
-        const shellCommand = `${JSON.stringify(process.execPath)} ${JSON.stringify(mockBinary)} ${remainder}`;
-        child = childSpawn(shellCommand, [], {
+        child = childSpawn(process.execPath, [mockBinary, ...parseShellArgs(remainder)], {
           cwd,
           env: { ...process.env },
           stdio: ["pipe", "pipe", "pipe"],
-          shell: true,
         });
         __testState.processes.set(id, child);
         child.stderr.on("data", (d: Buffer) => { if (process.env.MOCK_DEBUG === "1") process.stderr.write(`[mock-stderr ${id}] ${d.toString()}`); });
@@ -105,7 +162,6 @@ const makeTerminal = (opts: { name?: string; cwd?: string }): FakeTerminal => {
       if (c && !c.killed) {
         try { c.kill("SIGTERM"); } catch {}
       }
-      __testState.processes.delete(id);
       for (const listener of __testState.closeListeners) listener(terminal);
     },
   };

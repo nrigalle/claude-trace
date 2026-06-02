@@ -32,6 +32,7 @@ export interface AppHandlers {
   onCopyConversation(id: SessionId): void;
   onResumeInCockpit(id: SessionId): void;
   onTogglePin(id: SessionId): void;
+  onDeleteSessions(ids: readonly SessionId[], permanent?: boolean): void;
   onBackToHome(): void;
   onSaveDetailLayout(layout: readonly DetailBlockConfig[]): void;
 }
@@ -104,6 +105,7 @@ export class App {
       onCopyConversation: handlers.onCopyConversation,
       onResumeInCockpit: handlers.onResumeInCockpit,
       onToggleCollapsed: () => this.setSidebarCollapsed(!this.store.state.sidebarCollapsed),
+      onDeleteSessions: handlers.onDeleteSessions,
     });
     this.sidebar.mount(this.root);
 
@@ -284,7 +286,7 @@ export class App {
       });
       const width = h("button", {
         className: "ct-cz-width",
-        attrs: { type: "button", title: cfg.span === 1 ? "Half width — click for full" : "Full width — click for half" },
+        attrs: { type: "button", title: cfg.span === 1 ? "Half width. Click for full" : "Full width. Click for half" },
         textContent: cfg.span === 1 ? "½" : "▭",
         on: {
           click: () =>
@@ -360,17 +362,42 @@ export class App {
       if (e.key === "Escape") close();
     };
 
+    const renderTurn = (t: { role: string; text: string }): HTMLElement => {
+      const copyBtn = h("button", {
+        className: "ct-chat-copy",
+        attrs: { type: "button", title: "Copy this message to the clipboard" },
+        textContent: "Copy",
+        on: {
+          click: async () => {
+            try {
+              await navigator.clipboard.writeText(t.text);
+              copyBtn.textContent = "Copied";
+              copyBtn.classList.add("copied");
+              window.setTimeout(() => {
+                copyBtn.textContent = "Copy";
+                copyBtn.classList.remove("copied");
+              }, 1400);
+            } catch {
+              copyBtn.textContent = "Failed";
+              window.setTimeout(() => { copyBtn.textContent = "Copy"; }, 1400);
+            }
+          },
+        },
+      });
+      return h(
+        "div",
+        { className: `ct-chat-turn ${t.role}` },
+        h("div", { className: "ct-chat-turn-head" },
+          h("div", { className: "ct-chat-role", textContent: t.role === "you" ? "You" : "Claude" }),
+          copyBtn,
+        ),
+        h("div", { className: "ct-chat-text", textContent: t.text }),
+      );
+    };
     const messages =
       turns.length === 0
         ? [h("div", { className: "ct-chat-empty", textContent: "No conversation has been captured for this session yet." })]
-        : turns.map((t) =>
-            h(
-              "div",
-              { className: `ct-chat-turn ${t.role}` },
-              h("div", { className: "ct-chat-role", textContent: t.role === "you" ? "You" : "Claude" }),
-              h("div", { className: "ct-chat-text", textContent: t.text }),
-            ),
-          );
+        : turns.map(renderTurn);
 
     const panel = h(
       "div",

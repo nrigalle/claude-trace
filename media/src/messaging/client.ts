@@ -7,12 +7,17 @@ import type {
   CockpitHostToWebview,
   CockpitWebviewToHost,
 } from "../../../src/features/cockpit/protocol";
+import type {
+  LibraryHostToWebview,
+  LibraryWebviewToHost,
+} from "../../../src/features/library/protocol";
 import type { HostToWebview, WebviewToHost } from "../../../src/features/dashboard/protocol";
 import type { Store } from "../state/Store";
 
 type SessionHandler = (msg: HostToWebview) => void;
 type PipelinesHandler = (msg: PipelinesHostToWebview) => void;
 type CockpitHandler = (msg: CockpitHostToWebview) => void;
+type LibraryHandler = (msg: LibraryHostToWebview) => void;
 
 const SESSION_MESSAGE_TYPE_TABLE: Record<HostToWebview["type"], true> = {
   update: true,
@@ -43,9 +48,24 @@ const COCKPIT_MESSAGE_TYPE_TABLE: Record<CockpitHostToWebview["type"], true> = {
   cockpitLayout: true,
   cockpitProfileInvalid: true,
   cockpitNotice: true,
+  cockpitFolderPicked: true,
 };
 const COCKPIT_MESSAGE_TYPES: ReadonlySet<CockpitHostToWebview["type"]> = new Set(
   Object.keys(COCKPIT_MESSAGE_TYPE_TABLE) as CockpitHostToWebview["type"][],
+);
+
+const LIBRARY_MESSAGE_TYPE_TABLE: Record<LibraryHostToWebview["type"], true> = {
+  librarySnapshot: true,
+  libraryNotice: true,
+  libraryImportCandidates: true,
+  librarySyncProgress: true,
+  assistantReply: true,
+  assistantProgress: true,
+  assistantError: true,
+  assistantBusy: true,
+};
+const LIBRARY_MESSAGE_TYPES: ReadonlySet<LibraryHostToWebview["type"]> = new Set(
+  Object.keys(LIBRARY_MESSAGE_TYPE_TABLE) as LibraryHostToWebview["type"][],
 );
 
 export class MessageClient {
@@ -54,6 +74,7 @@ export class MessageClient {
   private sessionHandler: SessionHandler | null = null;
   private pipelinesHandler: PipelinesHandler | null = null;
   private cockpitHandler: CockpitHandler | null = null;
+  private libraryHandler: LibraryHandler | null = null;
 
   constructor(private readonly store: Store) {
     window.addEventListener("message", (e: MessageEvent<unknown>) => {
@@ -66,6 +87,8 @@ export class MessageClient {
         this.pipelinesHandler?.(data as PipelinesHostToWebview);
       } else if (COCKPIT_MESSAGE_TYPES.has(type as CockpitHostToWebview["type"])) {
         this.cockpitHandler?.(data as CockpitHostToWebview);
+      } else if (LIBRARY_MESSAGE_TYPES.has(type as LibraryHostToWebview["type"])) {
+        this.libraryHandler?.(data as LibraryHostToWebview);
       }
     });
   }
@@ -82,7 +105,17 @@ export class MessageClient {
     this.cockpitHandler = handler;
   }
 
-  send(msg: WebviewToHost | PipelinesWebviewToHost | CockpitWebviewToHost): void {
+  onLibraryUpdate(handler: LibraryHandler): void {
+    this.libraryHandler = handler;
+  }
+
+  send(
+    msg:
+      | WebviewToHost
+      | PipelinesWebviewToHost
+      | CockpitWebviewToHost
+      | LibraryWebviewToHost,
+  ): void {
     this.store.vscode.postMessage(msg);
   }
 

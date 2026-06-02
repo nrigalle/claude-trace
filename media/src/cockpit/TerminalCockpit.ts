@@ -1,16 +1,4 @@
-import { Terminal, type ITheme } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
-import { MODEL_OPTIONS } from "../../../src/shared/models";
-import { PERMISSION_MODES } from "../../../src/shared/permissionModes";
-import {
-  DEFAULT_NAME_TEMPLATE,
-  MAX_BATCH,
-  clampCount,
-  toProfileId,
-  toSpaceId,
-  type SessionProfile,
-} from "../../../src/features/cockpit/domain/profiles";
+import { toSpaceId } from "../../../src/features/cockpit/domain/profiles";
 import type {
   CockpitHostToWebview,
   CockpitLayout,
@@ -20,19 +8,18 @@ import type {
 } from "../../../src/features/cockpit/protocol";
 import { assertNeverCockpit } from "../../../src/features/cockpit/protocol";
 import { dock, syncTree, type DropEdge, type LayoutNode } from "../../../src/features/cockpit/domain/splitTree";
-import type { ModelChoice } from "../../../src/shared/models";
-import type { PermissionMode } from "../../../src/shared/permissionModes";
 import { ICONS } from "../ui/icons.js";
 import { clear, h } from "../ui/h.js";
+import { renderLayoutNode } from "./cockpitLayoutView.js";
+import { CockpitLauncher } from "./cockpitLauncher.js";
+import { createCockpitTerminal, type CockpitTerminalView } from "./terminalCore.js";
+import { ALL_FOLDER, compactPath, formatStartTime, newId } from "./cockpitUtils.js";
 
 export interface TerminalCockpitDeps {
   send(msg: CockpitWebviewToHost): void;
 }
 
-interface TerminalView {
-  readonly term: Terminal;
-  readonly fit: FitAddon;
-  readonly termHost: HTMLElement;
+interface TerminalView extends CockpitTerminalView {
   windowId: string;
   initialised: boolean;
   gotData: boolean;
@@ -43,67 +30,37 @@ interface TerminalView {
 interface WindowTile {
   readonly tile: HTMLElement;
   readonly tabStrip: HTMLElement;
+  readonly metaBar: HTMLElement;
   readonly termMount: HTMLElement;
   readonly resumeOverlay: HTMLElement;
   readonly bootingOverlay: HTMLElement;
+  readonly status: HTMLElement;
   activeId: string;
+  announced: string;
 }
 
-const ALL_FOLDER = "__all__";
-const CHUNKY_WHEEL_PX = 40;
-const TRACKPAD_SCROLL_SENSITIVITY = 2.5;
-const ROW_HEIGHT_PER_WEIGHT = 150;
-
-const TERM_THEME: ITheme = {
-  background: "#100f14",
-  foreground: "#d6d6e0",
-  cursor: "#e8956f",
-  cursorAccent: "#100f14",
-  selectionBackground: "rgba(217,119,87,0.32)",
-  selectionForeground: "#ffffff",
-  black: "#1b1a22",
-  red: "#e0795c",
-  green: "#9ece6a",
-  yellow: "#e0af68",
-  blue: "#7aa2f7",
-  magenta: "#bb9af7",
-  cyan: "#7dcfff",
-  white: "#c8c8d4",
-  brightBlack: "#565666",
-  brightRed: "#f08a6a",
-  brightGreen: "#b9f27c",
-  brightYellow: "#f2c88a",
-  brightBlue: "#9bb8ff",
-  brightMagenta: "#d2b8ff",
-  brightCyan: "#a4dcff",
-  brightWhite: "#ffffff",
-};
-
-const newId = (): string =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+type AttentionReason = "stop" | "notify" | "bell";
 
 export class TerminalCockpit {
   private readonly root: HTMLElement;
   private readonly folderBar: HTMLElement;
+  private readonly topbarActions: HTMLElement;
   private readonly launcherEl: HTMLElement;
   private readonly gridEl: HTMLElement;
+  private readonly launcher: CockpitLauncher;
   private readonly views = new Map<string, TerminalView>();
   private readonly tiles = new Map<string, WindowTile>();
 
   private state: CockpitState = { profiles: [], spaces: [], terminals: [] };
   private loaded = false;
   private activeFolder: string = ALL_FOLDER;
-  private launcherOpen = false;
   private creatingFolder = false;
   private renamingFolder: string | null = null;
-  private editing: SessionProfile | null = null;
-  private quickCount = 1;
-  private quickPrefill: SessionProfile | null = null;
   private resizing = false;
   private fitTimer: number | null = null;
   private readonly attention = new Set<string>();
+  private readonly attentionReasons = new Map<string, AttentionReason>();
+  private readonly pendingFocus = new Set<string>();
   private readonly trees = new Map<string, LayoutNode | null>();
   private saveLayoutTimer: number | null = null;
   private fullscreen = false;
@@ -111,12 +68,23 @@ export class TerminalCockpit {
 
   constructor(private readonly deps: TerminalCockpitDeps) {
     this.folderBar = h("div", { className: "tc-folders" });
+    this.topbarActions = h("div", { className: "tc-topbar-actions" });
     this.launcherEl = h("div", { className: "tc-launcher hidden" });
     this.gridEl = h("div", { className: "tc-grid" });
+    this.launcher = new CockpitLauncher({
+      send: (msg) => this.deps.send(msg),
+      rerender: () => {
+        this.renderFolders();
+        this.renderLauncher();
+      },
+      setActiveFolder: (folder) => {
+        this.activeFolder = folder;
+      },
+    });
     this.root = h(
       "div",
       { className: "tc-root" },
-      h("div", { className: "tc-topbar" }, this.folderBar),
+      h("div", { className: "tc-topbar" }, this.folderBar, this.topbarActions),
       this.launcherEl,
       this.gridEl,
     );
@@ -158,7 +126,10 @@ export class TerminalCockpit {
           const tile = this.tiles.get(view.windowId);
           if (!view.gotData) {
             view.gotData = true;
-            if (tile && tile.activeId === msg.sessionId) tile.bootingOverlay.classList.add("hidden");
+            if (tile && tile.activeId === msg.sessionId) {
+              tile.bootingOverlay.classList.add("hidden");
+              if (this.pendingFocus.delete(msg.sessionId)) this.focusView(msg.sessionId);
+            }
           }
           if (stick && tile && tile.activeId === msg.sessionId) view.term.scrollToBottom();
         }
@@ -171,7 +142,7 @@ export class TerminalCockpit {
         return;
       }
       case "terminalAttention":
-        this.markAttention(msg.sessionId, false);
+        this.markAttention(msg.sessionId, false, msg.reason);
         return;
       case "terminalActive":
         this.clearAttention(msg.sessionId);
@@ -184,6 +155,9 @@ export class TerminalCockpit {
         return;
       case "cockpitNotice":
         this.flash(msg.message, msg.level);
+        return;
+      case "cockpitFolderPicked":
+        if (msg.context === "quick") this.launcher.applyPickedFolder(msg.path);
         return;
       default:
         assertNeverCockpit(msg);
@@ -221,6 +195,8 @@ export class TerminalCockpit {
         view.termHost.remove();
         this.views.delete(id);
         this.attention.delete(id);
+        this.attentionReasons.delete(id);
+        this.pendingFocus.delete(id);
       }
     }
     for (const [wid, tile] of this.tiles) {
@@ -237,28 +213,15 @@ export class TerminalCockpit {
   }
 
   private createTerminalView(session: TerminalSession): void {
-    const term = new Terminal({
-      fontFamily: '"SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Monaco, "Courier New", monospace',
-      fontSize: 12,
-      lineHeight: 1.0,
-      cursorBlink: false,
-      theme: TERM_THEME,
-      scrollback: 10000,
-      allowProposedApi: true,
+    const terminal = createCockpitTerminal(session, {
+      input: (data) => this.deps.send({ type: "terminalInput", sessionId: session.sessionId, data }),
+      bell: () => this.markAttention(session.sessionId, true, "bell"),
+      focus: () => this.focusView(session.sessionId),
+      dropImage: (fileName, dataBase64) =>
+        this.deps.send({ type: "cockpitDropImage", sessionId: session.sessionId, fileName, dataBase64 }),
     });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    this.tameWheel(term);
-    const termHost = h("div", { className: "tc-term hidden" });
-    term.onData((data) => {
-      this.deps.send({ type: "terminalInput", sessionId: session.sessionId, data });
-    });
-    term.onBell(() => this.markAttention(session.sessionId));
-    this.wireImageDrop(termHost, session.sessionId);
     this.views.set(session.sessionId, {
-      term,
-      fit,
-      termHost,
+      ...terminal,
       windowId: session.windowId,
       initialised: false,
       gotData: false,
@@ -267,45 +230,27 @@ export class TerminalCockpit {
     });
   }
 
-  private wireImageDrop(host: HTMLElement, sessionId: string): void {
-    host.addEventListener("dragover", (e: DragEvent) => {
-      if (!e.dataTransfer) return;
-      const hasFiles = Array.from(e.dataTransfer.items).some((i) => i.kind === "file");
-      if (!hasFiles) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "copy";
-      host.classList.add("tc-term-drop");
-    });
-    host.addEventListener("dragleave", () => host.classList.remove("tc-term-drop"));
-    host.addEventListener("drop", (e: DragEvent) => {
-      const files = e.dataTransfer?.files;
-      if (!files || files.length === 0) return;
-      e.preventDefault();
-      e.stopPropagation();
-      host.classList.remove("tc-term-drop");
-      for (const file of Array.from(files)) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = reader.result;
-          if (typeof result !== "string") return;
-          const base64 = result.slice(result.indexOf(",") + 1);
-          this.deps.send({ type: "cockpitDropImage", sessionId, fileName: file.name, dataBase64: base64 });
-        };
-        reader.readAsDataURL(file);
-      }
-    });
-  }
-
   private createWindowTile(windowId: string): void {
     const tabStrip = h("div", { className: "tc-tabs" });
     const grip = h("span", { className: "tc-tile-grip", innerHTML: ICONS.grip });
+    const pauseBtn = h("button", {
+      className: "tc-tab-pause",
+      attrs: { type: "button", title: "Pause: kill the inner process to free RAM. Click Resume to bring it back.", "aria-label": "Pause active session" },
+      innerHTML: ICONS.pause,
+      on: {
+        click: () => {
+          const tile = this.tiles.get(windowId);
+          if (tile && tile.activeId) this.deps.send({ type: "cockpitPauseSession", sessionId: tile.activeId });
+        },
+      },
+    });
     const addTab = h("button", {
       className: "tc-tab-add",
       attrs: { type: "button", title: "New tab in this window", "aria-label": "New tab" },
       innerHTML: ICONS.plus,
       on: { click: () => this.deps.send({ type: "cockpitAddTab", windowId }) },
     });
-    const head = h("div", { className: "tc-tile-head", attrs: { title: "Drag to swap places, or drop on a folder" } }, grip, tabStrip, addTab);
+    const head = h("div", { className: "tc-tile-head", attrs: { title: "Drag to swap places, or drop on a folder" } }, grip, tabStrip, pauseBtn, addTab);
     const termMount = h("div", { className: "tc-tile-termmount" });
     const resumeOverlay = h(
       "div",
@@ -314,31 +259,60 @@ export class TerminalCockpit {
         className: "tc-launch-btn",
         attrs: { type: "button" },
         innerHTML: `<span class="tc-btn-icon">${ICONS.play}</span><span>Resume</span>`,
-        on: { click: () => { const tile = this.tiles.get(windowId); if (tile) this.deps.send({ type: "cockpitResumeSession", sessionId: tile.activeId }); } },
+        on: {
+          click: () => {
+            const sessionId = this.activeSessionIdForWindow(windowId);
+            if (!sessionId) return;
+            const tile = this.tiles.get(windowId);
+            const view = this.views.get(sessionId);
+            if (view) {
+              view.gotData = false;
+              view.lastCols = 0;
+              view.lastRows = 0;
+            }
+            tile?.resumeOverlay.classList.add("hidden");
+            tile?.bootingOverlay.classList.remove("hidden");
+            tile?.tile.classList.remove("exited");
+            this.pendingFocus.add(sessionId);
+            this.deps.send({ type: "cockpitResumeSession", sessionId });
+          },
+        },
       }),
-      h("div", { className: "tc-tile-resume-hint", textContent: "This tab ended (or VS Code reloaded). Resume to continue." }),
+      h("div", { className: "tc-tile-resume-hint", textContent: "Paused or exited. Click Resume to continue. The transcript reloads from disk." }),
     );
     const bootingOverlay = h(
       "div",
-      { className: "tc-tile-booting" },
-      h("div", { className: "tc-tile-booting-dot" }),
-      h("div", { className: "tc-tile-booting-text", textContent: "Resuming session…" }),
+      { className: "tc-tile-booting", attrs: { role: "status", "aria-live": "polite" } },
+      h("div", { className: "tc-tile-booting-dot", attrs: { "aria-hidden": "true" } }),
+      h("div", { className: "tc-tile-booting-text", textContent: "Starting session…" }),
     );
+    const metaBar = h("div", { className: "tc-tile-meta" });
     const body = h("div", { className: "tc-tile-body" }, termMount, resumeOverlay, bootingOverlay);
-    const tile = h("div", { className: "tc-tile", dataset: { windowId } }, head, body);
+    const status = h("div", { className: "visually-hidden", attrs: { role: "status", "aria-live": "polite" } });
+    const tile = h(
+      "div",
+      { className: "tc-tile", dataset: { windowId }, attrs: { role: "group" } },
+      head,
+      metaBar,
+      body,
+      status,
+    );
 
     this.wireWindowDrag(head, tile, windowId);
 
-    this.tiles.set(windowId, { tile, tabStrip, termMount, resumeOverlay, bootingOverlay, activeId: "" });
+    this.tiles.set(windowId, { tile, tabStrip, metaBar, termMount, resumeOverlay, bootingOverlay, status, activeId: "", announced: "" });
   }
 
-  private markAttention(sessionId: string, notifyHost = true): void {
+  private markAttention(sessionId: string, notifyHost = true, reason: AttentionReason = "notify"): void {
     const view = this.views.get(sessionId);
     if (!view) return;
     const wasSet = this.attention.has(sessionId);
     this.attention.add(sessionId);
+    this.attentionReasons.set(sessionId, reason);
     this.applyAttention(view.windowId);
     this.applyFolderAttention();
+    this.applyAttentionSummary();
+    this.updateWindowMeta(view.windowId);
     if (notifyHost && !wasSet) {
       const session = this.state.terminals.find((t) => t.sessionId === sessionId);
       this.deps.send({ type: "cockpitAttention", sessionId, name: session?.name ?? "Claude session" });
@@ -349,8 +323,11 @@ export class TerminalCockpit {
     const view = this.views.get(sessionId);
     if (!view) return;
     this.attention.delete(sessionId);
+    this.attentionReasons.delete(sessionId);
     this.applyAttention(view.windowId);
     this.applyFolderAttention();
+    this.applyAttentionSummary();
+    this.updateWindowMeta(view.windowId);
   }
 
   private folderNeedsAttention(folder: string): boolean {
@@ -367,6 +344,19 @@ export class TerminalCockpit {
     }
   }
 
+  private applyAttentionSummary(): void {
+    const button = this.root.querySelector<HTMLButtonElement>(".tc-attention-jump");
+    if (!button) return;
+    const count = this.attentionTerminals().length;
+    const label = count === 0 ? "No sessions need attention" : `${count} session${count === 1 ? "" : "s"} need attention`;
+    button.classList.toggle("on", count > 0);
+    button.disabled = count === 0;
+    button.title = count === 0 ? label : `${label}. Jump to the oldest one.`;
+    button.setAttribute("aria-label", button.title);
+    const countEl = button.querySelector(".tc-attention-count");
+    if (countEl) countEl.textContent = String(count);
+  }
+
   private applyAttention(windowId: string): void {
     const tile = this.tiles.get(windowId);
     if (!tile) return;
@@ -380,9 +370,49 @@ export class TerminalCockpit {
     }
   }
 
+  private attentionTerminals(): TerminalSession[] {
+    const byId = new Map(this.state.terminals.map((t) => [t.sessionId, t]));
+    const terminals: TerminalSession[] = [];
+    for (const id of this.attention) {
+      const terminal = byId.get(id);
+      if (terminal) terminals.push(terminal);
+    }
+    return terminals;
+  }
+
+  private jumpToAttention(): void {
+    const target = this.attentionTerminals()[0];
+    if (!target) return;
+    this.activeFolder = target.spaceId ?? ALL_FOLDER;
+    const tile = this.tiles.get(target.windowId);
+    if (tile) tile.activeId = target.sessionId;
+    this.renderFolders();
+    this.renderGrid();
+    this.focusView(target.sessionId);
+  }
+
+  private focusView(sessionId: string): void {
+    const view = this.views.get(sessionId);
+    if (!view) return;
+    if (view.termHost.classList.contains("hidden")) return;
+    const tile = this.tiles.get(view.windowId);
+    if (tile && (!tile.resumeOverlay.classList.contains("hidden") || !tile.bootingOverlay.classList.contains("hidden"))) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      (view.term as unknown as { focus?: () => void }).focus?.();
+    });
+  }
+
+  private focusActiveInWindow(windowId: string): void {
+    const tile = this.tiles.get(windowId);
+    if (!tile || !tile.activeId) return;
+    this.focusView(tile.activeId);
+  }
+
   private wireWindowDrag(head: HTMLElement, tile: HTMLElement, windowId: string): void {
     head.addEventListener("pointerdown", (e: PointerEvent) => {
-      if (e.button !== 0 || (e.target instanceof Element && e.target.closest(".tc-tab, .tc-tab-add"))) return;
+      if (e.button !== 0 || (e.target instanceof Element && e.target.closest(".tc-tab, .tc-tab-add, .tc-tab-pause"))) return;
       const startX = e.clientX;
       const startY = e.clientY;
       let dragging = false;
@@ -477,25 +507,14 @@ export class TerminalCockpit {
     this.saveLayout();
   }
 
-  private tryWebgl(term: Terminal): void {
-    try {
-      const addon = new WebglAddon();
-      addon.onContextLoss(() => addon.dispose());
-      term.loadAddon(addon);
-    } catch {}
-  }
-
-  private atBottom(term: Terminal): boolean {
+  private atBottom(term: CockpitTerminalView["term"]): boolean {
     return term.buffer.active.viewportY >= term.buffer.active.baseY;
   }
 
-  private tameWheel(term: Terminal): void {
-    term.attachCustomWheelEventHandler((ev) => {
-      const precision = ev.deltaMode === WheelEvent.DOM_DELTA_PIXEL && Math.abs(ev.deltaY) < CHUNKY_WHEEL_PX;
-      const desired = precision ? TRACKPAD_SCROLL_SENSITIVITY : 1;
-      if (term.options.scrollSensitivity !== desired) term.options.scrollSensitivity = desired;
-      return true;
-    });
+  private activeSessionIdForWindow(windowId: string): string | null {
+    const tile = this.tiles.get(windowId);
+    if (tile?.activeId) return tile.activeId;
+    return this.state.terminals.find((t) => t.windowId === windowId)?.sessionId ?? null;
   }
 
   private applyLayout(layout: CockpitLayout): void {
@@ -513,67 +532,9 @@ export class TerminalCockpit {
     }, 500) as unknown as number;
   }
 
-  private buildNode(node: LayoutNode): HTMLElement {
-    if (node.kind === "leaf") {
-      const tile = this.tiles.get(node.id)?.tile;
-      return tile ?? h("div");
-    }
-    const container = h("div", { className: `tc-split tc-split-${node.dir}` });
-    node.children.forEach((child, i) => {
-      if (i > 0) container.appendChild(this.makeDivider(node, i - 1));
-      const weight = node.sizes[i] ?? 1;
-      const cell = h("div", { className: "tc-split-cell" }, this.buildNode(child));
-      cell.style.flexGrow = String(weight);
-      if (node.dir === "col") cell.style.minHeight = `${weight * ROW_HEIGHT_PER_WEIGHT}px`;
-      container.appendChild(cell);
-    });
-    return container;
-  }
-
-  private makeDivider(node: { dir: "row" | "col"; sizes: number[] }, index: number): HTMLElement {
-    const horizontal = node.dir === "row";
-    const handle = h("div", { className: `tc-divider tc-divider-${horizontal ? "v" : "h"}` });
-    handle.addEventListener("pointerdown", (e: PointerEvent) => {
-      e.preventDefault();
-      handle.setPointerCapture(e.pointerId);
-      this.resizing = true;
-      const prev = handle.previousElementSibling as HTMLElement;
-      const next = handle.nextElementSibling as HTMLElement;
-      const startPos = horizontal ? e.clientX : e.clientY;
-      const prevPx = horizontal ? prev.offsetWidth : prev.offsetHeight;
-      const nextPx = horizontal ? next.offsetWidth : next.offsetHeight;
-      const totalPx = prevPx + nextPx;
-      const totalW = (node.sizes[index] ?? 1) + (node.sizes[index + 1] ?? 1);
-      const move = (ev: PointerEvent): void => {
-        const delta = (horizontal ? ev.clientX : ev.clientY) - startPos;
-        const np = Math.max(80, Math.min(totalPx - 80, prevPx + delta));
-        const ratio = np / totalPx;
-        const a = totalW * ratio;
-        const b = totalW * (1 - ratio);
-        node.sizes[index] = a;
-        node.sizes[index + 1] = b;
-        prev.style.flexGrow = String(a);
-        next.style.flexGrow = String(b);
-        if (!horizontal) {
-          prev.style.minHeight = `${a * ROW_HEIGHT_PER_WEIGHT}px`;
-          next.style.minHeight = `${b * ROW_HEIGHT_PER_WEIGHT}px`;
-        }
-      };
-      const up = (): void => {
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        this.resizing = false;
-        this.fitVisible();
-        this.saveLayout();
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
-    });
-    return handle;
-  }
-
   private renderFolders(): void {
     clear(this.folderBar);
+    clear(this.topbarActions);
     const groups = this.groupWindows();
     const windowCount = (folder: string | null): number =>
       [...groups.keys()].filter((wid) => (this.windowFolder(wid) ?? null) === folder).length;
@@ -583,7 +544,7 @@ export class TerminalCockpit {
         "button",
         {
           className: `tc-folder${this.activeFolder === value ? " active" : ""}`,
-          attrs: { type: "button", "data-folder": value, ...(renamable ? { title: "Double-click to rename" } : {}) },
+          attrs: { type: "button", "data-folder": value, ...(renamable ? { title: "Double-click to rename. Drop a session here to file it in this folder." } : {}) },
           on: { click: () => { this.activeFolder = value; this.renderFolders(); this.renderGrid(); } },
         },
         h("span", { className: "tc-folder-icon", innerHTML: ICONS.folder }),
@@ -645,16 +606,36 @@ export class TerminalCockpit {
       this.folderBar.appendChild(
         h("button", {
           className: "tc-folder-add",
-          attrs: { type: "button", title: "New folder", "aria-label": "New folder" },
-          innerHTML: ICONS.plus,
+          attrs: { type: "button", title: "Create a folder to group your sessions", "aria-label": "New folder" },
           on: { click: () => { this.creatingFolder = true; this.renderFolders(); } },
-        }),
+        },
+          h("span", { className: "tc-folder-add-icon", innerHTML: ICONS.plus }),
+          h("span", { textContent: "New folder" }),
+        ),
       );
+      if (this.state.spaces.length === 0) {
+        this.folderBar.appendChild(
+          h("span", { className: "tc-folder-hint", textContent: "Group sessions into folders" }),
+        );
+      }
     }
 
-    this.folderBar.appendChild(h("span", { className: "tc-folder-spacer" }));
+    const attentionCount = this.attentionTerminals().length;
+    this.topbarActions.appendChild(
+      h("button", {
+        className: `tc-attention-jump${attentionCount > 0 ? " on" : ""}`,
+        attrs: {
+          type: "button",
+          title: attentionCount === 0 ? "No sessions need attention" : `${attentionCount} session${attentionCount === 1 ? "" : "s"} need attention. Jump to the oldest one.`,
+          "aria-label": attentionCount === 0 ? "No sessions need attention" : `${attentionCount} session${attentionCount === 1 ? "" : "s"} need attention. Jump to the oldest one.`,
+          ...(attentionCount === 0 ? { disabled: "true" } : {}),
+        },
+        innerHTML: `<span class="tc-btn-icon">${ICONS.bell}</span><span class="tc-attention-count">${attentionCount}</span>`,
+        on: { click: () => this.jumpToAttention() },
+      }),
+    );
 
-    this.folderBar.appendChild(
+    this.topbarActions.appendChild(
       h("button", {
         className: "tc-newterminal",
         attrs: { type: "button", title: "Open a plain shell terminal" },
@@ -663,16 +644,16 @@ export class TerminalCockpit {
       }),
     );
 
-    this.folderBar.appendChild(
+    this.topbarActions.appendChild(
       h("button", {
-        className: `tc-newsession${this.launcherOpen ? " active" : ""}`,
+        className: `tc-newsession${this.launcher.isOpen() ? " active" : ""}`,
         attrs: { type: "button" },
         innerHTML: `<span class="tc-btn-icon">${ICONS.plus}</span><span>Session</span>`,
-        on: { click: () => { this.launcherOpen = !this.launcherOpen; this.renderFolders(); this.renderLauncher(); } },
+        on: { click: () => this.launcher.toggle() },
       }),
     );
 
-    this.folderBar.appendChild(
+    this.topbarActions.appendChild(
       h("button", {
         className: `tc-expand${this.fullscreen ? " active" : ""}`,
         attrs: {
@@ -714,41 +695,11 @@ export class TerminalCockpit {
     return input;
   }
 
-  private stepper(initial: number, min: number, max: number, icon: string, title: string, onChange: (v: number) => void): HTMLElement {
-    let value = initial;
-    const valEl = h("span", { className: "tc-stepper-val", textContent: String(value) });
-    const set = (next: number): void => {
-      const clamped = Math.max(min, Math.min(max, next));
-      if (clamped === value) return;
-      value = clamped;
-      valEl.textContent = String(value);
-      onChange(value);
-    };
-    return h(
-      "div",
-      { className: "tc-stepper", attrs: { title } },
-      h("span", { className: "tc-stepper-icon", innerHTML: icon }),
-      h("button", {
-        className: "tc-stepper-btn",
-        attrs: { type: "button", "aria-label": `Decrease ${title}` },
-        textContent: "−",
-        on: { click: () => set(value - 1) },
-      }),
-      valEl,
-      h("button", {
-        className: "tc-stepper-btn",
-        attrs: { type: "button", "aria-label": `Increase ${title}` },
-        textContent: "+",
-        on: { click: () => set(value + 1) },
-      }),
-    );
-  }
-
   private toggleFullscreen(): void {
     this.fullscreen = !this.fullscreen;
     document.body.classList.toggle("ct-cockpit-fullscreen", this.fullscreen);
     this.renderFolders();
-    this.scheduleFit();
+    this.fitImmediate();
   }
 
   private renderGrid(): void {
@@ -772,6 +723,7 @@ export class TerminalCockpit {
       tile.resumeOverlay.classList.toggle("hidden", active.alive);
       const view = this.views.get(active.sessionId);
       tile.bootingOverlay.classList.toggle("hidden", !active.alive || (view?.gotData ?? false));
+      this.renderTileMeta(tile, active);
     }
 
     const tree = syncTree(this.trees.get(this.activeFolder) ?? null, visibleIds);
@@ -780,7 +732,16 @@ export class TerminalCockpit {
     clear(this.gridEl);
     if (tree) {
       this.gridEl.classList.remove("empty");
-      this.gridEl.appendChild(this.buildNode(tree));
+      this.gridEl.appendChild(
+        renderLayoutNode(tree, {
+          tile: (id) => this.tiles.get(id)?.tile ?? null,
+          setResizing: (value) => {
+            this.resizing = value;
+          },
+          fitVisible: () => this.fitVisible(),
+          saveLayout: () => this.saveLayout(),
+        }),
+      );
     } else {
       this.gridEl.classList.add("empty");
       this.gridEl.appendChild(
@@ -791,7 +752,7 @@ export class TerminalCockpit {
             className: "tc-bigplus",
             attrs: { type: "button", "aria-label": "Start a session" },
             innerHTML: ICONS.plus,
-            on: { click: () => { this.launcherOpen = true; this.renderFolders(); this.renderLauncher(); } },
+            on: { click: () => this.launcher.openForNew() },
           }),
           h("div", { className: "tc-center-title", textContent: "Start a Claude session" }),
           h("div", { className: "tc-center-desc", textContent: "Spin up one or many terminals. Drag a window onto another's edge to split, and drag the divider between them to resize." }),
@@ -802,11 +763,58 @@ export class TerminalCockpit {
     for (const view of this.views.values()) {
       if (!view.initialised && view.termHost.isConnected && !view.termHost.classList.contains("hidden")) {
         view.term.open(view.termHost);
-        this.tryWebgl(view.term);
         view.initialised = true;
       }
     }
-    this.scheduleFit();
+    this.fitImmediate();
+  }
+
+  private updateWindowMeta(windowId: string): void {
+    const tile = this.tiles.get(windowId);
+    if (!tile) return;
+    const active = this.state.terminals.find((t) => t.windowId === windowId && t.sessionId === tile.activeId);
+    if (active) this.renderTileMeta(tile, active);
+  }
+
+  private renderTileMeta(tile: WindowTile, active: TerminalSession): void {
+    clear(tile.metaBar);
+    const status = this.sessionStatus(active);
+    tile.tile.setAttribute("aria-label", `${active.name} session, ${status.label}`);
+    this.announceStatus(tile, active.name, status.label);
+    tile.metaBar.append(
+      h("span", { className: `tc-meta-pill ${status.className}` }, h("span", { className: "tc-meta-dot" }), h("span", { textContent: status.label })),
+      h("span", { className: "tc-meta-pill", textContent: active.kind === "shell" ? "Terminal" : "Claude" }),
+      h("span", {
+        className: "tc-meta-path",
+        attrs: { title: active.cwd ?? "VS Code workspace" },
+        textContent: active.cwd ? compactPath(active.cwd) : "Workspace",
+      }),
+      h("span", { className: "tc-meta-time", textContent: formatStartTime(active.startedAtMs) }),
+    );
+  }
+
+  private announceStatus(tile: WindowTile, name: string, label: string): void {
+    const key = `${tile.activeId}:${label}`;
+    if (tile.announced === key) return;
+    const first = tile.announced === "";
+    tile.announced = key;
+    if (first) return;
+    tile.status.textContent = `${name}: ${label}`;
+  }
+
+  private sessionStatus(active: TerminalSession): { readonly className: string; readonly label: string } {
+    if (this.attention.has(active.sessionId)) {
+      const reason = this.attentionReasons.get(active.sessionId);
+      if (reason === "bell") return { className: "attention", label: "Bell" };
+      if (reason === "notify") return { className: "attention", label: "Needs you" };
+      return { className: "attention", label: "Needs input" };
+    }
+    if (!active.alive) {
+      return active.exitCode === 0
+        ? { className: "paused", label: "Paused" }
+        : { className: "exited", label: `Exited ${active.exitCode ?? ""}`.trim() };
+    }
+    return { className: "running", label: "Running" };
   }
 
   private renderTabs(tile: WindowTile, windowId: string, terminals: readonly TerminalSession[]): void {
@@ -890,9 +898,10 @@ export class TerminalCockpit {
       const view = this.views.get(t.sessionId);
       if (!view) continue;
       if (view.termHost.parentElement !== tile.termMount) tile.termMount.appendChild(view.termHost);
+      view.termHost.setAttribute("aria-label", `${t.name} terminal`);
       const isActive = t.sessionId === tile.activeId;
       view.termHost.classList.toggle("hidden", !isActive);
-      if (isActive) requestAnimationFrame(() => view.term.scrollToBottom());
+      if (isActive && this.atBottom(view.term)) requestAnimationFrame(() => view.term.scrollToBottom());
     }
   }
 
@@ -901,6 +910,7 @@ export class TerminalCockpit {
     if (!tile || tile.activeId === sessionId) return;
     tile.activeId = sessionId;
     this.renderGrid();
+    this.focusActiveInWindow(windowId);
   }
 
   private scheduleFit(): void {
@@ -910,6 +920,15 @@ export class TerminalCockpit {
       this.fitTimer = null;
       this.fitVisible();
     }, 200) as unknown as number;
+  }
+
+  private fitImmediate(): void {
+    if (this.resizing) return;
+    if (this.fitTimer !== null) {
+      clearTimeout(this.fitTimer);
+      this.fitTimer = null;
+    }
+    requestAnimationFrame(() => this.fitVisible());
   }
 
   private renderSkeleton(): void {
@@ -926,12 +945,13 @@ export class TerminalCockpit {
     for (const [sessionId, view] of this.views) {
       if (!view.initialised) continue;
       if (view.termHost.clientWidth === 0 || view.termHost.clientHeight === 0) continue;
+      const stick = this.atBottom(view.term);
       try {
         view.fit.fit();
       } catch {
         continue;
       }
-      view.term.scrollToBottom();
+      if (stick) view.term.scrollToBottom();
       if (view.term.cols === view.lastCols && view.term.rows === view.lastRows) continue;
       view.lastCols = view.term.cols;
       view.lastRows = view.term.rows;
@@ -940,175 +960,7 @@ export class TerminalCockpit {
   }
 
   private renderLauncher(): void {
-    this.launcherEl.classList.toggle("hidden", !this.launcherOpen);
-    clear(this.launcherEl);
-    if (!this.launcherOpen) return;
-    if (this.editing) {
-      this.launcherEl.appendChild(this.profileForm(this.editing));
-      return;
-    }
-    this.launcherEl.appendChild(this.quickForm());
-  }
-
-  private closeLauncher(): void {
-    this.launcherOpen = false;
-    this.quickPrefill = null;
-    this.renderFolders();
-    this.renderLauncher();
-  }
-
-  private quickForm(): HTMLElement {
-    const pre = this.quickPrefill;
-    const nameInput = h("input", { className: "tc-field-input", attrs: { type: "text", placeholder: "Claude", value: pre?.name ?? "" } }) as HTMLInputElement;
-    const modelSel = this.selectFrom(MODEL_OPTIONS.map((m) => ({ value: m.id, label: m.label })), pre?.model ?? "default");
-    const modeSel = this.selectFrom(PERMISSION_MODES.map((m) => ({ value: m.mode, label: m.label })), pre?.permissionMode ?? "default");
-    const spaceSel = this.selectFrom(
-      [{ value: "", label: "No folder" }, ...this.state.spaces.map((s) => ({ value: s.id, label: s.name }))],
-      pre?.spaceId ?? (this.activeFolder === ALL_FOLDER ? "" : this.activeFolder),
-    );
-    const prompt = h("textarea", { className: "tc-prompt", attrs: { rows: "2", placeholder: "Optional first prompt (sent to every terminal)" } }) as HTMLTextAreaElement;
-    if (pre?.initialPrompt) prompt.value = pre.initialPrompt;
-    this.quickCount = clampCount(pre?.defaultCount ?? this.quickCount);
-    const countStepper = this.stepper(this.quickCount, 1, MAX_BATCH, ICONS.terminal, "How many terminals", (v) => { this.quickCount = v; });
-
-    const launch = h("button", {
-      className: "tc-launch-btn tc-launch-primary",
-      attrs: { type: "button" },
-      innerHTML: `<span class="tc-btn-icon">${ICONS.play}</span><span>Launch</span>`,
-      on: {
-        click: () => {
-          this.deps.send({
-            type: "cockpitQuickLaunch",
-            name: nameInput.value,
-            model: modelSel.value as ModelChoice,
-            permissionMode: modeSel.value as PermissionMode,
-            cwd: null,
-            spaceId: spaceSel.value === "" ? null : spaceSel.value,
-            count: clampCount(this.quickCount),
-            prompt: prompt.value.trim().length > 0 ? prompt.value : null,
-          });
-          if (spaceSel.value !== "") this.activeFolder = spaceSel.value;
-          this.closeLauncher();
-        },
-      },
-    });
-
-    const field = (label: string, control: HTMLElement) =>
-      h("label", { className: "tc-qfield" }, h("span", { className: "tc-qlabel", textContent: label }), control);
-
-    const grid = h(
-      "div",
-      { className: "tc-quick-grid" },
-      field("Name", nameInput),
-      field("Model", modelSel),
-      field("Permissions", modeSel),
-      field("Folder", spaceSel),
-      field("Terminals", countStepper),
-    );
-
-    const profilesRow = h("div", { className: "tc-profile-chips" });
-    for (const p of this.state.profiles) {
-      profilesRow.appendChild(
-        h("button", {
-          className: `tc-chip${pre?.id === p.id ? " active" : ""}`,
-          attrs: { type: "button", title: `Use “${p.name}” settings` },
-          textContent: p.name,
-          on: { click: () => { this.quickPrefill = p; this.renderLauncher(); } },
-        }),
-      );
-    }
-    profilesRow.appendChild(
-      h("button", {
-        className: "tc-chip tc-chip-ghost",
-        attrs: { type: "button" },
-        textContent: "＋ Save as profile",
-        on: { click: () => { this.editing = this.draftFromQuick(nameInput.value, modelSel.value, modeSel.value, spaceSel.value, prompt.value); this.renderLauncher(); } },
-      }),
-    );
-
-    const close = h("button", {
-      className: "tc-quick-close",
-      attrs: { type: "button", title: "Close", "aria-label": "Close session setup" },
-      innerHTML: ICONS.close,
-      on: { click: () => this.closeLauncher() },
-    });
-
-    return h(
-      "div",
-      { className: "tc-quick" },
-      h("div", { className: "tc-quick-head" }, h("span", { className: "tc-quick-title", textContent: "New session" }), h("span", { className: "tc-quick-spacer" }), close),
-      grid,
-      prompt,
-      h("div", { className: "tc-quick-actions" }, launch, h("span", { className: "tc-quick-spacer" }), profilesRow),
-    );
-  }
-
-  private draftFromQuick(name: string, model: string, mode: string, space: string, prompt: string): SessionProfile {
-    return {
-      id: newId() as SessionProfile["id"],
-      name: name.trim().length > 0 ? name.trim() : "",
-      model: model as SessionProfile["model"],
-      permissionMode: mode as SessionProfile["permissionMode"],
-      cwd: null,
-      nameTemplate: DEFAULT_NAME_TEMPLATE,
-      initialPrompt: prompt.trim().length > 0 ? prompt : null,
-      defaultCount: clampCount(this.quickCount),
-      spaceId: space === "" ? null : toSpaceId(space),
-    };
-  }
-
-  private selectFrom(options: ReadonlyArray<{ value: string; label: string }>, selected: string): HTMLSelectElement {
-    const sel = h("select", { className: "tc-field-input" }) as HTMLSelectElement;
-    for (const o of options) {
-      const opt = h("option", { textContent: o.label, attrs: { value: o.value } }) as HTMLOptionElement;
-      if (o.value === selected) opt.selected = true;
-      sel.appendChild(opt);
-    }
-    return sel;
-  }
-
-  private profileForm(profile: SessionProfile): HTMLElement {
-    let draft: SessionProfile = profile;
-    const set = (patch: Partial<SessionProfile>) => { draft = { ...draft, ...patch }; };
-    const textField = (label: string, value: string, on: (v: string) => void, placeholder = "") => {
-      const input = h("input", { className: "tc-field-input", attrs: { type: "text", value, placeholder } }) as HTMLInputElement;
-      input.addEventListener("input", () => on(input.value));
-      return h("label", { className: "tc-field" }, h("span", { textContent: label }), input);
-    };
-    const modelSel = this.selectFrom(MODEL_OPTIONS.map((m) => ({ value: m.id, label: m.label })), draft.model);
-    modelSel.addEventListener("change", () => set({ model: modelSel.value as SessionProfile["model"] }));
-    const modeSel = this.selectFrom(PERMISSION_MODES.map((m) => ({ value: m.mode, label: m.label })), draft.permissionMode);
-    modeSel.addEventListener("change", () => set({ permissionMode: modeSel.value as SessionProfile["permissionMode"] }));
-    const spaceSel = this.selectFrom(
-      [{ value: "", label: "No folder" }, ...this.state.spaces.map((s) => ({ value: s.id, label: s.name }))],
-      draft.spaceId ?? "",
-    );
-    spaceSel.addEventListener("change", () => set({ spaceId: spaceSel.value === "" ? null : toSpaceId(spaceSel.value) }));
-    const countInput = h("input", { className: "tc-field-input", attrs: { type: "number", min: "1", max: String(MAX_BATCH), value: String(draft.defaultCount) } }) as HTMLInputElement;
-    countInput.addEventListener("change", () => { const c = clampCount(Number(countInput.value)); set({ defaultCount: c }); countInput.value = String(c); });
-    const save = h("button", {
-      className: "tc-launch-btn",
-      attrs: { type: "button" },
-      textContent: "Save profile",
-      on: { click: () => { this.deps.send({ type: "cockpitSaveProfile", profile: draft }); this.editing = null; this.renderLauncher(); } },
-    });
-    const cancel = h("button", { className: "tc-link", attrs: { type: "button" }, textContent: "Cancel", on: { click: () => { this.editing = null; this.renderLauncher(); } } });
-    const del = this.state.profiles.some((p) => p.id === draft.id)
-      ? h("button", { className: "tc-link tc-danger", attrs: { type: "button" }, textContent: "Delete", on: { click: () => { this.deps.send({ type: "cockpitDeleteProfile", profileId: toProfileId(draft.id) }); this.editing = null; this.renderLauncher(); } } })
-      : null;
-    return h(
-      "div",
-      { className: "tc-form" },
-      textField("Profile name", draft.name, (v) => set({ name: v }), "e.g. Reviewer"),
-      h("label", { className: "tc-field" }, h("span", { textContent: "Model" }), modelSel),
-      h("label", { className: "tc-field" }, h("span", { textContent: "Permission mode" }), modeSel),
-      textField("Working directory", draft.cwd ?? "", (v) => set({ cwd: v.trim() === "" ? null : v }), "Defaults to the workspace root"),
-      textField("Name template", draft.nameTemplate, (v) => set({ nameTemplate: v }), "{profile} {n}"),
-      textField("Initial prompt", draft.initialPrompt ?? "", (v) => set({ initialPrompt: v.trim() === "" ? null : v }), "Optional"),
-      h("label", { className: "tc-field" }, h("span", { textContent: "Default count" }), countInput),
-      h("label", { className: "tc-field" }, h("span", { textContent: "Folder" }), spaceSel),
-      h("div", { className: "tc-form-actions" }, save, cancel, del),
-    );
+    this.launcher.renderInto(this.launcherEl, this.state, this.activeFolder);
   }
 
   private buildToast(level: string, icon: string, title: string | undefined, message: string): HTMLElement {

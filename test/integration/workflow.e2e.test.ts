@@ -3,7 +3,7 @@ import * as os from "os";
 import * as path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { __reset, __testState } from "../stubs/vscode";
+import { __reset, __testState, __waitForProcessesToExit } from "../stubs/vscode";
 import { RealAutomationRunner } from "../../src/features/pipelines/infra/RealAutomationRunner";
 import {
   PipelinesController,
@@ -47,7 +47,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 const positionalPrompt = positionalArgs.join(' ');
 
-const encodeCwd = (c) => c.replace(/\\//g, '-');
+const encodeCwd = (c) => c.replace(/[\\\\/:]/g, '-');
 const cwdDir = path.join(projectsDir, encodeCwd(cwd));
 fs.mkdirSync(cwdDir, { recursive: true });
 
@@ -156,8 +156,9 @@ beforeEach(() => {
   runIdCounter = 0;
 });
 
-afterEach(() => {
+afterEach(async () => {
   runner.dispose();
+  await __waitForProcessesToExit();
   __reset();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });

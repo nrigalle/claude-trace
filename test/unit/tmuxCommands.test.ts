@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { tmuxSessionName, tmuxAttachArgs } from "../../src/features/cockpit/infra/pty/TmuxTerminalService";
+import {
+  tmuxSessionName,
+  tmuxAttachArgs,
+  tmuxCaptureArgs,
+  tmuxAlternateOnArgs,
+  tmuxConfigText,
+} from "../../src/features/cockpit/infra/pty/TmuxTerminalService";
 
 describe("tmux command construction (background-persistent sessions)", () => {
   it("derives a stable, dot-free session name from the session id", () => {
@@ -26,5 +32,22 @@ describe("tmux command construction (background-persistent sessions)", () => {
     expect(args[args.indexOf("-x") + 1]).toBe("120");
     expect(args[args.indexOf("-y") + 1]).toBe("40");
     expect(args[args.indexOf("-f") + 1]).toBe("/my/conf.conf");
+  });
+
+  it("captures the full pane history from the private socket for scrollback replay", () => {
+    expect(tmuxCaptureArgs("ct-x")).toEqual(["-L", "claude-trace", "capture-pane", "-p", "-J", "-S", "-", "-t", "ct-x"]);
+  });
+
+  it("queries alternate-screen state before replaying scrollback", () => {
+    expect(tmuxAlternateOnArgs("ct-x")).toEqual(["-L", "claude-trace", "display-message", "-p", "-t", "ct-x", "#{alternate_on}"]);
+  });
+
+  it("lets full-screen terminal apps use the normal alternate screen instead of dumping UI frames into scrollback", () => {
+    expect(tmuxConfigText()).toContain("set -g alternate-screen on");
+  });
+
+  it("keeps tmux out of UI-level mouse and passthrough handling", () => {
+    expect(tmuxConfigText()).toContain("set -g mouse off");
+    expect(tmuxConfigText()).not.toContain("allow-passthrough");
   });
 });

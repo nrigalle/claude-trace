@@ -1,14 +1,19 @@
 import * as os from "os";
 import * as pty from "node-pty";
 import type { TerminalSpawnSpec } from "../../app/CockpitController";
+import type { ShellQuote } from "../../../../shared/permissionModes";
 import { TerminalServiceBase } from "./TerminalServiceBase";
 
 const defaultShell = (): string => {
-  if (process.platform === "win32") return process.env["COMSPEC"] ?? "powershell.exe";
+  if (process.platform === "win32") return "powershell.exe";
   return process.env["SHELL"] ?? "/bin/bash";
 };
 
 export class PtyTerminalService extends TerminalServiceBase {
+  override shellQuoteStyle(): ShellQuote {
+    return process.platform === "win32" ? "powershell" : "posix";
+  }
+
   spawn(spec: TerminalSpawnSpec): void {
     const proc = pty.spawn(defaultShell(), [], {
       name: "xterm-256color",
@@ -21,6 +26,7 @@ export class PtyTerminalService extends TerminalServiceBase {
   }
 
   kill(sessionId: string): void {
+    this.notifyExit(sessionId, 0);
     const proc = this.forget(sessionId);
     try {
       proc?.kill();

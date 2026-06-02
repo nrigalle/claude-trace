@@ -7,6 +7,7 @@ interface ModelRates {
 }
 
 const RATES_USD_PER_MILLION: Readonly<Record<string, ModelRates>> = {
+  "claude-opus-4-8": { input: 5, output: 25, cache_read: 0.5, cache_write_5m: 6.25, cache_write_1h: 10 },
   "claude-opus-4-7": { input: 5, output: 25, cache_read: 0.5, cache_write_5m: 6.25, cache_write_1h: 10 },
   "claude-opus-4-6": { input: 5, output: 25, cache_read: 0.5, cache_write_5m: 6.25, cache_write_1h: 10 },
   "claude-opus-4-5": { input: 5, output: 25, cache_read: 0.5, cache_write_5m: 6.25, cache_write_1h: 10 },

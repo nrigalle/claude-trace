@@ -1,0 +1,42 @@
+name: Package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  package:
+    name: Package ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: windows-latest
+            target: win32-x64
+          - os: windows-latest
+            target: win32-arm64
+          - os: macos-13
+            target: darwin-x64
+          - os: macos-latest
+            target: darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:unit
+      - run: npm run compile
+      - run: npx @vscode/vsce package --target ${{ matrix.target }} -o "claude-trace-${{ matrix.target }}.vsix"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: claude-trace-${{ matrix.target }}
+          path: "*.vsix"

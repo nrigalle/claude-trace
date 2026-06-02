@@ -18,8 +18,8 @@ import {
   type ProfileId,
   type SessionProfile,
 } from "../domain/profiles";
-import type { ModelChoice } from "../../../shared/models";
-import { buildClaudeCommand, type PermissionMode } from "../../../shared/permissionModes";
+import { DEFAULT_MODEL_CHOICE, normalizeModelChoice, type EffortChoice, type ModelChoice } from "../../../shared/models";
+import { buildClaudeCommand, type PermissionMode, type ShellQuote } from "../../../shared/permissionModes";
 
 export interface CockpitHost {
   postMessage(msg: CockpitHostToWebview): void;
@@ -33,17 +33,26 @@ export interface TerminalSpawnSpec {
   readonly cols: number;
   readonly rows: number;
   readonly initialInput: string;
+  readonly forceInitialInput?: boolean;
 }
 
 export interface TerminalBackend {
   spawn(spec: TerminalSpawnSpec): void;
+  shellQuoteStyle(): ShellQuote;
   write(sessionId: string, data: string): void;
   resize(sessionId: string, cols: number, rows: number): void;
   kill(sessionId: string): void;
   isAlive(sessionId: string): boolean;
+  captureHistory(sessionId: string): string | null;
   onData(listener: (sessionId: string, data: string) => void): { dispose(): void };
   onExit(listener: (sessionId: string, exitCode: number) => void): { dispose(): void };
   dispose(): void;
+}
+
+export interface TerminalHistoryStore {
+  append(sessionId: string, data: string): void;
+  read(sessionId: string): Iterable<string>;
+  delete(sessionId: string): void;
 }
 
 export interface CockpitActions {
@@ -58,6 +67,7 @@ export interface CockpitActions {
   saveDroppedImage(fileName: string, dataBase64: string): string | null;
   loadCockpitLayout(): CockpitLayout;
   saveCockpitLayout(layout: CockpitLayout): void;
+  pickFolder(context: string): Promise<string | null>;
   now(): number;
 }
 
@@ -65,6 +75,7 @@ export interface CockpitControllerDeps {
   readonly host: CockpitHost;
   readonly profileStore: ProfileStore;
   readonly sessionStore: CockpitSessionStore;
+  readonly terminalHistoryStore: TerminalHistoryStore;
   readonly terminals: TerminalBackend;
   readonly actions: CockpitActions;
 }
@@ -79,6 +90,7 @@ interface ManagedTerminal {
   spaceId: string | null;
   readonly cwd: string | null;
   readonly model: ModelChoice;
+  readonly effort: EffortChoice;
   readonly permissionMode: PermissionMode;
   readonly startedAtMs: number;
   readonly kind: TerminalKind;
@@ -90,15 +102,17 @@ export class CockpitController {
   private readonly managed = new Map<string, ManagedTerminal>();
   private readonly nextIndex = new Map<string, number>();
   private readonly attentionActive = new Set<string>();
+  private readonly paused = new Set<string>();
   private disposed = false;
 
   constructor(private readonly deps: CockpitControllerDeps) {
     this.disposables.push(deps.host.onMessage((m) => this.onMessage(m)));
     this.disposables.push(deps.host.onDispose(() => this.dispose()));
     this.disposables.push(
-      deps.terminals.onData((sessionId, data) =>
-        this.deps.host.postMessage({ type: "terminalData", sessionId, data }),
-      ),
+      deps.terminals.onData((sessionId, data) => {
+        this.deps.terminalHistoryStore.append(sessionId, data);
+        this.deps.host.postMessage({ type: "terminalData", sessionId, data });
+      }),
     );
     this.disposables.push(
       deps.terminals.onExit((sessionId, exitCode) => this.onTerminalExit(sessionId, exitCode)),
@@ -116,6 +130,7 @@ export class CockpitController {
         spaceId: s.spaceId,
         cwd: s.cwd,
         model: s.model,
+        effort: s.effort,
         permissionMode: s.permissionMode,
         startedAtMs: s.startedAtMs,
         kind: s.kind,
@@ -134,6 +149,7 @@ export class CockpitController {
       spaceId: m.spaceId,
       cwd: m.cwd,
       model: m.model,
+      effort: m.effort,
       permissionMode: m.permissionMode,
       startedAtMs: m.startedAtMs,
       kind: m.kind,
@@ -157,6 +173,7 @@ export class CockpitController {
       case "cockpitReady":
         this.deps.host.postMessage({ type: "cockpitLayout", layout: this.deps.actions.loadCockpitLayout() });
         this.broadcast();
+        this.replayTerminalHistory();
         return;
       case "cockpitSaveLayout":
         this.deps.actions.saveCockpitLayout(msg.layout);
@@ -200,11 +217,17 @@ export class CockpitController {
         this.deps.actions.cleanupHooks(msg.sessionId);
         this.attentionActive.delete(msg.sessionId);
         this.managed.delete(msg.sessionId);
+        this.deps.terminalHistoryStore.delete(msg.sessionId);
         this.deps.sessionStore.remove(msg.sessionId);
         this.broadcast();
         return;
       case "cockpitResumeSession":
         this.handleResume(msg.sessionId);
+        return;
+      case "cockpitPauseSession":
+        this.paused.add(msg.sessionId);
+        this.deps.terminals.kill(msg.sessionId);
+        this.broadcast();
         return;
       case "cockpitAddTab":
         this.handleAddTab(msg.windowId);
@@ -212,6 +235,13 @@ export class CockpitController {
       case "cockpitNewTerminal":
         this.spawnShell(msg.spaceId);
         return;
+      case "cockpitPickFolder": {
+        const context = msg.context;
+        void this.deps.actions.pickFolder(context).then((path) => {
+          this.deps.host.postMessage({ type: "cockpitFolderPicked", context, path });
+        });
+        return;
+      }
       case "cockpitDetachTab": {
         const tab = this.managed.get(msg.sessionId);
         if (tab && tab.windowId !== tab.sessionId) {
@@ -254,7 +284,7 @@ export class CockpitController {
       this.deps.host.postMessage({ type: "cockpitProfileInvalid", errors });
       return;
     }
-    this.deps.profileStore.saveProfile(profile);
+    this.deps.profileStore.saveProfile({ ...profile, model: normalizeModelChoice(profile.model) });
     this.broadcast();
   }
 
@@ -277,6 +307,7 @@ export class CockpitController {
     this.nextIndex.set(profileKey, start + n);
     this.spawnBatch(names, {
       model: profile.model,
+      effort: profile.effort,
       permissionMode: profile.permissionMode,
       cwd: profile.cwd ?? this.deps.actions.defaultCwd(),
       spaceId: profile.spaceId === null ? null : fromSpaceId(profile.spaceId),
@@ -289,7 +320,8 @@ export class CockpitController {
     const base = msg.name.trim().length > 0 ? msg.name.trim() : "Claude";
     const names = batchNames("{profile} {n}", base, n, 1).map((name) => (n === 1 ? base : name));
     this.spawnBatch(names, {
-      model: msg.model,
+      model: normalizeModelChoice(msg.model),
+      effort: msg.effort,
       permissionMode: msg.permissionMode,
       cwd: msg.cwd ?? this.deps.actions.defaultCwd(),
       spaceId: msg.spaceId,
@@ -301,6 +333,7 @@ export class CockpitController {
     names: readonly string[],
     config: {
       readonly model: ModelChoice;
+      readonly effort: EffortChoice;
       readonly permissionMode: PermissionMode;
       readonly cwd: string | null;
       readonly spaceId: string | null;
@@ -312,17 +345,18 @@ export class CockpitController {
       const command = buildClaudeCommand({
         mode: config.permissionMode,
         model: config.model,
+        effort: config.effort,
         name,
         sessionId,
         initialPrompt: config.prompt,
         settingsPath: this.deps.actions.prepareHooks(sessionId),
-      });
+      }, this.deps.terminals.shellQuoteStyle());
       this.deps.terminals.spawn({
         sessionId,
         cwd: config.cwd,
         cols: DEFAULT_COLS,
         rows: DEFAULT_ROWS,
-        initialInput: `clear && ${command}\r`,
+        initialInput: `${command}\r`,
       });
       const managed: ManagedTerminal = {
         sessionId,
@@ -331,6 +365,7 @@ export class CockpitController {
         spaceId: config.spaceId,
         cwd: config.cwd,
         model: config.model,
+        effort: config.effort,
         permissionMode: config.permissionMode,
         startedAtMs: this.deps.actions.now(),
         kind: "claude",
@@ -355,7 +390,8 @@ export class CockpitController {
       name,
       spaceId,
       cwd,
-      model: "default",
+      model: DEFAULT_MODEL_CHOICE,
+      effort: "default",
       permissionMode: "default",
       startedAtMs: this.deps.actions.now(),
       kind: "shell",
@@ -376,13 +412,14 @@ export class CockpitController {
     const initialInput =
       template.kind === "shell"
         ? ""
-        : `clear && ${buildClaudeCommand({
+        : `${buildClaudeCommand({
             mode: template.permissionMode,
             model: template.model,
+            effort: template.effort,
             name,
             sessionId,
             settingsPath: this.deps.actions.prepareHooks(sessionId),
-          })}\r`;
+          }, this.deps.terminals.shellQuoteStyle())}\r`;
     this.deps.terminals.spawn({
       sessionId,
       cwd: template.cwd,
@@ -397,6 +434,7 @@ export class CockpitController {
       spaceId: template.spaceId,
       cwd: template.cwd,
       model: template.model,
+      effort: template.effort,
       permissionMode: template.permissionMode,
       startedAtMs: this.deps.actions.now(),
       kind: template.kind,
@@ -426,7 +464,8 @@ export class CockpitController {
         name,
         spaceId,
         cwd,
-        model: "default",
+        model: DEFAULT_MODEL_CHOICE,
+        effort: "default",
         permissionMode: "default",
         startedAtMs: this.deps.actions.now(),
         kind: "claude",
@@ -444,17 +483,19 @@ export class CockpitController {
     if (!managed) return false;
     if (this.deps.terminals.isAlive(key)) return false;
     managed.exitCode = null;
+    const forceInitialInput = this.paused.has(key);
     let initialInput = "";
     if (managed.kind === "claude") {
       const hasTranscript = this.deps.actions.transcriptExists(managed.cwd, key);
       const command = buildClaudeCommand({
         mode: managed.permissionMode,
         model: managed.model,
+        effort: managed.effort,
         name: managed.name,
         settingsPath: this.deps.actions.prepareHooks(key),
         ...(hasTranscript ? { resumeId: key } : { sessionId: key }),
-      });
-      initialInput = `clear && ${command}\r`;
+      }, this.deps.terminals.shellQuoteStyle());
+      initialInput = `${command}\r`;
     }
     this.deps.terminals.spawn({
       sessionId: key,
@@ -462,7 +503,9 @@ export class CockpitController {
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
       initialInput,
+      forceInitialInput,
     });
+    this.paused.delete(key);
     return true;
   }
 
@@ -509,5 +552,18 @@ export class CockpitController {
   private broadcast(): void {
     if (this.disposed) return;
     this.deps.host.postMessage({ type: "cockpitState", state: this.buildState() });
+  }
+
+  private replayTerminalHistory(): void {
+    for (const sessionId of this.managed.keys()) {
+      const captured = this.deps.terminals.captureHistory(sessionId);
+      if (captured !== null) {
+        if (captured.length > 0) this.deps.host.postMessage({ type: "terminalData", sessionId, data: captured });
+        continue;
+      }
+      for (const data of this.deps.terminalHistoryStore.read(sessionId)) {
+        this.deps.host.postMessage({ type: "terminalData", sessionId, data });
+      }
+    }
   }
 }

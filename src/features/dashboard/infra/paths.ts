@@ -38,6 +38,9 @@ export const sessionRefForFile = (filePath: string): SessionRef | null => {
   return { sessionId: parsed.sessionId, projectDirName: parsed.projectDirName, filePath };
 };
 
+export const isHiddenAssistantProject = (projectDirName: string): boolean =>
+  projectDirName.includes("-claude-trace-library-assistant-");
+
 export const discoverSessionRefs = (): SessionRef[] => {
   const out: SessionRef[] = [];
   let projects: fs.Dirent[];
@@ -48,6 +51,7 @@ export const discoverSessionRefs = (): SessionRef[] => {
   }
   for (const project of projects) {
     if (!project.isDirectory()) continue;
+    if (isHiddenAssistantProject(project.name)) continue;
     const projectPath = path.join(PROJECTS_DIR, project.name);
     let entries: fs.Dirent[];
     try {

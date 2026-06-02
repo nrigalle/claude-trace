@@ -43,8 +43,8 @@ describe("RealDeterministicRunner — scripts", () => {
 
   it("runs in the provided workspace cwd", async () => {
     const res = await runner.runScript({
-      interpreter: "bash",
-      code: "pwd",
+      interpreter: "node",
+      code: "console.log(process.cwd())",
       cwd: tmp,
       env: {},
       signal: noSignal,

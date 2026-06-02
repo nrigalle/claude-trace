@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { SessionId, SessionSummary } from "../domain/types";
-import type { WebviewHost } from "../../../shared/WebviewHost";
+import { toSessionId } from "../domain/types";
+import type { WebviewHost } from "../infra/WebviewHost";
 import type {
   WatcherChange,
   WatcherSource,
@@ -21,6 +22,8 @@ export interface DashboardActions {
   exportChatMarkdown(id: SessionId): Promise<void>;
   copyConversation(id: SessionId): void;
   togglePin(id: SessionId): Promise<void>;
+  deleteSessions(ids: readonly SessionId[]): Promise<void>;
+  deleteSessionFiles(ids: readonly SessionId[]): Promise<void>;
   setActiveSession(id: SessionId | null): void;
   invalidateSession(id: SessionId): void;
   loadDetailLayout(): readonly DetailLayoutEntry[];
@@ -44,7 +47,7 @@ export class DashboardController {
     initialState?: SerializedState,
   ) {
     if (initialState?.selectedId) {
-      this.activeSessionId = initialState.selectedId as SessionId;
+      this.activeSessionId = toSessionId(initialState.selectedId);
     }
     this.actions.setActiveSession(this.activeSessionId);
 
@@ -125,6 +128,14 @@ export class DashboardController {
         this.listDirty = true;
         void this.handleTogglePin(msg.sessionId);
         return;
+      case "deleteSessions":
+        for (const id of msg.sessionIds) {
+          this.lastSent.delete(id);
+          this.dirtySessions.add(id);
+        }
+        this.listDirty = true;
+        void this.handleDeleteSessions(msg.sessionIds, msg.permanent ?? false);
+        return;
       case "saveDetailLayout":
         this.actions.saveDetailLayout(msg.layout);
         return;
@@ -145,6 +156,17 @@ export class DashboardController {
     await this.actions.togglePin(id);
     this.lastSent.delete(id);
     this.dirtySessions.add(id);
+    this.listDirty = true;
+    if (this.host.visible) this.flush();
+  }
+
+  private async handleDeleteSessions(ids: readonly SessionId[], permanent: boolean): Promise<void> {
+    if (permanent) await this.actions.deleteSessionFiles(ids);
+    else await this.actions.deleteSessions(ids);
+    for (const id of ids) {
+      this.lastSent.delete(id);
+      this.dirtySessions.add(id);
+    }
     this.listDirty = true;
     if (this.host.visible) this.flush();
   }

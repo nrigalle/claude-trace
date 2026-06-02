@@ -1,7 +1,7 @@
 import * as crypto from "crypto";
 import * as vscode from "vscode";
-import { VIEW_TITLE, VIEW_TYPE } from "./config";
-import type { HostToWebview, WebviewToHost } from "../features/dashboard/protocol";
+import { VIEW_TITLE, VIEW_TYPE } from "../../../shared/config";
+import type { HostToWebview, WebviewToHost } from "../protocol";
 
 const DASHBOARD_MESSAGE_TYPE_TABLE: Record<WebviewToHost["type"], true> = {
   ready: true,
@@ -15,6 +15,7 @@ const DASHBOARD_MESSAGE_TYPE_TABLE: Record<WebviewToHost["type"], true> = {
   exportChatMarkdown: true,
   copyConversation: true,
   togglePin: true,
+  deleteSessions: true,
   saveDetailLayout: true,
 };
 const DASHBOARD_MESSAGE_TYPES: ReadonlySet<WebviewToHost["type"]> = new Set(

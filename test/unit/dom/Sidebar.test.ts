@@ -56,6 +56,7 @@ const noopHandlers = {
   onCopyConversation: (_: SessionId) => {},
   onResumeInCockpit: (_: SessionId) => {},
   onToggleCollapsed: () => {},
+  onDeleteSessions: (_ids: readonly SessionId[]) => {},
 };
 
 const stats = (total: number, tools: number, cost: number): GlobalStats => ({
@@ -63,6 +64,77 @@ const stats = (total: number, tools: number, cost: number): GlobalStats => ({
   total_tool_calls: tools,
   total_duration_ms: 0,
   total_cost_usd: cost,
+});
+
+describe("Sidebar — delete and multi-select", () => {
+  beforeEach(() => installVsCodeStub());
+  afterEach(() => cleanupVsCodeStub());
+
+  const mountWith = async (
+    onDeleteSessions: (ids: readonly SessionId[], permanent?: boolean) => void,
+  ): Promise<HTMLElement> => {
+    const { Store, Sidebar } = await loadModules();
+    const sidebar = new Sidebar(new Store(), { ...noopHandlers, onDeleteSessions });
+    const host = document.createElement("div");
+    sidebar.mount(host);
+    sidebar.updateSessions([summary("a"), summary("b"), summary("c")], new Set());
+    return host;
+  };
+
+  it("a row's Remove action requests deletion of just that session", async () => {
+    const deleted: SessionId[][] = [];
+    const host = await mountWith((ids) => deleted.push([...ids]));
+    const removeBtn = host.querySelector('[aria-label="Remove from dashboard: a"]') as HTMLElement;
+    expect(removeBtn).toBeTruthy();
+    removeBtn.click();
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]!.map(String)).toEqual(["a"]);
+  });
+
+  it("select mode + checkboxes + bulk Remove deletes every selected session in one request", async () => {
+    const deleted: SessionId[][] = [];
+    const host = await mountWith((ids) => deleted.push([...ids]));
+
+    (host.querySelector(".sidebar-select-btn") as HTMLButtonElement).click();
+    expect(host.querySelector(".session-list")?.classList.contains("select-mode")).toBe(true);
+
+    const check = (id: string): HTMLElement =>
+      host.querySelector(`.session-item[data-session-id="${id}"] .session-item-check`) as HTMLElement;
+    check("a").click();
+    check("c").click();
+
+    const removeBtn = host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement;
+    expect(removeBtn.textContent).toBe("Remove 2");
+    removeBtn.click();
+
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]!.map(String).sort()).toEqual(["a", "c"]);
+  });
+
+  it("leaving select mode clears the selection", async () => {
+    const host = await mountWith(() => {});
+    const selectBtn = host.querySelector(".sidebar-select-btn") as HTMLButtonElement;
+    selectBtn.click();
+    (host.querySelector('.session-item[data-session-id="a"] .session-item-check') as HTMLElement).click();
+    expect((host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement).textContent).toBe("Remove 1");
+    selectBtn.click();
+    selectBtn.click();
+    expect((host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement).textContent).toBe("Remove");
+  });
+
+  it("the bulk 'Delete files' button requests a PERMANENT delete of the selected sessions", async () => {
+    const calls: { ids: string[]; permanent: boolean }[] = [];
+    const host = await mountWith((ids, permanent) =>
+      calls.push({ ids: [...ids].map(String), permanent: permanent ?? false }),
+    );
+    (host.querySelector(".sidebar-select-btn") as HTMLButtonElement).click();
+    (host.querySelector('.session-item[data-session-id="b"] .session-item-check') as HTMLElement).click();
+    const delBtn = host.querySelector(".sidebar-bulk-delete") as HTMLButtonElement;
+    expect(delBtn.textContent).toBe("Delete 1");
+    delBtn.click();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({ ids: ["b"], permanent: true });
+  });
 });
 
 describe("Sidebar — skeleton transition", () => {
@@ -363,7 +435,7 @@ describe("Sidebar — realistic filter stress (100 sessions, mixed pinned and da
     expect(all).toBe(100);
   });
 
-  it("search 'auth' surfaces every seeded match across pinned and unpinned alike", async () => {
+  it("search only matches the visible session title, never transcript text or project metadata", async () => {
     const { Store, Sidebar } = await loadModules();
     const store = new Store();
     const sidebar = new Sidebar(store, noopHandlers);
@@ -371,17 +443,25 @@ describe("Sidebar — realistic filter stress (100 sessions, mixed pinned and da
     sidebar.mount(host);
 
     const sessions = Array.from({ length: 100 }, (_, i) => mkSession(i));
+    const authInTranscriptOnly = sessions.filter((s) =>
+      s.searchable_text.includes("auth") && !s.title?.toLowerCase().includes("auth"),
+    ).length;
+    expect(authInTranscriptOnly).toBeGreaterThan(0);
     sidebar.updateSessions(sessions, new Set());
 
     const input = host.querySelector<HTMLInputElement>(".search-input")!;
     input.value = "auth";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(countVisible(host)).toBe(0);
+
+    input.value = "feature";
     input.dispatchEvent(new Event("input", { bubbles: true }));
 
     const visibleIds = [...host.querySelectorAll<HTMLElement>(".session-item")]
       .filter((el) => el.style.display !== "none")
       .map((el) => el.dataset["sessionId"]!);
 
-    const expectedMatches = sessions.filter((s) => s.searchable_text.includes("auth"));
+    const expectedMatches = sessions.filter((s) => s.title?.includes("feature"));
     expect(visibleIds).toHaveLength(expectedMatches.length);
     for (const s of expectedMatches) expect(visibleIds).toContain(s.session_id);
   });

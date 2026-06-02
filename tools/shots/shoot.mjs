@@ -104,6 +104,33 @@ const run = async () => {
     console.log("✓ shot-workflows.png");
   }
 
+  {
+    const page = await newPage(browser, { width: 1600, height: 1000 });
+    await feed(page, [D.update]);
+    await sleep(200);
+    await page.evaluate(() => {
+      const tab = Array.from(document.querySelectorAll(".ct-tab")).find((t) => /skills/i.test(t.textContent || ""));
+      tab?.click();
+    });
+    await sleep(150);
+    await feed(page, [D.librarySnapshot]);
+    await sleep(400);
+    await page.evaluate(() => {
+      const rows = document.querySelectorAll(".lib-row-main");
+      for (const r of rows) {
+        const title = r.querySelector(".lib-row-title");
+        if (title && title.textContent === "code-review") {
+          (r).click();
+          return;
+        }
+      }
+    });
+    await sleep(500);
+    await page.screenshot({ path: path.join(outDir, "shot-library.png") });
+    console.log("✓ shot-library.png");
+    await page.close();
+  }
+
   await browser.close();
 };
 

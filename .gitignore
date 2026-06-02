@@ -10,3 +10,4 @@ media/out/
 .playwright/
 .vscode-test/
 coverage/
+dist-test-mock-claude

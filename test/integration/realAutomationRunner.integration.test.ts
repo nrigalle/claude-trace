@@ -3,7 +3,7 @@ import * as os from "os";
 import * as path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { __reset, __testState } from "../stubs/vscode";
+import { __reset, __testState, __waitForProcessesToExit } from "../stubs/vscode";
 import { RealAutomationRunner } from "../../src/features/pipelines/infra/RealAutomationRunner";
 import { toBlockId, toRunId } from "../../src/features/pipelines/domain/types";
 
@@ -40,7 +40,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 const positionalPrompt = positionalArgs.join(' ');
 
-const encodeCwd = (c) => c.replace(/\\//g, '-');
+const encodeCwd = (c) => c.replace(/[\\\\/:]/g, '-');
 const cwdDir = path.join(projectsDir, encodeCwd(cwd));
 fs.mkdirSync(cwdDir, { recursive: true });
 
@@ -129,8 +129,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
   runner.dispose();
+  await __waitForProcessesToExit();
   __reset();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
@@ -286,6 +287,8 @@ describe("RealAutomationRunner — end-to-end against a mock claude binary", () 
       expect(launchLine!.text, `effort ${level} must be in CLI args`).toContain(`--effort ${level}`);
       expect(__testState.sentTexts.some((s) => s.text.includes("/effort"))).toBe(false);
       expect(fs.existsSync(handle.jsonlPath)).toBe(true);
+      handle.dispose();
+      await __waitForProcessesToExit();
     }
   });
 });

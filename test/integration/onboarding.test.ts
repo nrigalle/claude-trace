@@ -65,6 +65,7 @@ describe("onboarding — a brand new install with nothing on disk", () => {
     expect(Object.keys(settings.hooks)).toEqual(
       expect.arrayContaining(["Stop", "Notification", "UserPromptSubmit", "PreToolUse"]),
     );
-    expect(JSON.stringify(settings)).toContain(path.join(root, ".claude-trace", "signals"));
+    const posixSignalsDir = path.join(root, ".claude-trace", "signals").replace(/\\/g, "/");
+    expect(JSON.stringify(settings)).toContain(posixSignalsDir);
   });
 });

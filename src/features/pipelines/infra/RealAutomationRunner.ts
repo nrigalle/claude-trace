@@ -19,12 +19,13 @@ import {
   parseOrchestratorDecision,
 } from "../domain/orchestratorProtocol";
 import { encodeCwdForProjects } from "../../../shared/projectPathEncoding";
+import { quoteShellArg, type ShellQuote } from "../../../shared/permissionModes";
 
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 const JSONL_POLL_INTERVAL_MS = 500;
 
-const shellSingleQuote = (value: string): string =>
-  `'${value.replace(/'/g, "'\\''")}'`;
+const shellQuoteStyle = (): ShellQuote =>
+  process.platform === "win32" ? "powershell" : "posix";
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -193,7 +194,7 @@ export class RealAutomationRunner implements AutomationRunner {
     const args = ["--dangerously-skip-permissions", "--effort", opts.effort];
     if (opts.model !== "default") args.push("--model", opts.model);
     if (opts.resumeSessionId) args.push("--resume", opts.resumeSessionId);
-    if (opts.prompt.length > 0) args.push(shellSingleQuote(opts.prompt));
+    if (opts.prompt.length > 0) args.push(quoteShellArg(opts.prompt, shellQuoteStyle()));
 
     const terminal = vscode.window.createTerminal({
       name: `Claude Trace · ${opts.blockId}`,
@@ -256,7 +257,7 @@ export class RealAutomationRunner implements AutomationRunner {
       if (turnEnd === "terminal-closed") {
         return {
           kind: "needs-input",
-          reason: "Orchestrator terminal was closed before it could respond — manual review needed.",
+          reason: "Orchestrator terminal was closed before it could respond. Manual review needed.",
         };
       }
       const lastText = readLastAssistantText(orchHandle.jsonlPath);

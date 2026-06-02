@@ -8,8 +8,10 @@ import {
   type TerminalSpawnSpec,
 } from "../../../src/features/cockpit/app/CockpitController";
 import type { CockpitHostToWebview, CockpitWebviewToHost } from "../../../src/features/cockpit/protocol";
+import type { ShellQuote } from "../../../src/shared/permissionModes";
 import { ProfileStore } from "../../../src/features/cockpit/infra/ProfileStore";
 import { CockpitSessionStore } from "../../../src/features/cockpit/infra/CockpitSessionStore";
+import { CockpitTerminalHistoryStore } from "../../../src/features/cockpit/infra/CockpitTerminalHistoryStore";
 import { defaultProfile, toProfileId, MAX_BATCH } from "../../../src/features/cockpit/domain/profiles";
 
 class FakeHost {
@@ -43,11 +45,15 @@ class FakeBackend implements TerminalBackend {
   readonly resizes: Array<{ id: string; cols: number; rows: number }> = [];
   readonly killed: string[] = [];
   readonly alive = new Set<string>();
+  readonly capturedHistory = new Map<string, string | null>();
   private dataListener: ((id: string, data: string) => void) | null = null;
   private exitListener: ((id: string, code: number) => void) | null = null;
   spawn(spec: TerminalSpawnSpec): void {
     this.spawns.push(spec);
     this.alive.add(spec.sessionId);
+  }
+  shellQuoteStyle(): ShellQuote {
+    return "posix";
   }
   write(id: string, data: string): void {
     this.writes.push({ id, data });
@@ -61,6 +67,9 @@ class FakeBackend implements TerminalBackend {
   }
   isAlive(id: string): boolean {
     return this.alive.has(id);
+  }
+  captureHistory(id: string): string | null {
+    return this.capturedHistory.get(id) ?? null;
   }
   onData(l: (id: string, data: string) => void): { dispose(): void } {
     this.dataListener = l;
@@ -83,6 +92,7 @@ class FakeBackend implements TerminalBackend {
 let dir: string;
 let store: ProfileStore;
 let sessionStore: CockpitSessionStore;
+let terminalHistoryStore: CockpitTerminalHistoryStore;
 let host: FakeHost;
 let backend: FakeBackend;
 let names: Map<string, string>;
@@ -92,6 +102,7 @@ let attentionNotices: string[];
 let cleanedHooks: string[];
 let attentionListener: ((sessionId: string, reason: "stop" | "notify" | "active") => void) | null;
 let savedLayout: import("../../../src/features/cockpit/protocol").CockpitLayout;
+let folderPickerResult: string | null;
 const NOW = 9_000_000;
 
 const makeController = (): CockpitController =>
@@ -99,6 +110,7 @@ const makeController = (): CockpitController =>
     host,
     profileStore: store,
     sessionStore,
+    terminalHistoryStore,
     terminals: backend,
     actions: {
       setName: (id, name) => names.set(id, name),
@@ -115,6 +127,7 @@ const makeController = (): CockpitController =>
       saveDroppedImage: (fileName) => `/tmp/dropped/${fileName}`,
       loadCockpitLayout: () => savedLayout,
       saveCockpitLayout: (layout) => { savedLayout = layout; },
+      pickFolder: async (_ctx) => folderPickerResult,
       now: () => NOW,
     },
   });
@@ -123,6 +136,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "ct-termctl-"));
   store = new ProfileStore(path.join(dir, "cockpit.json"));
   sessionStore = new CockpitSessionStore(path.join(dir, "cockpit-sessions.json"));
+  terminalHistoryStore = new CockpitTerminalHistoryStore(path.join(dir, "terminal-history"));
   host = new FakeHost();
   backend = new FakeBackend();
   names = new Map();
@@ -132,6 +146,7 @@ beforeEach(() => {
   cleanedHooks = [];
   attentionListener = null;
   savedLayout = { trees: {} };
+  folderPickerResult = null;
   makeController();
 });
 
@@ -148,7 +163,7 @@ describe("CockpitController launch", () => {
     host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 2, promptOverride: null });
     expect(backend.spawns).toHaveLength(2);
     expect(backend.spawns[0]!.initialInput).toContain("--session-id uuid-1");
-    expect(backend.spawns[0]!.initialInput).toContain("--model claude-opus-4-7");
+    expect(backend.spawns[0]!.initialInput).toContain("--model 'claude-opus-4-7[1m]'");
     expect(backend.spawns[0]!.initialInput).toContain("--name 'Critic 1'");
     expect(backend.spawns[0]!.initialInput.endsWith("\r")).toBe(true);
     expect(backend.spawns[0]!.cwd).toBe("/repo");
@@ -326,6 +341,61 @@ describe("CockpitController terminal IO", () => {
     expect(host.posted).toContainEqual({ type: "terminalData", sessionId: "uuid-1", data: "hello\r\n" });
   });
 
+  it("replays buffered terminal output in order after cockpitReady so a recreated webview does not lose recent history", () => {
+    backend.emitData("uuid-1", "first\r\n");
+    backend.emitData("uuid-1", "second\r\n");
+    host.posted.length = 0;
+    host.send({ type: "cockpitReady" });
+    const messages = host.posted.filter((m) => m.type === "terminalData");
+    expect(messages).toEqual([
+      { type: "terminalData", sessionId: "uuid-1", data: "first\r\nsecond\r\n" },
+    ]);
+    const stateIndex = host.posted.findIndex((m) => m.type === "cockpitState");
+    const replayIndex = host.posted.findIndex((m) => m.type === "terminalData");
+    expect(stateIndex).toBeGreaterThanOrEqual(0);
+    expect(replayIndex).toBeGreaterThan(stateIndex);
+  });
+
+  it("does not replay terminal history after the session is closed", () => {
+    backend.emitData("uuid-1", "old output\r\n");
+    host.send({ type: "terminalClose", sessionId: "uuid-1" });
+    host.posted.length = 0;
+    host.send({ type: "cockpitReady" });
+    expect(host.posted.some((m) => m.type === "terminalData")).toBe(false);
+  });
+
+  it("a fresh controller after reload replays persisted terminal output instead of losing it", () => {
+    backend.emitData("uuid-1", "before reload\r\n");
+    backend = new FakeBackend();
+    host = new FakeHost();
+    makeController();
+    host.send({ type: "cockpitReady" });
+    expect(host.posted).toContainEqual({ type: "terminalData", sessionId: "uuid-1", data: "before reload\r\n" });
+  });
+
+  it("prefers backend text capture on reload so tmux-backed Codex sessions do not replay raw control-code logs", () => {
+    backend.emitData("uuid-1", "\x1b[?1049h\x1b[3Jcodex screen");
+    backend = new FakeBackend();
+    backend.capturedHistory.set("uuid-1", "earlier codex text\r\nlatest codex text\r\n");
+    host = new FakeHost();
+    makeController();
+    host.send({ type: "cockpitReady" });
+    const messages = host.posted.filter((m) => m.type === "terminalData");
+    expect(messages).toEqual([
+      { type: "terminalData", sessionId: "uuid-1", data: "earlier codex text\r\nlatest codex text\r\n" },
+    ]);
+  });
+
+  it("does not fall back to raw escape-code logs when tmux reports an active alternate screen", () => {
+    backend.emitData("uuid-1", "\x1b[?1049h\x1b[2J\x1b[3Jcodex tui frame");
+    backend = new FakeBackend();
+    backend.capturedHistory.set("uuid-1", "");
+    host = new FakeHost();
+    makeController();
+    host.send({ type: "cockpitReady" });
+    expect(host.posted.some((m) => m.type === "terminalData")).toBe(false);
+  });
+
   it("on PTY exit, emits terminalExit and flips the session to not-alive in state", () => {
     backend.emitExit("uuid-1", 0);
     expect(host.posted.some((m) => m.type === "terminalExit" && m.sessionId === "uuid-1")).toBe(true);
@@ -424,7 +494,7 @@ describe("CockpitController tabs — adding a tab clones the window's config int
     const tab = backend.spawns[1]!;
     expect(tab.sessionId).toBe("uuid-2");
     expect(tab.cwd).toBe("/repo");
-    expect(tab.initialInput).toContain("--model claude-opus-4-7");
+    expect(tab.initialInput).toContain("--model 'claude-opus-4-7[1m]'");
     expect(tab.initialInput).toContain("plan");
     const terminals = host.lastState().state.terminals;
     expect(terminals).toHaveLength(2);
@@ -461,7 +531,7 @@ describe("CockpitController quick launch — no saved profile required", () => {
     });
     expect(backend.spawns).toHaveLength(1);
     expect(backend.spawns[0]!.initialInput).toContain("--name 'Scratch'");
-    expect(backend.spawns[0]!.initialInput).toContain("--model claude-opus-4-7");
+    expect(backend.spawns[0]!.initialInput).toContain("--model 'claude-opus-4-7[1m]'");
     expect(backend.spawns[0]!.initialInput).toContain("'go'");
     expect(backend.spawns[0]!.cwd).toBe("/repo");
     const terminals = host.lastState().state.terminals;
@@ -526,6 +596,19 @@ describe("CockpitController plain shell terminals", () => {
     expect(resumeSpawn.sessionId).toBe(id);
     expect(resumeSpawn.initialInput).toBe("");
   });
+
+  it("a plain shell terminal keeps its output history across a controller reload", () => {
+    host.send({ type: "cockpitNewTerminal", spaceId: null });
+    const id = host.lastState().state.terminals[0]!.sessionId;
+    backend.emitData(id, "shell line 1\r\n");
+    backend.emitData(id, "shell line 2\r\n");
+    backend = new FakeBackend();
+    host = new FakeHost();
+    makeController();
+    host.send({ type: "cockpitReady" });
+    const replay = host.posted.filter((m) => m.type === "terminalData").map((m) => m.data).join("");
+    expect(replay).toBe("shell line 1\r\nshell line 2\r\n");
+  });
 });
 
 describe("CockpitController shell-keepalive for claude sessions", () => {
@@ -537,6 +620,19 @@ describe("CockpitController shell-keepalive for claude sessions", () => {
     host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
     expect(backend.spawns[0]!.initialInput).toContain("claude");
     expect(backend.spawns[0]!.initialInput).not.toContain("exec ");
+  });
+
+  it("pause marks the session not alive immediately and resume forces a fresh claude command", () => {
+    host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
+    const id = host.lastState().state.terminals[0]!.sessionId;
+    host.send({ type: "cockpitPauseSession", sessionId: id });
+    expect(host.lastState().state.terminals[0]!.alive).toBe(false);
+
+    host.send({ type: "cockpitResumeSession", sessionId: id });
+    const resumeSpawn = backend.spawns.at(-1)!;
+    expect(resumeSpawn.sessionId).toBe(id);
+    expect(resumeSpawn.initialInput).toContain("claude");
+    expect(resumeSpawn.forceInitialInput).toBe(true);
   });
 });
 
@@ -584,5 +680,46 @@ describe("CockpitController adopt a resumed session into the active folder", () 
     host.send({ type: "cockpitAdoptSession", sessionId: "r3", name: "Resumed", cwd: "/repo", spaceId: "space-x" });
     host.send({ type: "cockpitAdoptSession", sessionId: "r3", name: "Resumed", cwd: "/repo", spaceId: "space-y" });
     expect(host.lastState().state.terminals.find((s) => s.sessionId === "r3")!.spaceId).toBe("space-y");
+  });
+});
+
+describe("CockpitController pick a working folder for the launch", () => {
+  it("opens the host folder picker and returns the chosen path tagged with the context", async () => {
+    folderPickerResult = "/Users/alex/code/my-api";
+    host.send({ type: "cockpitPickFolder", context: "quick" });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(host.posted.find((m) => m.type === "cockpitFolderPicked")).toEqual({
+      type: "cockpitFolderPicked",
+      context: "quick",
+      path: "/Users/alex/code/my-api",
+    });
+  });
+
+  it("returns a null path when the picker is cancelled", async () => {
+    folderPickerResult = null;
+    host.send({ type: "cockpitPickFolder", context: "quick" });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(host.posted.find((m) => m.type === "cockpitFolderPicked")).toEqual({
+      type: "cockpitFolderPicked",
+      context: "quick",
+      path: null,
+    });
+  });
+
+  it("honours the picked cwd when the webview then launches", () => {
+    store.saveProfile(defaultProfile(toProfileId("p1"), "Worker"));
+    host.send({
+      type: "cockpitQuickLaunch",
+      name: "Scratch",
+      model: "default",
+      permissionMode: "default",
+      cwd: "/Users/alex/code/my-api",
+      spaceId: null,
+      count: 1,
+      prompt: null,
+    });
+    expect(backend.spawns[0]!.cwd).toBe("/Users/alex/code/my-api");
   });
 });

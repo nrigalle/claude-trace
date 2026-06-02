@@ -32,18 +32,13 @@ import {
   type Trigger,
   type WorkerBlock,
 } from "./types";
-import type { ModelChoice } from "../../../shared/models";
+import { MODEL_CHOICES, type ModelChoice } from "../../../shared/models";
 import { assertNever } from "../../../shared/assertNever";
 
 const PIPELINE_SCHEMA_VERSION = 1;
 const RUN_SCHEMA_VERSION = 1;
 
-const MODEL_VALUES: readonly ModelChoice[] = [
-  "default",
-  "claude-opus-4-7",
-  "claude-sonnet-4-6",
-  "claude-haiku-4-5",
-];
+const MODEL_VALUES: readonly ModelChoice[] = MODEL_CHOICES;
 
 const EFFORT_VALUES: readonly EffortLevel[] = [
   "low",

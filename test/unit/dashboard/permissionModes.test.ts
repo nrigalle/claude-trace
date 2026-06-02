@@ -40,29 +40,41 @@ describe("buildClaudeCommand", () => {
   });
 
   it.each<[ModelChoice, string]>([
-    ["claude-opus-4-7", "claude --model claude-opus-4-7"],
-    ["claude-sonnet-4-6", "claude --model claude-sonnet-4-6"],
-    ["claude-haiku-4-5", "claude --model claude-haiku-4-5"],
-  ])("emits model %s as `%s`", (model, expected) => {
+    ["claude-opus-4-8", "claude --model 'claude-opus-4-8[1m]'"],
+    ["claude-opus-4-7", "claude --model 'claude-opus-4-7[1m]'"],
+    ["claude-sonnet-4-6", "claude --model 'claude-sonnet-4-6[1m]'"],
+  ])("emits the 1M-context model %s as the single-quoted `%s`", (model, expected) => {
     expect(buildClaudeCommand({ mode: "default", model })).toBe(expected);
+  });
+
+  it("single-quotes the model so the [1m] bracket is never glob-expanded by the shell", () => {
+    const out = buildClaudeCommand({ mode: "default", model: "claude-opus-4-8" });
+    expect(out).toContain("--model 'claude-opus-4-8[1m]'");
+    expect(out).not.toContain("--model claude-opus-4-8[1m]");
+  });
+
+  it("does NOT append [1m] to a non 1M-context model (haiku), but still quotes it", () => {
+    expect(buildClaudeCommand({ mode: "default", model: "claude-haiku-4-5" })).toBe(
+      "claude --model 'claude-haiku-4-5'",
+    );
   });
 
   it("emits --model before --permission-mode in stable order", () => {
     expect(buildClaudeCommand({ mode: "acceptEdits", model: "claude-opus-4-7" })).toBe(
-      "claude --model claude-opus-4-7 --permission-mode acceptEdits",
+      "claude --model 'claude-opus-4-7[1m]' --permission-mode acceptEdits",
     );
   });
 
   it("combines --resume, --model, and --permission-mode in stable order", () => {
     expect(
       buildClaudeCommand({ mode: "plan", resumeId: "abc123", model: "claude-sonnet-4-6" }),
-    ).toBe("claude --resume abc123 --model claude-sonnet-4-6 --permission-mode plan");
+    ).toBe("claude --resume abc123 --model 'claude-sonnet-4-6[1m]' --permission-mode plan");
   });
 
   it("appends an initial prompt as a shell-quoted positional after every flag", () => {
     expect(
       buildClaudeCommand({ mode: "acceptEdits", model: "claude-opus-4-7", initialPrompt: "fix the auth bug" }),
-    ).toBe("claude --model claude-opus-4-7 --permission-mode acceptEdits 'fix the auth bug'");
+    ).toBe("claude --model 'claude-opus-4-7[1m]' --permission-mode acceptEdits 'fix the auth bug'");
   });
 
   it("escapes single quotes and shell metacharacters in the initial prompt", () => {
@@ -100,21 +112,90 @@ describe("buildClaudeCommand", () => {
     expect(buildClaudeCommand({ mode: "default", settingsPath: null })).toBe("claude");
     expect(buildClaudeCommand({ mode: "default", settingsPath: "  " })).toBe("claude");
   });
+
+  it("does NOT add --effort when effort is 'default'", () => {
+    expect(buildClaudeCommand({ mode: "default", effort: "default" })).toBe("claude");
+  });
+
+  it("adds --effort <level> for low/medium/high/xhigh/max", () => {
+    expect(buildClaudeCommand({ mode: "default", effort: "low" })).toBe("claude --effort low");
+    expect(buildClaudeCommand({ mode: "default", effort: "medium" })).toBe("claude --effort medium");
+    expect(buildClaudeCommand({ mode: "default", effort: "high" })).toBe("claude --effort high");
+    expect(buildClaudeCommand({ mode: "default", effort: "xhigh" })).toBe("claude --effort xhigh");
+    expect(buildClaudeCommand({ mode: "default", effort: "max" })).toBe("claude --effort max");
+  });
+
+  it("emits --effort after --model and before --permission-mode in stable order", () => {
+    expect(
+      buildClaudeCommand({ mode: "acceptEdits", model: "claude-opus-4-8", effort: "xhigh" }),
+    ).toBe("claude --model 'claude-opus-4-8[1m]' --effort xhigh --permission-mode acceptEdits");
+  });
+});
+
+describe("buildClaudeCommand — Windows PowerShell quoting", () => {
+  it("defaults to POSIX single-quote escaping (backslash form) when no shell is given", () => {
+    expect(buildClaudeCommand({ mode: "default", name: "it's" })).toBe("claude --name 'it'\\''s'");
+  });
+
+  it("escapes an embedded single quote by DOUBLING it for PowerShell, not the POSIX backslash form", () => {
+    expect(buildClaudeCommand({ mode: "default", name: "it's" }, "powershell")).toBe(
+      "claude --name 'it''s'",
+    );
+  });
+
+  it("quotes the model so the [1m] bracket stays literal under PowerShell too", () => {
+    expect(buildClaudeCommand({ mode: "default", model: "claude-opus-4-7" }, "powershell")).toBe(
+      "claude --model 'claude-opus-4-7[1m]'",
+    );
+  });
+
+  it("keeps a Windows settings path (backslashes and spaces) literal inside PowerShell single quotes", () => {
+    expect(
+      buildClaudeCommand(
+        { mode: "default", settingsPath: "C:\\Users\\Jane Doe\\.claude-trace\\hooks\\id1.json" },
+        "powershell",
+      ),
+    ).toBe("claude --settings 'C:\\Users\\Jane Doe\\.claude-trace\\hooks\\id1.json'");
+  });
+
+  it("escapes an apostrophe in the initial prompt by doubling for PowerShell", () => {
+    expect(buildClaudeCommand({ mode: "default", initialPrompt: "don't break" }, "powershell")).toBe(
+      "claude 'don''t break'",
+    );
+  });
 });
 
 describe("MODEL_OPTIONS catalog", () => {
-  it("offers a 'default' (no flag) option as the first entry", () => {
-    expect(MODEL_OPTIONS[0]!.id).toBe("default");
+  it("uses Opus 4.8 as the first visible launch model", () => {
+    expect(MODEL_OPTIONS[0]!.id).toBe("claude-opus-4-8");
+    expect(MODEL_OPTIONS[0]!.label).toBe("Opus 4.8");
   });
 
-  it("lists exactly the three current Anthropic models plus default", () => {
+  it("lists only 1M-context launch models", () => {
     expect(MODEL_OPTIONS.map((m) => m.id)).toEqual([
-      "default",
+      "claude-opus-4-8",
       "claude-opus-4-7",
       "claude-sonnet-4-6",
-      "claude-haiku-4-5",
     ]);
   });
+
+  it("does not decorate Opus 4.8 with a new tag", () => {
+    expect(MODEL_OPTIONS[0]!.label.toLowerCase()).not.toContain("new");
+  });
+
+  it("Opus 4.8 supports the full effort range including xhigh", () => {
+    const opus48 = MODEL_OPTIONS.find((m) => m.id === "claude-opus-4-8")!;
+    expect(opus48.effortLevels).toContain("low");
+    expect(opus48.effortLevels).toContain("xhigh");
+    expect(opus48.effortLevels).toContain("max");
+  });
+
+  it("Sonnet 4.6 supports effort but NOT xhigh", () => {
+    const sonnet = MODEL_OPTIONS.find((m) => m.id === "claude-sonnet-4-6")!;
+    expect(sonnet.effortLevels.length).toBeGreaterThan(0);
+    expect(sonnet.effortLevels).not.toContain("xhigh");
+  });
+
 });
 
 describe("PERMISSION_MODES catalog", () => {

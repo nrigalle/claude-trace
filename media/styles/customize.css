@@ -259,6 +259,42 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
+  position: relative;
+}
+
+.ct-chat-turn-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ct-chat-copy {
+  background: var(--ct-bg-2);
+  border: 1px solid var(--ct-border);
+  color: var(--ct-text-secondary);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 140ms var(--ct-ease-out), background 140ms var(--ct-ease-out),
+    color 140ms var(--ct-ease-out), border-color 140ms var(--ct-ease-out);
+}
+.ct-chat-turn:hover .ct-chat-copy,
+.ct-chat-copy:focus-visible { opacity: 1; }
+.ct-chat-copy:hover {
+  background: var(--ct-bg-3);
+  color: var(--ct-text-primary);
+  border-color: var(--ct-border-hover);
+}
+.ct-chat-copy.copied {
+  opacity: 1;
+  background: rgba(46, 204, 113, 0.16);
+  color: #5ec98a;
+  border-color: rgba(46, 204, 113, 0.4);
 }
 
 .ct-chat-role {

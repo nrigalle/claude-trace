@@ -1,4 +1,10 @@
-import type { ModelChoice } from "./models";
+import type { EffortChoice, ModelChoice } from "./models";
+
+const ONE_MILLION_CONTEXT_MODELS: ReadonlySet<ModelChoice> = new Set([
+  "claude-opus-4-8",
+  "claude-opus-4-7",
+  "claude-sonnet-4-6",
+]);
 
 export type PermissionMode =
   | "default"
@@ -42,7 +48,7 @@ export const PERMISSION_MODES: readonly PermissionModeOption[] = [
   },
   {
     mode: "bypassPermissions",
-    label: "Bypass permissions — dangerous",
+    label: "Bypass permissions (dangerous)",
     oneLine: "Skip ALL permission checks. Use only in isolated containers or VMs.",
   },
 ];
@@ -52,24 +58,44 @@ export interface ClaudeCommandOptions {
   readonly resumeId?: string;
   readonly sessionId?: string;
   readonly model?: ModelChoice;
+  readonly effort?: EffortChoice;
   readonly name?: string | null;
   readonly initialPrompt?: string | null;
   readonly settingsPath?: string | null;
 }
 
-const shellSingleQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
+export type ShellQuote = "posix" | "powershell";
 
-export const buildClaudeCommand = (opts: ClaudeCommandOptions): string => {
+const quotePosix = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
+const quotePowerShell = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+const quoterFor = (shell: ShellQuote): ((value: string) => string) =>
+  shell === "powershell" ? quotePowerShell : quotePosix;
+export const quoteShellArg = (value: string, shell: ShellQuote = "posix"): string =>
+  quoterFor(shell)(value);
+
+const modelArg = (model: ModelChoice, quote: (value: string) => string): string => {
+  const id = ONE_MILLION_CONTEXT_MODELS.has(model) ? `${model}[1m]` : model;
+  return quote(id);
+};
+
+export const buildClaudeCommand = (
+  opts: ClaudeCommandOptions,
+  shell: ShellQuote = "posix",
+): string => {
+  const quote = (value: string): string => quoteShellArg(value, shell);
   const parts = ["claude"];
   if (opts.resumeId) parts.push("--resume", opts.resumeId);
   if (opts.sessionId) parts.push("--session-id", opts.sessionId);
-  if (opts.model && opts.model !== "default") parts.push("--model", opts.model);
+  if (opts.model && opts.model !== "default") parts.push("--model", modelArg(opts.model, quote));
+  if (opts.effort && opts.effort !== "default") {
+    parts.push("--effort", opts.effort);
+  }
   if (opts.mode !== "default") parts.push("--permission-mode", opts.mode);
   const settingsPath = opts.settingsPath?.trim();
-  if (settingsPath) parts.push("--settings", shellSingleQuote(settingsPath));
+  if (settingsPath) parts.push("--settings", quote(settingsPath));
   const name = opts.name?.trim();
-  if (name) parts.push("--name", shellSingleQuote(name));
+  if (name) parts.push("--name", quote(name));
   const prompt = opts.initialPrompt?.trim();
-  if (prompt) parts.push(shellSingleQuote(prompt));
+  if (prompt) parts.push(quote(prompt));
   return parts.join(" ");
 };

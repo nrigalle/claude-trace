@@ -148,42 +148,73 @@ const C = {
   reset: "\x1b[0m",
   orange: "\x1b[38;5;173m",
   dim: "\x1b[2m",
-  green: "\x1b[32m",
-  cyan: "\x1b[36m",
+  green: "\x1b[38;5;71m",
+  cyan: "\x1b[38;5;73m",
   bold: "\x1b[1m",
+  white: "\x1b[38;5;252m",
 };
 
-const claudeScreen = (title, lines) =>
-  `\x1b[2J\x1b[H${C.orange}${C.bold} ✻ Claude Code${C.reset}${C.dim}  ${title}${C.reset}\r\n\r\n` +
+const BOX_W = 46;
+const rule = (l, m, r) => `${l}${"─".repeat(BOX_W)}${r}`;
+const inputBox = (status) =>
+  `${C.dim}${rule("╭", "─", "╮")}${C.reset}\r\n` +
+  `${C.dim}│${C.reset} ${C.orange}>${C.reset}${" ".repeat(BOX_W - 3)}${C.dim}│${C.reset}\r\n` +
+  `${C.dim}${rule("╰", "─", "╯")}${C.reset}\r\n` +
+  `  ${C.dim}⏵⏵ accept edits on${C.reset}  ${C.dim}·${C.reset}  ${C.dim}${status}${C.reset}`;
+
+// Mimics the real Claude Code TUI: ⏺ tool bullets, ⎿ result connectors,
+// an assistant turn, then the rounded input box and status line.
+const claudeScreen = (cwd, model, lines) =>
+  `\x1b[2J\x1b[H` +
+  `${C.dim}  ${cwd}${C.reset}\r\n\r\n` +
   lines.map((l) => `  ${l}`).join("\r\n") +
-  `\r\n\r\n${C.dim}  ───────────────────────────────────────────${C.reset}\r\n  ${C.orange}>${C.reset} `;
+  `\r\n\r\n` +
+  inputBox(model);
+
+const tool = (name, arg) => `${C.green}⏺${C.reset} ${C.white}${name}${C.reset}(${C.dim}${arg}${C.reset})`;
+const out = (text) => `${C.dim}⎿  ${text}${C.reset}`;
+const say = (text) => `${C.orange}⏺${C.reset} ${text}`;
 
 export const terminalData = [
-  { type: "terminalData", sessionId: "t1", data: claudeScreen("reviewing diff", [
-    `${C.cyan}● Read${C.reset} src/payments/webhook.ts`,
-    `${C.cyan}● Read${C.reset} src/payments/retry.ts`,
-    `${C.green}✓${C.reset} Signature verification looks correct.`,
-    `${C.dim}  One concern: the retry backoff caps at 3 tries —${C.reset}`,
-    `${C.dim}  a 5xx storm could still drop events. Suggest a DLQ.${C.reset}`,
+  { type: "terminalData", sessionId: "t1", data: claudeScreen("~/code/payments-api", "claude-sonnet-4-6", [
+    `${C.dim}> review the webhook handler for security issues${C.reset}`,
+    ``,
+    tool("Read", "src/payments/webhook.ts"),
+    out("Read 84 lines"),
+    tool("Grep", "constructEvent"),
+    out("1 match in src/payments/stripe.ts"),
+    say("Signature verification is correct, but the retry"),
+    `  backoff caps at 3 tries. A 5xx storm could still drop`,
+    `  events. I'd add a dead-letter queue.`,
   ]) },
-  { type: "terminalData", sessionId: "t2", data: claudeScreen("editing", [
-    `${C.cyan}● Edit${C.reset} src/payments/retry.ts`,
-    `${C.green}+${C.reset} added dead-letter queue after max retries`,
-    `${C.cyan}● Bash${C.reset} npm run typecheck`,
-    `${C.green}✓${C.reset} no type errors`,
-    `${C.dim}  Wiring the DLQ into the worker now...${C.reset}`,
+  { type: "terminalData", sessionId: "t2", data: claudeScreen("~/code/payments-api", "claude-sonnet-4-6", [
+    `${C.dim}> add the dead-letter queue the reviewer suggested${C.reset}`,
+    ``,
+    tool("Update", "src/payments/retry.ts"),
+    out(`${C.green}+34${C.reset}${C.dim} -3   dead-letter queue after max retries`),
+    tool("Bash", "npm run typecheck"),
+    out("no errors"),
+    say("Wired the DLQ into the worker. Failed charges now"),
+    `  land in payments.dlq after 3 attempts.`,
   ]) },
-  { type: "terminalData", sessionId: "t3", data: claudeScreen("running tests", [
-    `${C.cyan}● Bash${C.reset} npm test -- payments`,
-    `${C.green}PASS${C.reset}  payments/webhook.test.ts ${C.dim}(12 tests)${C.reset}`,
-    `${C.green}PASS${C.reset}  payments/retry.test.ts ${C.dim}(8 tests)${C.reset}`,
-    `${C.green}✓${C.reset} 20 passed`,
+  { type: "terminalData", sessionId: "t3", data: claudeScreen("~/code/payments-api", "claude-haiku-4-5", [
+    `${C.dim}> run the payments tests${C.reset}`,
+    ``,
+    tool("Bash", "npm test -- payments"),
+    out(`${C.green}PASS${C.reset}${C.dim}  payments/webhook.test.ts (12 tests)`),
+    out(`${C.green}PASS${C.reset}${C.dim}  payments/retry.test.ts (8 tests)`),
+    out(`${C.green}PASS${C.reset}${C.dim}  payments/dlq.test.ts (5 tests)`),
+    say(`${C.green}25 passed${C.reset}, 0 failed. The DLQ path is covered.`),
   ]) },
-  { type: "terminalData", sessionId: "t4", data: claudeScreen("waiting", [
-    `${C.cyan}● Write${C.reset} docs/webhooks.md`,
-    `${C.dim}  Drafted the webhook setup guide.${C.reset}`,
-    `${C.orange}? ${C.reset}Should I also document the DLQ replay command?`,
-    `${C.dim}  (waiting for your input)${C.reset}`,
+  { type: "terminalData", sessionId: "t4", data: claudeScreen("~/code/payments-api", "claude-sonnet-4-6", [
+    `${C.dim}> document the new webhook + DLQ setup${C.reset}`,
+    ``,
+    tool("Write", "docs/webhooks.md"),
+    out("48 lines"),
+    say("Drafted the setup guide and the signing steps."),
+    ``,
+    `${C.orange}?${C.reset} Should I also document the DLQ replay command,`,
+    `  or keep that in the runbook?`,
   ]) },
 ];
 
@@ -245,6 +276,85 @@ export const runUpdate = {
       } }),
       brun({ id: "b-fix", status: "pending" }),
       brun({ id: "b-loop", status: "pending" }),
+    ],
+  },
+};
+
+export const librarySnapshot = {
+  type: "librarySnapshot",
+  snapshot: {
+    projects: [
+      { path: "/Users/alex/code/my-api", label: "my-api", source: "workspace" },
+      { path: "/Users/alex/code/banking-edge", label: "banking-edge", source: "tracked" },
+      { path: "/Users/alex/code/claude-trace", label: "claude-trace", source: "tracked" },
+    ],
+    skills: [
+      {
+        name: "code-review",
+        frontmatter: { name: "code-review", description: "Reviews diffs for security and clarity. Run before opening a PR.", "allowed-tools": ["Read", "Grep", "Bash(git diff *)"] },
+        body: "Read every changed file in the diff. Look for: secret leaks, missing input validation, error-handling holes, and SQL/command injection.\n",
+        resources: [{ relativePath: "references/owasp-top-10.md", sha256: "abc", bytes: 4321 }],
+        scope: { kind: "global" },
+        updatedAtMs: now - 2 * HOUR,
+      },
+      {
+        name: "migration-doctor",
+        frontmatter: { name: "migration-doctor", description: "Dry-runs a Postgres migration against a snapshot and explains the diff in plain English." },
+        body: "Snapshot the schema, run the migration, diff the result, summarize what changed for humans.\n",
+        resources: [],
+        scope: { kind: "projects", paths: ["/Users/alex/code/my-api", "/Users/alex/code/banking-edge"] },
+        updatedAtMs: now - 6 * HOUR,
+      },
+      {
+        name: "release-notes",
+        frontmatter: { name: "release-notes", description: "Drafts release notes from recent commits and merged PRs." },
+        body: "Walk the commit log since the last tag and produce three sections: features, fixes, and breaking changes.\n",
+        resources: [],
+        scope: { kind: "projects", paths: ["/Users/alex/code/claude-trace"] },
+        updatedAtMs: now - 9 * HOUR,
+      },
+      {
+        name: "test-doctor",
+        frontmatter: { name: "test-doctor", description: "Triages a failing test, isolates the root cause, proposes a fix." },
+        body: "Read the failing test. Run it locally. Read related source files. Identify the underlying cause, not just the symptom.\n",
+        resources: [{ relativePath: "scripts/run-isolated.sh", sha256: "def", bytes: 412 }],
+        scope: { kind: "global" },
+        updatedAtMs: now - 12 * HOUR,
+      },
+      {
+        name: "doc-skeleton",
+        frontmatter: { name: "doc-skeleton", description: "Drafts a README section from a code module." },
+        body: "Read the module's public exports and write the missing section with examples.\n",
+        resources: [],
+        scope: { kind: "unassigned" },
+        updatedAtMs: now - 26 * HOUR,
+      },
+    ],
+    agents: [
+      {
+        name: "reviewer",
+        frontmatter: { name: "reviewer", description: "Senior reviewer persona. Speaks plainly, flags risks, suggests fixes.", model: "sonnet", permissionMode: "default" },
+        body: "Act like a senior reviewer. Be specific. Cite file:line. Suggest the smallest fix that works.\n",
+        scope: { kind: "global" },
+        attachedSkills: ["code-review", "test-doctor"],
+        updatedAtMs: now - 4 * HOUR,
+      },
+      {
+        name: "migration-planner",
+        frontmatter: { name: "migration-planner", description: "Plans risky database migrations end-to-end.", model: "opus", permissionMode: "plan" },
+        body: "Read the migration, the schema, and the rollback. Produce a step-by-step plan with checkpoints.\n",
+        scope: { kind: "projects", paths: ["/Users/alex/code/my-api"] },
+        attachedSkills: ["migration-doctor"],
+        updatedAtMs: now - 18 * HOUR,
+      },
+      {
+        name: "docs-writer",
+        frontmatter: { name: "docs-writer", description: "Writes user-facing documentation in a clear, plain-English voice." },
+        body: "Write for a smart reader who is new to the project. No marketing fluff.\n",
+        scope: { kind: "unassigned" },
+        attachedSkills: [],
+        updatedAtMs: now - 30 * HOUR,
+      },
     ],
   },
 };

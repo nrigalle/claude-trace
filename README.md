@@ -5,7 +5,7 @@
 [![Rating](https://img.shields.io/visual-studio-marketplace/r/nrigalle.claude-trace.svg)](https://marketplace.visualstudio.com/items?itemName=nrigalle.claude-trace)
 [![License: MIT](https://img.shields.io/github/license/nrigalle/claude-trace.svg)](LICENSE)
 
-A cost dashboard, a multi-session terminal cockpit, and a visual agent workflow builder for [Claude Code](https://www.claude.com/product/claude-code). All inside VS Code, reading the session logs Claude Code already writes to your disk. Nothing leaves your machine.
+A cost dashboard, a multi-session terminal cockpit, a visual agent workflow builder, and a home for your skills and agents. All for [Claude Code](https://www.claude.com/product/claude-code), inside VS Code, reading the session logs Claude Code already writes to your disk. Nothing leaves your machine.
 
 ![Claude Trace cost and observability dashboard](https://raw.githubusercontent.com/nrigalle/claude-trace/main/media/shot-dashboard.png)
 
@@ -45,6 +45,18 @@ Wire several Claude sessions into a pipeline on a canvas. Run workers in sequenc
 
 Every step drives a real Claude Code session and passes its output to the next. The result is the kind of deterministic multi agent flow that subagents and agent teams don't give you, built visually instead of in code.
 
+## Keep your skills and agents in one place
+
+![Centralized skills and agents library](https://raw.githubusercontent.com/nrigalle/claude-trace/main/media/shot-library.png)
+
+Skills and agents are the best part of Claude Code, and they sprawl. Some live in `~/.claude` and apply everywhere. Others live in a `.claude` folder inside each project. After a few weeks you have near copies in five repos, you can't remember which ones you wrote, and you have no idea which projects each one is actually in. Editing means opening markdown files by hand and hoping the frontmatter is right.
+
+The library puts all of it on one screen. Every skill and every agent, with a real editor for the instructions, the description, the attached skills, and the bundled resources. No more digging through dotfiles to find the thing you wrote last month.
+
+Then you set the scope on each one, and Claude Trace writes the real files where they belong: global for `~/.claude`, the specific projects you pick, or unassigned while you are still shaping it. It only touches files it created and it tracks every one, so a skill you scope to three projects lands in all three and stays in sync. Change it once here and every target sees the change.
+
+Not sure how to word a skill? Press Help me write and a side panel drafts the body with you in a real Claude session, then drops it straight into the editor.
+
 ## Run agents on your subscription, not the API meter
 
 This is the part worth reading twice. On June 15, 2026, Anthropic splits programmatic Claude Code into separate metered billing. The Agent SDK, `claude -p`, and GitHub Actions move to a small monthly credit pool ($20 on Pro, $100 on Max 5x, $200 on Max 20x) and then charge full API rates on top. Interactive Claude Code in the terminal and IDE keeps drawing from your normal subscription limits, [exactly as before](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
@@ -83,7 +95,7 @@ The dollar figures are local estimates from the token counts in your transcripts
 
 ## Requirements
 
-VS Code 1.85 or newer, and Claude Code 1.x or newer. The cockpit and workflows use tmux for session persistence, which ships on macOS and Linux. The cost dashboard works everywhere.
+VS Code 1.85 or newer, and Claude Code 1.x or newer. The cockpit and workflows use tmux for session persistence, which ships on macOS and Linux. The cost dashboard and the skills and agents library work everywhere.
 
 ## Building from source
 
@@ -92,10 +104,10 @@ git clone https://github.com/nrigalle/claude-trace.git
 cd claude-trace
 npm install
 npm run compile      # build the extension and webview bundles
-npm run test:unit    # 755 tests, vitest
+npm run test:unit    # 1095 tests, vitest
 ```
 
-Press `F5` in VS Code to launch a development host. The code is organized by feature under `src/features/` (dashboard, cockpit, pipelines), with pure logic in each `domain/`, VS Code and filesystem adapters in `infra/`, and orchestration in `app/`. The webview is its own TypeScript bundle under `media/src/`.
+Press `F5` in VS Code to launch a development host. The code is organized by feature under `src/features/` (dashboard, cockpit, pipelines, library), with pure logic in each `domain/`, VS Code and filesystem adapters in `infra/`, and orchestration in `app/`. The webview is its own TypeScript bundle under `media/src/`.
 
 ## Uninstall
 

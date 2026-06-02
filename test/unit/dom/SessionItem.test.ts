@@ -26,6 +26,8 @@ const handlers = {
   onTogglePin: vi.fn(),
   onCopyConversation: vi.fn(),
   onResumeInCockpit: vi.fn(),
+  onDeleteSession: vi.fn(),
+  onToggleSelect: vi.fn(),
 };
 
 describe("renderSessionItem — actions row", () => {
@@ -36,10 +38,11 @@ describe("renderSessionItem — actions row", () => {
   it("renders Resume, Copy chat and Details buttons with tooltips that explain exactly what each does", () => {
     const node = renderSessionItem(base({}), false, handlers);
     const actions = [...node.querySelectorAll<HTMLElement>(".session-item-action")];
-    expect(actions.map(labelOf)).toEqual(["Resume", "Copy chat", "Details"]);
+    expect(actions.map(labelOf)).toEqual(["Resume", "Copy chat", "Details", "Remove"]);
     expect(byLabel(node, "Resume").dataset["tip"]).toMatch(/claude --resume/);
     expect(byLabel(node, "Copy chat").dataset["tip"]).toMatch(/clipboard/i);
     expect(byLabel(node, "Details").dataset["tip"]).toMatch(/read-only/i);
+    expect(byLabel(node, "Remove").dataset["tip"]).toMatch(/transcript/i);
     expect(node.querySelector(".session-item-tags")).toBeNull();
     expect(node.querySelector(".tag")).toBeNull();
     expect(node.textContent).not.toContain("Claude Opus 4.7");
@@ -47,7 +50,18 @@ describe("renderSessionItem — actions row", () => {
 
   it("renders the action buttons regardless of whether a model is present", () => {
     const node = renderSessionItem(base({ model: null }), false, handlers);
-    expect(node.querySelectorAll(".session-item-action")).toHaveLength(3);
+    expect(node.querySelectorAll(".session-item-action")).toHaveLength(4);
+  });
+
+  it("the Remove button calls onDeleteSession and does not select the row", () => {
+    const onSelect = vi.fn();
+    const onDeleteSession = vi.fn();
+    const node = renderSessionItem(base({}), false, { ...handlers, onSelect, onDeleteSession });
+    document.body.appendChild(node);
+    byLabel(node, "Remove").click();
+    expect(onDeleteSession).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+    node.remove();
   });
 
   it("the Resume button adopts the session into the cockpit and does not also select", () => {

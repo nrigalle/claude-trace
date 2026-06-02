@@ -1,4 +1,4 @@
-import type { EffortLevel } from "../features/pipelines/domain/types";
+import type { EffortLevel } from "./types";
 
 export interface EffortOption {
   readonly id: EffortLevel;

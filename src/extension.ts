@@ -14,6 +14,7 @@ import { CockpitController, type CockpitActions } from "./features/cockpit/app/C
 import type { CockpitLayout } from "./features/cockpit/protocol";
 import { ProfileStore } from "./features/cockpit/infra/ProfileStore";
 import { CockpitSessionStore } from "./features/cockpit/infra/CockpitSessionStore";
+import { CockpitTerminalHistoryStore } from "./features/cockpit/infra/CockpitTerminalHistoryStore";
 import { encodeCwdForProjects } from "./shared/projectPathEncoding";
 import {
   writeSessionHooks,
@@ -29,10 +30,18 @@ import { RealAutomationRunner } from "./features/pipelines/infra/RealAutomationR
 import { RealDeterministicRunner } from "./features/pipelines/infra/RealDeterministicRunner";
 import { TriggerScheduler, type TimerHandle } from "./features/pipelines/app/TriggerScheduler";
 import { RealWebhookServer } from "./features/pipelines/infra/RealWebhookServer";
-import { PROJECTS_DIR, COCKPIT_HOOKS_DIR } from "./shared/config";
+import { PROJECTS_DIR, COCKPIT_HOOKS_DIR, LIBRARY_DIR } from "./shared/config";
 import { PipelineStore } from "./features/pipelines/infra/PipelineStore";
 import { RunStore } from "./features/pipelines/infra/RunStore";
 import { PipelinesHostAdapter } from "./features/pipelines/infra/PipelinesHostAdapter";
+import { LibraryController, type LibraryActions } from "./features/library/app/LibraryController";
+import { LibraryHostAdapter } from "./features/library/infra/LibraryHostAdapter";
+import { LibraryStore } from "./features/library/infra/LibraryStore";
+import { Materializer } from "./features/library/infra/Materializer";
+import { ImportScanner } from "./features/library/infra/ImportScanner";
+import { LibraryImporter } from "./features/library/infra/LibraryImporter";
+import { LibraryAssistant } from "./features/library/infra/LibraryAssistant";
+import { toProjectPath, type ProjectEntry } from "./features/library/domain/types";
 import { isAutoMemoryFile } from "./features/dashboard/domain/memory";
 import { buildChatMarkdown, chatExportFilename } from "./features/dashboard/domain/chatExport";
 import { buildClaudeCommand } from "./shared/permissionModes";
@@ -41,6 +50,7 @@ import { spawn } from "child_process";
 import { computeBeforeContent } from "./features/dashboard/domain/reverseApply";
 import { buildUnifiedDiff } from "./features/dashboard/domain/unifiedDiff";
 import { ensureProjectsDirExists, SessionFileReader } from "./features/dashboard/infra/SessionFileReader";
+import { decodeProjectDirName } from "./features/dashboard/infra/paths";
 import { SessionDirectoryWatcher, type WatcherListener } from "./features/dashboard/infra/SessionDirectoryWatcher";
 import { SessionFilePoller } from "./features/dashboard/infra/SessionFilePoller";
 import { BudgetMonitor } from "./features/dashboard/infra/BudgetMonitor";
@@ -51,8 +61,9 @@ import { registerPanelSerializer, SerializedState } from "./features/dashboard/i
 import { pickPermissionMode } from "./features/dashboard/infra/SessionPickers";
 import { SessionNameStore } from "./features/dashboard/infra/SessionNameStore";
 import { SessionPinStore } from "./features/dashboard/infra/SessionPinStore";
+import { SessionHiddenStore } from "./features/dashboard/infra/SessionHiddenStore";
 import { registerStatusBar } from "./features/dashboard/infra/StatusBar";
-import { WebviewHost } from "./shared/WebviewHost";
+import { WebviewHost } from "./features/dashboard/infra/WebviewHost";
 import type { SessionId } from "./features/dashboard/domain/types";
 import { fromSessionId, toSessionId } from "./features/dashboard/domain/types";
 
@@ -61,6 +72,7 @@ const CLAUDE_TERMINAL_PREFIX = "Claude · ";
 let currentController: DashboardController | null = null;
 let currentPipelinesController: PipelinesController | null = null;
 let currentCockpitController: CockpitController | null = null;
+let currentLibraryController: LibraryController | null = null;
 
 const findBinary = (candidates: readonly string[]): string | null => {
   for (const bin of candidates) {
@@ -124,7 +136,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const term = vscode.window.createTerminal("Claude Trace · notifications");
     term.show();
     term.sendText(
-      "brew install vjeantet/tap/alerter && echo '\\n✅ Installed. The first notification will ask permission — click Allow. Then reload VS Code (Cmd+Shift+P → Developer: Reload Window).'",
+      "brew install vjeantet/tap/alerter && echo '\\n✅ Installed. The first notification will ask permission. Click Allow. Then reload VS Code (Cmd+Shift+P, Developer: Reload Window).'",
     );
   };
   context.subscriptions.push(
@@ -139,8 +151,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const nameStore = new SessionNameStore(context.globalState);
   const pinStore = new SessionPinStore(context.globalState);
+  const hiddenStore = new SessionHiddenStore(context.globalState);
   const reader = new SessionFileReader();
-  const service = new SessionService(reader, nameStore, pinStore);
+  const service = new SessionService(reader, nameStore, pinStore, hiddenStore);
   const watcher = new SessionDirectoryWatcher();
   const poller = new SessionFilePoller();
   context.subscriptions.push(watcher.start());
@@ -226,7 +239,7 @@ export function activate(context: vscode.ExtensionContext): void {
           "Claude Trace: this file has been modified since the session ended, so the side-by-side diff can't be reconstructed. Showing a summary of what the session changed instead.",
         );
         const header = [
-          "# Claude Trace — summary diff",
+          "# Claude Trace: summary diff",
           "#",
           "# This file has been modified on disk since Claude's session ended,",
           "# so the side-by-side diff editor cannot faithfully reconstruct what changed.",
@@ -244,7 +257,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
       quickDiff.setActiveSession(id);
       const beforeUri = quickDiff.contentProvider.originalUri(filePath);
-      const title = `${path.basename(filePath)} — Claude session vs current`;
+      const title = `${path.basename(filePath)}: Claude session vs current`;
       await vscode.commands.executeCommand("vscode.diff", beforeUri, fileUri, title, { preview: true });
     },
     async togglePin(id: SessionId): Promise<void> {
@@ -254,6 +267,29 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showErrorMessage(
           `Claude Trace: failed to save pin state. ${err instanceof Error ? err.message : String(err)}`,
         );
+      }
+    },
+    async deleteSessions(ids: readonly SessionId[]): Promise<void> {
+      await hiddenStore.hide(ids);
+      for (const id of ids) service.invalidate(id);
+    },
+    async deleteSessionFiles(ids: readonly SessionId[]): Promise<void> {
+      if (ids.length === 0) return;
+      const choice = await vscode.window.showWarningMessage(
+        ids.length === 1
+          ? "Delete this session's transcript? It moves to the Trash and is removed from Claude Code, so 'claude --resume' will no longer find it."
+          : `Delete ${ids.length} session transcripts? They move to the Trash and are removed from Claude Code, so 'claude --resume' will no longer find them.`,
+        { modal: true },
+        "Delete",
+      );
+      if (choice !== "Delete") return;
+      for (const id of ids) {
+        const filePath = service.filePathFor(id);
+        if (!filePath) continue;
+        try {
+          await vscode.workspace.fs.delete(vscode.Uri.file(filePath), { useTrash: true });
+        } catch {}
+        service.invalidate(id);
       }
     },
     async exportChatMarkdown(id: SessionId): Promise<void> {
@@ -296,6 +332,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const runStore = new RunStore();
   const profileStore = new ProfileStore();
   const cockpitSessionStore = new CockpitSessionStore();
+  const cockpitTerminalHistoryStore = new CockpitTerminalHistoryStore();
 
   const copyConversationToClipboard = async (sessionId: string): Promise<void> => {
     const detail = service.detail(toSessionId(sessionId));
@@ -321,6 +358,10 @@ export function activate(context: vscode.ExtensionContext): void {
     if (currentCockpitController && !existingPanel) {
       currentCockpitController.dispose();
       currentCockpitController = null;
+    }
+    if (currentLibraryController && !existingPanel) {
+      currentLibraryController.dispose();
+      currentLibraryController = null;
     }
     const column = vscode.window.activeTextEditor?.viewColumn;
     const host = new WebviewHost({
@@ -369,7 +410,7 @@ export function activate(context: vscode.ExtensionContext): void {
           name: `Claude · ${sessionId.slice(0, 8)}`,
           cwd,
         });
-        terminal.sendText(`claude --resume ${sessionId}`);
+        terminal.sendText(buildClaudeCommand({ mode: "default", resumeId: sessionId }));
         terminal.show(false);
       },
     };
@@ -417,6 +458,18 @@ export function activate(context: vscode.ExtensionContext): void {
         return saved && typeof saved === "object" && saved.trees ? { trees: saved.trees } : { trees: {} };
       },
       saveCockpitLayout: (layout) => void context.globalState.update("ct.cockpitLayout", layout),
+      pickFolder: async (_context: string): Promise<string | null> => {
+        const defaultUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        const picked = await vscode.window.showOpenDialog({
+          canSelectFiles: false,
+          canSelectFolders: true,
+          canSelectMany: false,
+          openLabel: "Use this folder",
+          title: "Pick the working folder for the session",
+          defaultUri,
+        });
+        return picked?.[0]?.fsPath ?? null;
+      },
       now: () => Date.now(),
     };
     const tmuxBin = findTmux();
@@ -427,8 +480,70 @@ export function activate(context: vscode.ExtensionContext): void {
       host: new CockpitHostAdapter(host.panel),
       profileStore,
       sessionStore: cockpitSessionStore,
+      terminalHistoryStore: cockpitTerminalHistoryStore,
       terminals: terminalBackend,
       actions: cockpitActions,
+    });
+
+    const libraryStore = new LibraryStore(LIBRARY_DIR);
+    libraryStore.ensureDirs();
+    const libraryMaterializer = new Materializer(libraryStore);
+    const libraryScanner = new ImportScanner();
+    const libraryImporter = new LibraryImporter(libraryStore);
+    const libraryActions: LibraryActions = {
+      pickProjectFolder: async () => {
+        const defaultUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        const picked = await vscode.window.showOpenDialog({
+          canSelectFiles: false,
+          canSelectFolders: true,
+          canSelectMany: false,
+          openLabel: "Add to library",
+          title: "Pick a project folder for the library",
+          defaultUri,
+        });
+        const fsPath = picked?.[0]?.fsPath;
+        return fsPath ? toProjectPath(fsPath) : null;
+      },
+      showInfo: (message) => void vscode.window.setStatusBarMessage(`Claude Trace: ${message}`, 3000),
+      showWarning: (message) => void vscode.window.showWarningMessage(`Claude Trace: ${message}`),
+      showError: (message) => void vscode.window.showErrorMessage(`Claude Trace: ${message}`),
+      workspaceProjects: () =>
+        (vscode.workspace.workspaceFolders ?? []).map<ProjectEntry>((folder) => ({
+          path: toProjectPath(folder.uri.fsPath),
+          label: folder.name,
+          source: "workspace",
+        })),
+      trackedProjects: () => {
+        if (!fs.existsSync(PROJECTS_DIR)) return [];
+        try {
+          const entries = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true });
+          const out: ProjectEntry[] = [];
+          for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            const decoded = decodeProjectDirName(entry.name);
+            if (!decoded || !fs.existsSync(decoded)) continue;
+            const label = path.basename(decoded);
+            out.push({ path: toProjectPath(decoded), label, source: "tracked" });
+          }
+          return out;
+        } catch {
+          return [];
+        }
+      },
+      openLibraryDir: () => {
+        const uri = vscode.Uri.file(LIBRARY_DIR);
+        void vscode.commands.executeCommand("revealFileInOS", uri);
+      },
+      workspaceCwd: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+    };
+    currentLibraryController = new LibraryController({
+      host: new LibraryHostAdapter(host.panel),
+      store: libraryStore,
+      materializer: libraryMaterializer,
+      scanner: libraryScanner,
+      importer: libraryImporter,
+      actions: libraryActions,
+      assistant: new LibraryAssistant(),
     });
 
     host.onDispose(() => {
@@ -442,6 +557,8 @@ export function activate(context: vscode.ExtensionContext): void {
       currentPipelinesController = null;
       if (currentCockpitController) currentCockpitController.dispose();
       currentCockpitController = null;
+      if (currentLibraryController) currentLibraryController.dispose();
+      currentLibraryController = null;
     });
     if (!existingPanel) host.reveal(column);
   };
@@ -460,4 +577,6 @@ export function deactivate(): void {
   currentPipelinesController = null;
   if (currentCockpitController) currentCockpitController.dispose();
   currentCockpitController = null;
+  if (currentLibraryController) currentLibraryController.dispose();
+  currentLibraryController = null;
 }

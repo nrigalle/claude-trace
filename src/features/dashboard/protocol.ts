@@ -41,6 +41,7 @@ export type WebviewToHost =
   | { readonly type: "exportChatMarkdown"; readonly sessionId: SessionId }
   | { readonly type: "copyConversation"; readonly sessionId: SessionId }
   | { readonly type: "togglePin"; readonly sessionId: SessionId }
+  | { readonly type: "deleteSessions"; readonly sessionIds: readonly SessionId[]; readonly permanent?: boolean }
   | { readonly type: "saveDetailLayout"; readonly layout: readonly DetailLayoutEntry[] };
 
 export { assertNever } from "../../shared/assertNever";

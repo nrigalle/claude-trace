@@ -1,9 +1,9 @@
-import * as path from "path";
-
 const shQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 
-const markerCommand = (signalsDir: string, sessionId: string, kind: string): string =>
-  `mkdir -p ${shQuote(signalsDir)} && : > ${shQuote(path.join(signalsDir, `${sessionId}.${kind}`))}`;
+const markerCommand = (signalsDir: string, sessionId: string, kind: string): string => {
+  const dir = signalsDir.replace(/\\/g, "/");
+  return `mkdir -p ${shQuote(dir)} && : > ${shQuote(`${dir}/${sessionId}.${kind}`)}`;
+};
 
 export interface HookEntry {
   readonly matcher?: string;
@@ -14,7 +14,10 @@ export interface CockpitHookSettings {
   readonly hooks: Record<string, readonly HookEntry[]>;
 }
 
-export const buildCockpitHookSettings = (sessionId: string, signalsDir: string): CockpitHookSettings => {
+export const buildCockpitHookSettings = (
+  sessionId: string,
+  signalsDir: string,
+): CockpitHookSettings => {
   const marker = (kind: string): string => markerCommand(signalsDir, sessionId, kind);
   return {
     hooks: {

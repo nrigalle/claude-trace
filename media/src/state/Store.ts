@@ -49,7 +49,7 @@ interface VsCodeApi {
   getState(): unknown;
 }
 
-declare const acquireVsCodeApi: <_S = unknown>() => VsCodeApi;
+declare const acquireVsCodeApi: () => VsCodeApi;
 
 const DEFAULTS: UiState = {
   selectedId: null,
@@ -104,7 +104,6 @@ export class Store {
   readonly vscode: VsCodeApi;
   private current: UiState;
   private persistTimer: number | null = null;
-  private readonly listeners = new Set<(s: UiState) => void>();
 
   constructor() {
     this.vscode = acquireVsCodeApi();
@@ -131,12 +130,6 @@ export class Store {
   update(patch: Partial<UiState>): void {
     this.current = { ...this.current, ...patch };
     this.schedulePersist();
-    this.notify();
-  }
-
-  subscribe(listener: (s: UiState) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
   }
 
   private schedulePersist(): void {
@@ -145,11 +138,5 @@ export class Store {
       this.persistTimer = null;
       this.vscode.setState(this.current);
     }, 100);
-  }
-
-  private notify(): void {
-    for (const l of this.listeners) {
-      try { l(this.current); } catch {}
-    }
   }
 }

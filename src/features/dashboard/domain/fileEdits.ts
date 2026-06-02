@@ -97,7 +97,7 @@ export const aggregateByFile = (
   return result;
 };
 
-const baseName = (filePath: string): string => {
+export const baseName = (filePath: string): string => {
   const idx = filePath.lastIndexOf("/");
   return idx === -1 ? filePath : filePath.slice(idx + 1);
 };

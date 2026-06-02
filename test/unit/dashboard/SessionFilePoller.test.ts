@@ -24,6 +24,15 @@ describe("SessionFilePoller — visibility gating & change detection", () => {
     return { id, file };
   };
 
+  const makeSessionInProject = (projectDirName: string): Session => {
+    const dir = path.join(PROJECTS_DIR, projectDirName);
+    fs.mkdirSync(dir, { recursive: true });
+    const id = `poll-${Math.random().toString(36).slice(2, 10)}`;
+    const file = path.join(dir, `${id}.jsonl`);
+    created.push(file);
+    return { id, file };
+  };
+
   const recordFor = (id: string): WatcherChange["kind"][] => {
     const kinds: WatcherChange["kind"][] = [];
     poller.onChange((c) => {
@@ -147,6 +156,61 @@ describe("SessionFilePoller — visibility gating & change detection", () => {
     sub.dispose();
     fs.appendFileSync(s.file, "yy");
     advance(2);
+    expect(seen).toEqual([]);
+  });
+
+  it("ignores cold files during the hot-path tick — perf invariant: silent files do not generate work or events", () => {
+    const cold = makeSession();
+    const veryOld = Date.now() - 10 * 60_000;
+    fs.writeFileSync(cold.file, "old");
+    fs.utimesSync(cold.file, veryOld / 1000, veryOld / 1000);
+    const seen = recordFor(cold.id);
+    poller.setActive(true);
+    advance();
+    expect(seen).toEqual([]);
+
+    fs.utimesSync(cold.file, (Date.now() - 5 * 60_000) / 1000, (Date.now() - 5 * 60_000) / 1000);
+    advance(5);
+    expect(seen).toEqual([]);
+  });
+
+  it("still detects writes to a hot file (mtime within the live window) on the very next tick", () => {
+    const hot = makeSession();
+    fs.writeFileSync(hot.file, "a");
+    const seen = recordFor(hot.id);
+    poller.setActive(true);
+    advance();
+    expect(seen).toEqual([]);
+
+    fs.appendFileSync(hot.file, "more");
+    advance();
+    expect(seen).toContain("changed");
+  });
+
+  it("detects a session that resumes writing after being cold for over a minute (eventual consistency, ≤30s)", () => {
+    const session = makeSession();
+    fs.writeFileSync(session.file, "a");
+    const seen = recordFor(session.id);
+    poller.setActive(true);
+    advance();
+    expect(seen).toEqual([]);
+
+    const longAgo = Date.now() - 5 * 60_000;
+    fs.utimesSync(session.file, longAgo / 1000, longAgo / 1000);
+    advance(2);
+    fs.appendFileSync(session.file, "RESUMED");
+    advance(31);
+    expect(seen).toContain("changed");
+  });
+
+  it("keeps library-assistant transcripts out of the hot-path project refresh", () => {
+    const hidden = makeSessionInProject("-Users-alex--claude-trace-library-assistant-skill-code-review");
+    fs.writeFileSync(hidden.file, "assistant");
+    const seen = recordFor(hidden.id);
+
+    poller.setActive(true);
+    advance();
+
     expect(seen).toEqual([]);
   });
 

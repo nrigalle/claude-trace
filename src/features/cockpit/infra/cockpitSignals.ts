@@ -28,9 +28,7 @@ export const removeSessionHooks = (sessionId: string): void => {
     path.join(COCKPIT_SIGNALS_DIR, `${sessionId}.notify`),
     path.join(COCKPIT_SIGNALS_DIR, `${sessionId}.active`),
   ]) {
-    try {
-      fs.rmSync(f, { force: true });
-    } catch {}
+    removeFile(f);
   }
 };
 
@@ -38,7 +36,8 @@ export const watchAttentionSignals = (
   listener: (sessionId: string, reason: AttentionReason) => void,
 ): { dispose(): void } => {
   fs.mkdirSync(COCKPIT_SIGNALS_DIR, { recursive: true });
-  const poll = (): void => {
+  let coalesce: ReturnType<typeof setTimeout> | null = null;
+  const drain = (): void => {
     let entries: string[];
     try {
       entries = fs.readdirSync(COCKPIT_SIGNALS_DIR);
@@ -56,8 +55,49 @@ export const watchAttentionSignals = (
       listener(match[1]!, match[2] as AttentionReason);
     }
   };
-  const timer = setInterval(poll, SIGNALS_POLL_INTERVAL_MS);
-  return { dispose: () => clearInterval(timer) };
+  const scheduleDrain = (): void => {
+    if (coalesce !== null) return;
+    coalesce = setTimeout(() => {
+      coalesce = null;
+      drain();
+    }, 30);
+  };
+  drain();
+  let watcher: fs.FSWatcher | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  try {
+    watcher = fs.watch(COCKPIT_SIGNALS_DIR, () => scheduleDrain());
+    watcher.on("error", () => {
+      closeWatcher(watcher);
+      watcher = null;
+      pollTimer = setInterval(drain, SIGNALS_POLL_INTERVAL_MS);
+    });
+  } catch {
+    pollTimer = setInterval(drain, SIGNALS_POLL_INTERVAL_MS);
+  }
+  return {
+    dispose: () => {
+      if (coalesce !== null) clearTimeout(coalesce);
+      if (pollTimer !== null) clearInterval(pollTimer);
+      closeWatcher(watcher);
+    },
+  };
+};
+
+const removeFile = (filePath: string): void => {
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch {
+    return;
+  }
+};
+
+const closeWatcher = (watcher: fs.FSWatcher | null): void => {
+  try {
+    watcher?.close();
+  } catch {
+    return;
+  }
 };
 
 export const saveDroppedImage = (fileName: string, dataBase64: string): string | null => {

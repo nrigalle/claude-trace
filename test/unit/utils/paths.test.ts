@@ -89,3 +89,18 @@ describe("discoverSessionRefs", () => {
     process.env["CLAUDE_TRACE_PROJECTS_DIR"] = prevEnv;
   });
 });
+
+import { isHiddenAssistantProject } from "../../../src/features/dashboard/infra/paths";
+
+describe("isHiddenAssistantProject", () => {
+  it("hides assistant-spawned project dirs (regression: assistant sessions polluted the sidebar)", () => {
+    expect(isHiddenAssistantProject("-Users-alex--claude-trace-library-assistant-skill-code-review")).toBe(true);
+    expect(isHiddenAssistantProject("-Users-alex--claude-trace-library-assistant-agent-reviewer")).toBe(true);
+  });
+
+  it("does NOT hide normal project dirs", () => {
+    expect(isHiddenAssistantProject("-Users-alex-Desktop-my-api")).toBe(false);
+    expect(isHiddenAssistantProject("-home-user-projects-claude-trace")).toBe(false);
+    expect(isHiddenAssistantProject("-Users-alex--claude-trace")).toBe(false);
+  });
+});

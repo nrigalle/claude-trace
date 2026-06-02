@@ -47,6 +47,6 @@ export const parseOrchestratorDecision = (text: string): OrchestratorDecision =>
   }
   return {
     kind: "needs-input",
-    reason: "Orchestrator returned a malformed response — manual review needed.",
+    reason: "Orchestrator returned a malformed response. Manual review needed.",
   };
 };

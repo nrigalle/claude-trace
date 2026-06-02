@@ -1,3 +1,6 @@
+import type { FileEditSummary } from "./fileEdits";
+export type { FileChange, FileEditSummary } from "./fileEdits";
+
 export type SessionId = string & { readonly __brand: "SessionId" };
 
 export const toSessionId = (s: string): SessionId => s as SessionId;
@@ -82,21 +85,6 @@ export interface ToolStat {
 export interface ChartPoint {
   readonly ts: number;
   readonly value: number;
-}
-
-export type FileChange =
-  | { readonly kind: "write"; readonly ts: number; readonly content: string }
-  | { readonly kind: "edit"; readonly ts: number; readonly oldString: string; readonly newString: string };
-
-export interface FileEditSummary {
-  readonly filePath: string;
-  readonly fileName: string;
-  readonly latestTs: number;
-  readonly count: number;
-  readonly added: number;
-  readonly removed: number;
-  readonly dominantAction: "write" | "edit" | "multiedit";
-  readonly changes: readonly FileChange[];
 }
 
 export interface SessionDetail extends SessionSummary {

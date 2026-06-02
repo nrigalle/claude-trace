@@ -9,17 +9,11 @@ const MAX_DIFFABLE_BYTES = 2_000_000;
 
 export class ClaudeTraceQuickDiff implements vscode.Disposable {
   readonly contentProvider: ClaudeTraceContentProvider;
-  private readonly sourceControl: vscode.SourceControl;
   private readonly providerRegistration: vscode.Disposable;
   private activeSessionId: SessionId | null = null;
   private activePaths: Set<string> = new Set();
 
   constructor(private readonly service: SessionService) {
-    const rootUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-    this.sourceControl = vscode.scm.createSourceControl("claudetrace", "Claude Trace", rootUri);
-    this.sourceControl.quickDiffProvider = {
-      provideOriginalResource: (uri) => this.provideOriginalResource(uri),
-    };
     this.contentProvider = new ClaudeTraceContentProvider((path, token) => this.resolve(path, token));
     this.providerRegistration = vscode.workspace.registerTextDocumentContentProvider(
       CLAUDE_TRACE_SCHEME,
@@ -59,13 +53,6 @@ export class ClaudeTraceQuickDiff implements vscode.Disposable {
   dispose(): void {
     this.providerRegistration.dispose();
     this.contentProvider.dispose();
-    this.sourceControl.dispose();
-  }
-
-  private provideOriginalResource(uri: vscode.Uri): vscode.Uri | undefined {
-    if (uri.scheme !== "file") return undefined;
-    if (!this.activePaths.has(uri.fsPath)) return undefined;
-    return this.contentProvider.originalUri(uri.fsPath);
   }
 
   private async resolve(filePath: string, token: vscode.CancellationToken): Promise<string> {

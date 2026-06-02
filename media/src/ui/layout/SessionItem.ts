@@ -9,6 +9,8 @@ export interface SessionItemHandlers {
   onTogglePin(id: SessionId): void;
   onCopyConversation(id: SessionId): void;
   onResumeInCockpit(id: SessionId): void;
+  onDeleteSession(id: SessionId): void;
+  onToggleSelect(id: SessionId): void;
 }
 
 const deriveProject = (cwd: string | null): string => {
@@ -26,6 +28,7 @@ export const renderSessionItem = (
   s: SessionSummary,
   isActive: boolean,
   handlers: SessionItemHandlers,
+  opts: { readonly selected: boolean } = { selected: false },
 ): HTMLButtonElement => {
   const title = deriveTitle(s);
   const project = deriveProject(s.cwd);
@@ -87,6 +90,28 @@ export const renderSessionItem = (
     },
   });
 
+  const checkHandler = (ev: Event): void => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    handlers.onToggleSelect(s.session_id);
+  };
+  const check = h("span", {
+    className: `session-item-check${opts.selected ? " checked" : ""}`,
+    attrs: {
+      role: "button",
+      tabindex: "0",
+      "aria-label": `Select ${title}`,
+      "aria-pressed": String(opts.selected),
+      title: "Select for bulk actions",
+    },
+    on: {
+      click: checkHandler,
+      keydown: (e: KeyboardEvent) => {
+        if (e.key === "Enter" || e.key === " ") checkHandler(e);
+      },
+    },
+  });
+
   const content = h(
     "div",
     { className: "session-item-content" },
@@ -138,6 +163,13 @@ export const renderSessionItem = (
         ICONS.info,
         () => handlers.onSelect(s.session_id),
       ),
+      rowAction(
+        "Remove",
+        "Remove from dashboard",
+        "Hide this session from the dashboard. Your Claude transcript and 'claude --resume' stay intact.",
+        ICONS.trash,
+        () => handlers.onDeleteSession(s.session_id),
+      ),
     ),
   );
 
@@ -152,7 +184,7 @@ export const renderSessionItem = (
       },
       on: { click: () => handlers.onSelect(s.session_id) },
     },
-    h("div", { className: "session-item-gutter" }, pin),
+    h("div", { className: "session-item-gutter" }, check, pin),
     content,
   );
   item.dataset.sessionId = s.session_id;

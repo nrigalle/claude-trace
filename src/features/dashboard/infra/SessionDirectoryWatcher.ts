@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { PROJECTS_DIR } from "../../../shared/config";
 import type { SessionId } from "../domain/types";
-import { parseUriPath } from "./paths";
+import { isHiddenAssistantProject, parseUriPath } from "./paths";
 
 export type WatcherChange = {
   readonly kind: "added" | "changed" | "removed";
@@ -51,6 +51,7 @@ export class SessionDirectoryWatcher {
   private emit(kind: WatcherChange["kind"], uri: vscode.Uri): void {
     const parsed = parseUriPath(uri.fsPath);
     if (!parsed) return;
+    if (isHiddenAssistantProject(parsed.projectDirName)) return;
     for (const l of this.listeners) {
       try { l({ kind, sessionId: parsed.sessionId, projectDirName: parsed.projectDirName }); } catch { }
     }

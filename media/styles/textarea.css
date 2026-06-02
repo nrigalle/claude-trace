@@ -1,0 +1,164 @@
+.ct-ta-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ct-ta-wrap .ct-ta-input {
+  background: var(--ct-bg-2);
+  border: 1px solid var(--ct-border);
+  color: var(--ct-text-primary);
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: var(--ct-radius-sm);
+  width: 100%;
+  resize: none;
+  transition: border-color 140ms var(--ct-ease-out), box-shadow 140ms var(--ct-ease-out);
+  box-sizing: border-box;
+}
+.ct-ta-mono .ct-ta-input {
+  font-family: var(--ct-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.ct-ta-wrap .ct-ta-input:focus-visible {
+  outline: none;
+  border-color: var(--ct-claude);
+  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.18);
+}
+
+.ct-ta-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 8px;
+  cursor: ns-resize;
+  z-index: 2;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.ct-ta-handle-top { top: -3px; }
+.ct-ta-handle-bottom { bottom: -3px; }
+.ct-ta-handle::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.ct-ta-handle:hover::after,
+.ct-ta-handle.dragging::after {
+  background: color-mix(in srgb, var(--ct-claude) 55%, transparent);
+}
+
+.ct-ta-expand {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 15, 21, 0.55);
+  border: 1px solid var(--ct-border);
+  color: var(--ct-text-secondary);
+  border-radius: var(--ct-radius-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 140ms var(--ct-ease-out), color 140ms var(--ct-ease-out),
+    border-color 140ms var(--ct-ease-out);
+  z-index: 3;
+}
+.ct-ta-wrap:hover .ct-ta-expand,
+.ct-ta-wrap:focus-within .ct-ta-expand { opacity: 1; }
+.ct-ta-expand:hover {
+  color: var(--ct-claude-light);
+  border-color: var(--ct-border-hover);
+}
+
+.ct-ta-expand-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7, 7, 11, 0.62);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  opacity: 0;
+  transition: opacity 160ms var(--ct-ease-out);
+}
+.ct-ta-expand-overlay.open { opacity: 1; }
+.ct-ta-expand-overlay.closing { opacity: 0; }
+.ct-ta-expand-card {
+  width: min(1100px, calc(100vw - 64px));
+  height: min(820px, calc(100vh - 96px));
+  background: var(--ct-bg-1);
+  border: 1px solid var(--ct-border-hover);
+  border-radius: var(--ct-radius);
+  box-shadow: var(--ct-elev-3);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: translateY(8px) scale(0.99);
+  opacity: 0;
+  transition: transform 220ms var(--ct-spring), opacity 200ms var(--ct-ease-out);
+}
+.ct-ta-expand-overlay.open .ct-ta-expand-card { transform: none; opacity: 1; }
+.ct-ta-expand-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--ct-border);
+  flex-shrink: 0;
+}
+.ct-ta-expand-title { font-weight: 600; font-size: 14px; }
+.ct-ta-expand-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ct-text-muted);
+}
+.ct-ta-expand-done {
+  border: 1px solid rgba(255, 174, 130, 0.32);
+  background: var(--ct-grad-orange);
+  color: #fff1e9;
+  font: inherit;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: var(--ct-radius-sm);
+  cursor: pointer;
+  box-shadow: var(--ct-elev-1), var(--ct-rim-accent);
+}
+.ct-ta-expand-done:hover { background: var(--ct-grad-orange-hover); }
+.ct-ta-expand-done:focus-visible {
+  outline: none;
+  box-shadow: var(--ct-elev-1), 0 0 0 3px rgba(217, 119, 87, 0.45);
+}
+.ct-ta-expand-editor {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  background: var(--ct-bg-0);
+  border: 0;
+  color: var(--ct-text-primary);
+  font-family: var(--ct-mono);
+  font-size: 13.5px;
+  line-height: 1.6;
+  padding: 20px 24px;
+  resize: none;
+  outline: none;
+}
+.ct-ta-expand-editor:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px rgba(217, 119, 87, 0.35);
+}
+.ct-ta-expand-editor::placeholder { color: var(--ct-text-muted); }

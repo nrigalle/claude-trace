@@ -25,6 +25,10 @@ export interface SessionPinSet {
   has(id: SessionId): boolean;
 }
 
+export interface SessionHiddenSet {
+  has(id: SessionId): boolean;
+}
+
 interface CachedSummary {
   readonly mtime: number;
   readonly title: string | null;
@@ -40,6 +44,7 @@ export class SessionService {
     private readonly reader: SessionFileReader,
     private readonly overrides?: SessionTitleOverrides,
     private readonly pins?: SessionPinSet,
+    private readonly hidden?: SessionHiddenSet,
   ) {}
 
   invalidate(id: SessionId): void {
@@ -53,12 +58,12 @@ export class SessionService {
     this.summaryCache.clear();
   }
 
-  cwdFor(id: SessionId): string | null {
-    return this.refs.get(id)?.filePath ? this.detail(id)?.cwd ?? null : null;
-  }
-
   projectDirFor(id: SessionId): string | null {
     return this.refs.get(id)?.projectDirName ?? null;
+  }
+
+  filePathFor(id: SessionId): string | null {
+    return this.refs.get(id)?.filePath ?? null;
   }
 
   list(): SessionSummary[] {
@@ -69,6 +74,7 @@ export class SessionService {
 
     const summaries: SessionSummary[] = [];
     for (const ref of refs) {
+      if (this.hidden?.has(ref.sessionId)) continue;
       presentIds.add(ref.sessionId);
       const stats = this.reader.statSafe(ref);
       if (!stats) continue;

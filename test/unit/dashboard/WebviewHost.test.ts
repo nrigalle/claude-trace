@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { WebviewHost } from "../../../src/shared/WebviewHost";
+import { WebviewHost } from "../../../src/features/dashboard/infra/WebviewHost";
 import { Uri } from "../../stubs/vscode";
 import type { WebviewToHost } from "../../../src/features/dashboard/protocol";
 

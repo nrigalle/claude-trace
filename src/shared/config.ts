@@ -10,9 +10,11 @@ export const TRACE_DATA_DIR =
   path.join(os.homedir(), ".claude-trace");
 
 export const AUTOMATIONS_DIR = path.join(TRACE_DATA_DIR, "automations");
+export const LIBRARY_DIR = path.join(TRACE_DATA_DIR, "library");
 export const RUNS_DIR = path.join(TRACE_DATA_DIR, "runs");
 export const COCKPIT_FILE = path.join(TRACE_DATA_DIR, "cockpit.json");
 export const COCKPIT_SESSIONS_FILE = path.join(TRACE_DATA_DIR, "cockpit-sessions.json");
+export const COCKPIT_TERMINAL_HISTORY_DIR = path.join(TRACE_DATA_DIR, "terminal-history");
 export const COCKPIT_HOOKS_DIR = path.join(TRACE_DATA_DIR, "hooks");
 export const COCKPIT_SIGNALS_DIR = path.join(TRACE_DATA_DIR, "signals");
 

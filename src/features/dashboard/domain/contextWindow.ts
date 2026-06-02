@@ -4,6 +4,7 @@ const STANDARD_200K = 200_000;
 const STANDARD_1M = 1_000_000;
 
 const MODEL_BASELINE_1M = new Set([
+  "claude-opus-4-8",
   "claude-opus-4-7",
   "claude-opus-4-6",
   "claude-sonnet-4-6",

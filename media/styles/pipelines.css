@@ -1462,18 +1462,12 @@ body.pl-resizing * {
   border-color: var(--ct-claude);
   border-style: solid;
 }
-.pl-block-prompt {
-  width: 100%; min-height: 140px;
-  background: var(--ct-bg-2);
-  color: var(--ct-text-primary);
-  border: 1px solid var(--ct-border);
-  border-radius: var(--ct-radius-sm);
-  padding: 10px 12px;
+.pl-block-prompt .ct-ta-input {
+  min-height: 140px;
   font-family: var(--ct-mono); font-size: 12.5px; line-height: 1.55;
-  resize: vertical;
+  padding: 10px 12px;
 }
-.pl-block-prompt:focus { outline: none; border-color: var(--ct-claude); }
-.pl-code { min-height: 200px; tab-size: 2; white-space: pre; }
+.pl-code .ct-ta-input { min-height: 200px; tab-size: 2; white-space: pre; }
 .pl-field { display: flex; flex-direction: column; gap: 6px; }
 .pl-field-label {
   font-size: 11.5px;
