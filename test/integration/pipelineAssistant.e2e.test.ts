@@ -5,7 +5,7 @@ import { spawn as spawnChild } from "child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { PipelineAssistant } from "../../src/features/pipelines/infra/PipelineAssistant";
-import type { ChatPtySpawner } from "../../src/shared/assistant/claudeChatEngine";
+import { makeFileSignalHooks, type ChatPtySpawner } from "../../src/shared/assistant/claudeChatEngine";
 import { toPipelineId, type Pipeline } from "../../src/features/pipelines/domain/types";
 
 // A mock `claude` binary: parses the args, writes a transcript jsonl for the
@@ -50,7 +50,7 @@ const run = async () => {
   if (signalsDir) { fs.mkdirSync(signalsDir, { recursive: true }); fs.writeFileSync(path.join(signalsDir, sid + '.stop'), ''); }
   process.exit(0);
 };
-run();
+if (process.env.MOCK_HANG) { setTimeout(() => process.exit(0), 30000); } else { run(); }
 `;
   fs.writeFileSync(filePath, script, { mode: 0o755 });
 };
@@ -109,7 +109,7 @@ const setResponseMap = (map: Record<string, string>): void => {
   fs.writeFileSync(responseMapPath, JSON.stringify(map), "utf8");
 };
 
-const makeAssistant = (): PipelineAssistant =>
+const makeAssistant = (inactivityTimeoutMs?: number): PipelineAssistant =>
   new PipelineAssistant({
     claudeBin: process.execPath,
     claudeArgsPrefix: [mockClaudePath],
@@ -118,6 +118,7 @@ const makeAssistant = (): PipelineAssistant =>
     transcriptRoot: projectsDir,
     now: () => 4242,
     hooks: { installHooks: installHooksImpl, removeHooks: removeHooksImpl, subscribeStop: subscribeStopImpl },
+    ...(inactivityTimeoutMs !== undefined ? { inactivityTimeoutMs } : {}),
   });
 
 const emptyPipeline = (id = "p-demo", name = "My flow"): Pipeline => ({
@@ -153,7 +154,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const k of ["MOCK_PROJECTS_DIR", "MOCK_SIGNALS_DIR", "MOCK_RESPONSE_MAP_FILE", "MOCK_STEP_DELAY_MS"]) {
+  for (const k of ["MOCK_PROJECTS_DIR", "MOCK_SIGNALS_DIR", "MOCK_RESPONSE_MAP_FILE", "MOCK_STEP_DELAY_MS", "MOCK_HANG"]) {
     delete process.env[k];
   }
   try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
@@ -238,6 +239,15 @@ describe("PipelineAssistant — end-to-end against a mock claude binary", () => 
     assistant.dispose();
   });
 
+  it("does not hang forever when the agent blocks on input it cannot receive", async () => {
+    process.env["MOCK_HANG"] = "1";
+    const assistant = makeAssistant(400);
+    await expect(
+      assistant.ask("c-stuck", { pipeline: emptyPipeline("p-stuck"), workspaceCwd: workspace }, "build it from my repo"),
+    ).rejects.toThrow(/stopped responding/i);
+    assistant.dispose();
+  });
+
   it("two conversations on the SAME pipeline stay independent (separate history)", async () => {
     setResponseMap({ default: "ok" });
     const assistant = makeAssistant();
@@ -247,5 +257,17 @@ describe("PipelineAssistant — end-to-end against a mock claude binary", () => 
     const sessions = (assistant as unknown as { engine: { sessionMap(): Map<string, { sessionId: string }> } }).engine.sessionMap();
     expect(sessions.get("c-one")!.sessionId).not.toBe(sessions.get("c-two")!.sessionId);
     assistant.dispose();
+  });
+});
+
+describe("makeFileSignalHooks — interactive tools are denied so a turn cannot block", () => {
+  it("writes AskUserQuestion and ExitPlanMode into permissions.deny", () => {
+    const hooks = makeFileSignalHooks(signalsDir, hooksDir, ["Read", "Grep"], ["Bash", "AskUserQuestion", "ExitPlanMode"]);
+    const file = hooks.installHooks("sess-deny");
+    expect(file).not.toBeNull();
+    const settings = JSON.parse(fs.readFileSync(file!, "utf8")) as { permissions: { allow: string[]; deny: string[] } };
+    expect(settings.permissions.deny).toContain("AskUserQuestion");
+    expect(settings.permissions.deny).toContain("ExitPlanMode");
+    expect(settings.permissions.allow).toEqual(["Read", "Grep"]);
   });
 });

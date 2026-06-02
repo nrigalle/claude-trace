@@ -301,12 +301,10 @@ export class PipelinesController {
       });
       this.handleAssistantListConversations(pipelineId);
     } catch (err) {
-      this.deps.host.postMessage({
-        type: "pipelineAssistantError",
-        pipelineId,
-        conversationId,
-        message: err instanceof Error ? err.message : String(err),
-      });
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== "Cancelled.") {
+        this.deps.host.postMessage({ type: "pipelineAssistantError", pipelineId, conversationId, message });
+      }
     } finally {
       this.deps.host.postMessage({ type: "pipelineAssistantBusy", pipelineId, conversationId, busy: false });
     }

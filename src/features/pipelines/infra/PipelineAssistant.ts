@@ -37,12 +37,13 @@ export interface PipelineAssistantConfig {
   readonly transcriptRoot?: string;
   readonly hooks?: Partial<ChatHooks>;
   readonly now?: () => number;
+  readonly inactivityTimeoutMs?: number;
 }
 
 const ASSISTANT_CWD_ROOT = path.join(TRACE_DATA_DIR, "pipeline-assistant");
 const ASSISTANT_SIGNALS_DIR = path.join(TRACE_DATA_DIR, "pipeline-assistant", "signals");
 const ASSISTANT_HOOKS_DIR = path.join(TRACE_DATA_DIR, "pipeline-assistant", "hooks");
-const DISALLOWED_TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "Task", "Agent"];
+const DISALLOWED_TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "Task", "Agent", "AskUserQuestion", "ExitPlanMode"];
 const ALLOWED_TOOLS = ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "TodoWrite"];
 
 export class PipelineAssistant {
@@ -61,6 +62,7 @@ export class PipelineAssistant {
       allowedTools: ALLOWED_TOOLS,
       disallowedTools: DISALLOWED_TOOLS,
       hooks: config.hooks,
+      inactivityTimeoutMs: config.inactivityTimeoutMs,
     });
     this.now = config.now ?? Date.now;
   }
@@ -129,7 +131,7 @@ export const systemPromptFor = (pipeline: Pipeline, otherPipelines: readonly Pip
   "You are editing THIS workflow live; what you propose is applied to the canvas the user is looking at.",
   "",
   "Your job has two modes in one conversation:",
-  "1. INTERVIEW: when anything about the workflow is unclear, ask focused questions until you are confident. Do not guess. Cover: the trigger (manual / schedule / webhook), each step's inputs and outputs, how data flows between steps, parallelism, and stop conditions. One or two sharp questions per turn, not a wall.",
+  "1. INTERVIEW: when anything about the workflow is unclear, ask focused questions until you are confident. Do not guess. Cover: the trigger (manual / schedule / webhook), each step's inputs and outputs, how data flows between steps, parallelism, and stop conditions. One or two sharp questions per turn, not a wall. Ask your questions as plain text and end your turn so the user can reply; never call AskUserQuestion or any interactive tool, and never enter plan mode.",
   "2. PROPOSE: once you are confident (or the user says go), emit the COMPLETE workflow as a single fenced JSON block (```json ... ```) matching the schema below. Always emit the whole pipeline, never a diff. Put a one or two sentence summary before the block. The UI parses the LAST json block and applies it after the user clicks Apply.",
   "",
   "You may use Read, Grep, Glob to inspect the user's repo (you run in their workspace) and WebSearch / WebFetch to confirm APIs. You CANNOT run code or deploy anything: Bash, Edit, Write are disabled. You never create infrastructure yourself.",

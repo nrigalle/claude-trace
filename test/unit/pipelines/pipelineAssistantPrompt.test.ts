@@ -36,4 +36,10 @@ describe("workflow assistant system prompt", () => {
     const prompt = systemPromptFor(pipeline("p1", "Only one"), []);
     expect(prompt).toContain("no other saved workflows yet");
   });
+
+  it("tells the assistant to ask in plain text and never use interactive tools", () => {
+    const prompt = systemPromptFor(pipeline("p1", "Only one"), []);
+    expect(prompt).toContain("never call AskUserQuestion");
+    expect(prompt.toLowerCase()).toContain("plain text");
+  });
 });

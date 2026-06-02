@@ -53,7 +53,7 @@ export interface LibraryAssistantConfig {
 const ASSISTANT_CWD_ROOT = path.join(TRACE_DATA_DIR, "library-assistant");
 const ASSISTANT_SIGNALS_DIR = path.join(TRACE_DATA_DIR, "library-assistant", "signals");
 const ASSISTANT_HOOKS_DIR = path.join(TRACE_DATA_DIR, "library-assistant", "hooks");
-const DISALLOWED_TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "Task", "Agent"];
+const DISALLOWED_TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "Task", "Agent", "AskUserQuestion", "ExitPlanMode"];
 const ALLOWED_TOOLS = ["WebSearch", "WebFetch", "Read", "Grep", "Glob", "TodoWrite"];
 
 export class LibraryAssistant {

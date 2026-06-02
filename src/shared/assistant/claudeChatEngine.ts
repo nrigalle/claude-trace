@@ -50,6 +50,7 @@ export interface ClaudeChatConfig {
   readonly allowedTools?: readonly string[];
   readonly disallowedTools?: readonly string[];
   readonly hooks?: Partial<ChatHooks>;
+  readonly inactivityTimeoutMs?: number;
 }
 
 export interface ChatTurnOptions {
@@ -81,6 +82,10 @@ const READY_BEFORE_SUBMIT_MS = 1800;
 const TOOL_RESULT_PREVIEW_CHARS = 220;
 const COLS = 120;
 const ROWS = 40;
+const INACTIVITY_TIMEOUT_MS = 120_000;
+const WATCHDOG_POLL_MS = 2_000;
+
+export type StopReason = "stop" | "exit" | "cancel" | "stuck";
 
 export const encodeForClaudeProjects = (cwd: string): string =>
   cwd.replace(/[^a-zA-Z0-9-]/g, "-");
@@ -95,6 +100,7 @@ export class ClaudeChatEngine {
   private readonly ptySpawner: ChatPtySpawner;
   private readonly cwdRoot: string;
   private readonly transcriptRoot: string;
+  private readonly inactivityTimeoutMs: number;
 
   constructor(private readonly config: ClaudeChatConfig) {
     this.claudeBin = config.claudeBin ?? "claude";
@@ -102,6 +108,7 @@ export class ClaudeChatEngine {
     this.ptySpawner = config.ptySpawner ?? NODE_PTY_SPAWNER;
     this.cwdRoot = config.cwdRoot;
     this.transcriptRoot = config.transcriptRoot ?? PROJECTS_DIR;
+    this.inactivityTimeoutMs = config.inactivityTimeoutMs ?? INACTIVITY_TIMEOUT_MS;
     const defaults = makeFileSignalHooks(config.signalsDir, config.hooksDir, config.allowedTools, config.disallowedTools);
     this.hooks = {
       installHooks: config.hooks?.installHooks ?? defaults.installHooks,
@@ -210,12 +217,21 @@ export class ClaudeChatEngine {
         options.onProgress(events);
       }, STREAM_POLL_MS);
 
-      await stopPromise;
-      const events = await readEventsWithRetry(state.transcriptPath, startOffset);
+      const reason = await stopPromise;
       state.transcriptOffset = currentFileSize(state.transcriptPath);
       state.hasFirstTurn = true;
-      if (state.cancelled) throw new Error("Cancelled.");
-      return { events, text: concatTextEvents(events) };
+      if (state.cancelled || reason === "cancel") throw new Error("Cancelled.");
+      if (reason === "stuck") {
+        throw new Error(
+          "The assistant stopped responding. It likely paused for input it can't receive here (an interactive prompt or a tool that needs approval). Your message wasn't lost, try sending it again or rephrasing.",
+        );
+      }
+      const events = await readEventsWithRetry(state.transcriptPath, startOffset);
+      const text = concatTextEvents(events);
+      if (events.length === 0 && text.length === 0) {
+        throw new Error("The assistant didn't return a response. Please try again.");
+      }
+      return { events, text };
     } finally {
       if (poller !== null) clearInterval(poller);
       if (submitTimer !== null) clearTimeout(submitTimer);
@@ -293,28 +309,42 @@ export class ClaudeChatEngine {
     this.hooks.removeHooks(state.sessionId);
   }
 
-  private waitForStop(state: SessionState, exited: Promise<void>): Promise<void> {
+  private waitForStop(state: SessionState, exited: Promise<void>): Promise<StopReason> {
     return new Promise((resolve) => {
       let subscription: { dispose(): void } | null = null;
       let checkInterval: ReturnType<typeof setInterval> | null = null;
+      let watchdog: ReturnType<typeof setInterval> | null = null;
       let finished = false;
       const spawnTime = Date.now();
-      const finish = (): void => {
+      let lastSize = currentFileSize(state.transcriptPath);
+      let lastGrowthAt = Date.now();
+      const finish = (reason: StopReason): void => {
         if (finished) return;
         finished = true;
         if (subscription) subscription.dispose();
         if (checkInterval !== null) clearInterval(checkInterval);
-        resolve();
+        if (watchdog !== null) clearInterval(watchdog);
+        resolve(reason);
       };
-      subscription = this.hooks.subscribeStop(state.sessionId, finish);
+      subscription = this.hooks.subscribeStop(state.sessionId, () => finish("stop"));
       if (finished) return;
       checkInterval = setInterval(() => {
-        if (state.cancelled) finish();
+        if (state.cancelled) finish("cancel");
       }, 250);
+      const timeout = this.inactivityTimeoutMs;
+      watchdog = setInterval(() => {
+        const size = currentFileSize(state.transcriptPath);
+        if (size > lastSize) {
+          lastSize = size;
+          lastGrowthAt = Date.now();
+          return;
+        }
+        if (Date.now() - lastGrowthAt >= timeout) finish("stuck");
+      }, Math.min(WATCHDOG_POLL_MS, Math.max(50, timeout)));
       void exited.then(() => {
         const elapsed = Date.now() - spawnTime;
         const grace = Math.max(0, 2000 - elapsed);
-        setTimeout(finish, grace);
+        setTimeout(() => finish("exit"), grace);
       });
     });
   }
