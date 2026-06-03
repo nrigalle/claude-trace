@@ -5,7 +5,7 @@ import { spawn as spawnChild } from "child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { PipelineAssistant } from "../../src/features/pipelines/infra/PipelineAssistant";
-import { makeFileSignalHooks, type ChatPtySpawner } from "../../src/shared/assistant/claudeChatEngine";
+import { makeFileSignalHooks, type ChatPtySpawner } from "../../src/shared/infra/assistant/claudeChatEngine";
 import { toPipelineId, type Pipeline } from "../../src/features/pipelines/domain/types";
 
 // A mock `claude` binary: parses the args, writes a transcript jsonl for the
@@ -41,16 +41,25 @@ const reply = () => {
   for (const k of Object.keys(map)) { if (k !== 'default' && msg.includes(k)) return map[k]; }
   return map.default || 'ok';
 };
+const writeStop = () => { if (signalsDir) { fs.mkdirSync(signalsDir, { recursive: true }); fs.writeFileSync(path.join(signalsDir, sid + '.stop'), ''); } };
 const run = async () => {
   await new Promise((r) => setTimeout(r, delay));
   append({ type: 'user', message: { role: 'user', content: msg }, sessionId: sid });
   await new Promise((r) => setTimeout(r, delay));
   append({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply() }], stop_reason: 'end_turn' }, sessionId: sid });
   await new Promise((r) => setTimeout(r, delay));
-  if (signalsDir) { fs.mkdirSync(signalsDir, { recursive: true }); fs.writeFileSync(path.join(signalsDir, sid + '.stop'), ''); }
+  writeStop();
   process.exit(0);
 };
-if (process.env.MOCK_HANG) { setTimeout(() => process.exit(0), 30000); } else { run(); }
+const runStopBeforeText = async () => {
+  await new Promise((r) => setTimeout(r, delay));
+  append({ type: 'user', message: { role: 'user', content: msg }, sessionId: sid });
+  writeStop();
+  await new Promise((r) => setTimeout(r, delay));
+  append({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply() }], stop_reason: 'end_turn' }, sessionId: sid });
+  process.exit(0);
+};
+if (process.env.MOCK_STOP_BEFORE_TEXT) runStopBeforeText(); else run();
 `;
   fs.writeFileSync(filePath, script, { mode: 0o755 });
 };
@@ -109,7 +118,7 @@ const setResponseMap = (map: Record<string, string>): void => {
   fs.writeFileSync(responseMapPath, JSON.stringify(map), "utf8");
 };
 
-const makeAssistant = (inactivityTimeoutMs?: number): PipelineAssistant =>
+const makeAssistant = (): PipelineAssistant =>
   new PipelineAssistant({
     claudeBin: process.execPath,
     claudeArgsPrefix: [mockClaudePath],
@@ -118,7 +127,6 @@ const makeAssistant = (inactivityTimeoutMs?: number): PipelineAssistant =>
     transcriptRoot: projectsDir,
     now: () => 4242,
     hooks: { installHooks: installHooksImpl, removeHooks: removeHooksImpl, subscribeStop: subscribeStopImpl },
-    ...(inactivityTimeoutMs !== undefined ? { inactivityTimeoutMs } : {}),
   });
 
 const emptyPipeline = (id = "p-demo", name = "My flow"): Pipeline => ({
@@ -154,7 +162,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const k of ["MOCK_PROJECTS_DIR", "MOCK_SIGNALS_DIR", "MOCK_RESPONSE_MAP_FILE", "MOCK_STEP_DELAY_MS", "MOCK_HANG"]) {
+  for (const k of ["MOCK_PROJECTS_DIR", "MOCK_SIGNALS_DIR", "MOCK_RESPONSE_MAP_FILE", "MOCK_STEP_DELAY_MS", "MOCK_STOP_BEFORE_TEXT"]) {
     delete process.env[k];
   }
   try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
@@ -239,12 +247,27 @@ describe("PipelineAssistant — end-to-end against a mock claude binary", () => 
     assistant.dispose();
   });
 
-  it("does not hang forever when the agent blocks on input it cannot receive", async () => {
-    process.env["MOCK_HANG"] = "1";
-    const assistant = makeAssistant(400);
-    await expect(
-      assistant.ask("c-stuck", { pipeline: emptyPipeline("p-stuck"), workspaceCwd: workspace }, "build it from my repo"),
-    ).rejects.toThrow(/stopped responding/i);
+  it("runs with no time-based watchdog: a slow turn completes once Claude signals stop, never killed early", async () => {
+    setResponseMap({ default: "the slow answer" });
+    process.env["MOCK_STEP_DELAY_MS"] = "1200";
+    const assistant = makeAssistant();
+    const res = await assistant.ask("c-slow", { pipeline: emptyPipeline("p-slow"), workspaceCwd: workspace }, "go");
+    expect(res.text).toContain("the slow answer");
+    assistant.dispose();
+  });
+
+  it("captures the final text when it flushes AFTER the stop signal, and never leaks it into the next turn", async () => {
+    process.env["MOCK_STOP_BEFORE_TEXT"] = "1";
+    process.env["MOCK_STEP_DELAY_MS"] = "250";
+    const assistant = makeAssistant();
+    const pipeline = emptyPipeline("p-flush");
+    setResponseMap({ default: "FIRST_BODY" });
+    const r1 = await assistant.ask("c-flush", { pipeline, workspaceCwd: workspace }, "first");
+    expect(r1.text).toContain("FIRST_BODY");
+    setResponseMap({ default: "SECOND_BODY" });
+    const r2 = await assistant.ask("c-flush", { pipeline, workspaceCwd: workspace }, "second");
+    expect(r2.text).toContain("SECOND_BODY");
+    expect(r2.text).not.toContain("FIRST_BODY");
     assistant.dispose();
   });
 
@@ -260,14 +283,23 @@ describe("PipelineAssistant — end-to-end against a mock claude binary", () => 
   });
 });
 
-describe("makeFileSignalHooks — interactive tools are denied so a turn cannot block", () => {
-  it("writes AskUserQuestion and ExitPlanMode into permissions.deny", () => {
-    const hooks = makeFileSignalHooks(signalsDir, hooksDir, ["Read", "Grep"], ["Bash", "AskUserQuestion", "ExitPlanMode"]);
-    const file = hooks.installHooks("sess-deny");
+describe("the assistant runs with all tools available, like a terminal session", () => {
+  it("passes --dangerously-skip-permissions so tools execute without approval prompts (and never the hanging --permission-mode confirm)", async () => {
+    setResponseMap({ default: "ok" });
+    const assistant = makeAssistant();
+    await assistant.ask("c-args", { pipeline: emptyPipeline("p-args"), workspaceCwd: workspace }, "hi");
+    const args = assistant.buildArgsForTesting("c-args", "next turn");
+    expect(args).not.toBeNull();
+    expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).not.toContain("--permission-mode");
+    assistant.dispose();
+  });
+
+  it("does not write any tool allow/deny restrictions into the session settings", () => {
+    const hooks = makeFileSignalHooks(signalsDir, hooksDir);
+    const file = hooks.installHooks("sess-open");
     expect(file).not.toBeNull();
-    const settings = JSON.parse(fs.readFileSync(file!, "utf8")) as { permissions: { allow: string[]; deny: string[] } };
-    expect(settings.permissions.deny).toContain("AskUserQuestion");
-    expect(settings.permissions.deny).toContain("ExitPlanMode");
-    expect(settings.permissions.allow).toEqual(["Read", "Grep"]);
+    const settings = JSON.parse(fs.readFileSync(file!, "utf8")) as Record<string, unknown>;
+    expect(settings.permissions).toBeUndefined();
   });
 });

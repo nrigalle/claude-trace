@@ -32,7 +32,8 @@ import { RealAutomationRunner } from "./features/pipelines/infra/RealAutomationR
 import { RealDeterministicRunner } from "./features/pipelines/infra/RealDeterministicRunner";
 import { TriggerScheduler, type TimerHandle } from "./features/pipelines/app/TriggerScheduler";
 import { RealWebhookServer } from "./features/pipelines/infra/RealWebhookServer";
-import { PROJECTS_DIR, COCKPIT_HOOKS_DIR, LIBRARY_DIR } from "./shared/config";
+import { PROJECTS_DIR, COCKPIT_HOOKS_DIR, LIBRARY_DIR, TRACE_DATA_DIR } from "./shared/config";
+import { ConversationStore } from "./shared/infra/assistant/conversationStore";
 import { PipelineStore } from "./features/pipelines/infra/PipelineStore";
 import { RunStore } from "./features/pipelines/infra/RunStore";
 import { PipelinesHostAdapter } from "./features/pipelines/infra/PipelinesHostAdapter";
@@ -48,7 +49,7 @@ import { isAutoMemoryFile } from "./features/dashboard/domain/memory";
 import { buildChatMarkdown, chatExportFilename } from "./features/dashboard/domain/chatExport";
 import { buildClaudeCommand } from "./shared/permissionModes";
 import { desktopNotifyCommand } from "./shared/desktopNotification";
-import { spawn } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { computeBeforeContent } from "./features/dashboard/domain/reverseApply";
 import { buildUnifiedDiff } from "./features/dashboard/domain/unifiedDiff";
 import { ensureProjectsDirExists, SessionFileReader } from "./features/dashboard/infra/SessionFileReader";
@@ -59,11 +60,10 @@ import { BudgetMonitor } from "./features/dashboard/infra/BudgetMonitor";
 import { ClaudeTerminalRegistry } from "./features/dashboard/infra/ClaudeTerminalRegistry";
 import { ClaudeTraceQuickDiff } from "./features/dashboard/infra/ClaudeTraceQuickDiff";
 import { registerOpenDashboardCommand } from "./features/dashboard/infra/Commands";
-import { registerPanelSerializer, SerializedState } from "./features/dashboard/infra/PanelSerializer";
+import { registerPanelSerializer, type SerializedState } from "./features/dashboard/infra/PanelSerializer";
 import { pickPermissionMode } from "./features/dashboard/infra/SessionPickers";
 import { SessionNameStore } from "./features/dashboard/infra/SessionNameStore";
 import { SessionPinStore } from "./features/dashboard/infra/SessionPinStore";
-import { SessionHiddenStore } from "./features/dashboard/infra/SessionHiddenStore";
 import { registerStatusBar } from "./features/dashboard/infra/StatusBar";
 import { WebviewHost } from "./features/dashboard/infra/WebviewHost";
 import type { SessionId } from "./features/dashboard/domain/types";
@@ -94,7 +94,7 @@ let notifierBin: string | null = null;
 let notifierIcon: string | null = null;
 let notifierHintedThisSession = false;
 
-let notificationSeq = 0;
+const notificationChildren = new Set<ChildProcess>();
 
 const fireDesktopNotification = (title: string, message: string, group?: string): void => {
   const enabled = vscode.workspace.getConfiguration("claudeTrace").get<boolean>("desktopNotifications", true);
@@ -103,11 +103,13 @@ const fireDesktopNotification = (title: string, message: string, group?: string)
     alerterBin,
     terminalNotifierBin: notifierBin,
     iconPath: notifierIcon,
-    group: group ?? `claude-trace-${++notificationSeq}`,
+    group,
   });
   if (!cmd) return;
   try {
     const child = spawn(cmd.command, [...cmd.args], { stdio: "ignore", detached: true });
+    notificationChildren.add(child);
+    child.on("exit", () => notificationChildren.delete(child));
     child.unref();
     child.on("error", () => {});
   } catch {}
@@ -131,8 +133,6 @@ const fireDesktopNotification = (title: string, message: string, group?: string)
   }
 };
 
-// vsce packaging drops the executable bit on node-pty's spawn-helper, so the
-// extracted binary fails posix_spawnp. Restore it at startup before any pty opens.
 function ensureSpawnHelperExecutable(): void {
   if (process.platform === "win32") return;
   const roots: string[] = [];
@@ -177,9 +177,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const nameStore = new SessionNameStore(context.globalState);
   const pinStore = new SessionPinStore(context.globalState);
-  const hiddenStore = new SessionHiddenStore(context.globalState);
   const reader = new SessionFileReader();
-  const service = new SessionService(reader, nameStore, pinStore, hiddenStore);
+  const service = new SessionService(reader, nameStore, pinStore);
   const watcher = new SessionDirectoryWatcher();
   const poller = new SessionFilePoller();
   context.subscriptions.push(watcher.start());
@@ -294,10 +293,6 @@ export function activate(context: vscode.ExtensionContext): void {
           `Claude Trace: failed to save pin state. ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-    },
-    async deleteSessions(ids: readonly SessionId[]): Promise<void> {
-      await hiddenStore.hide(ids);
-      for (const id of ids) service.invalidate(id);
     },
     async deleteSessionFiles(ids: readonly SessionId[]): Promise<void> {
       if (ids.length === 0) return;
@@ -456,8 +451,9 @@ export function activate(context: vscode.ExtensionContext): void {
     const triggerScheduler = new TriggerScheduler({
       listPipelines: () => pipelineStore.list(),
       runPipeline: (id) => currentPipelinesController?.triggerRun(id),
-      setInterval: (fn, ms) => setInterval(fn, ms) as unknown as TimerHandle,
-      clearInterval: (handle) => clearInterval(handle as unknown as ReturnType<typeof setInterval>),
+      setTimer: (fn, ms) => setTimeout(fn, ms) as unknown as TimerHandle,
+      clearTimer: (handle) => clearTimeout(handle as unknown as ReturnType<typeof setTimeout>),
+      now: () => Date.now(),
     });
     const webhookServer = new RealWebhookServer(
       () => pipelineStore.list(),
@@ -488,8 +484,8 @@ export function activate(context: vscode.ExtensionContext): void {
         fs.existsSync(
           path.join(PROJECTS_DIR, encodeCwdForProjects(cwd ?? os.homedir()), `${sessionId}.jsonl`),
         ),
-      notifyAttention: (name) => {
-        fireDesktopNotification("Claude Trace", `${name} is ready for you`);
+      notifyAttention: (name, sessionId) => {
+        fireDesktopNotification("Claude Trace", `${name} is ready for you`, `claude-trace-${sessionId}`);
       },
       prepareHooks: (sessionId) => writeSessionHooks(sessionId),
       cleanupHooks: (sessionId) => removeSessionHooks(sessionId),
@@ -588,6 +584,10 @@ export function activate(context: vscode.ExtensionContext): void {
       importer: libraryImporter,
       actions: libraryActions,
       assistant: new LibraryAssistant(),
+      assistantSessions: new ConversationStore(
+        path.join(TRACE_DATA_DIR, "library-assistant", "sessions.json"),
+      ),
+      clock: () => Date.now(),
     });
 
     host.onDispose(() => {
@@ -623,4 +623,8 @@ export function deactivate(): void {
   currentCockpitController = null;
   if (currentLibraryController) currentLibraryController.dispose();
   currentLibraryController = null;
+  for (const child of notificationChildren) {
+    try { child.kill(); } catch {}
+  }
+  notificationChildren.clear();
 }

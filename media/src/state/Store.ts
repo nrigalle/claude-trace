@@ -3,6 +3,7 @@ import { clampSidebarWidth, SIDEBAR_DEFAULT_PX } from "../ui/layout/sidebarWidth
 
 export type TimelineFilter = "all" | "tools" | "errors" | "conversation";
 export type DateFilter = "all" | "today" | "week" | "month" | "favorites";
+export type ActiveTab = "sessions" | "pipelines" | "library";
 
 export type DetailBlockId = "cards" | "charts" | "cost" | "files" | "memory" | "timeline";
 
@@ -28,6 +29,7 @@ export interface DetailBlockConfig {
 
 export interface UiState {
   selectedId: SessionId | null;
+  activeTab: ActiveTab;
   searchQuery: string;
   dateFilter: DateFilter;
   folderFilter: string | null;
@@ -54,6 +56,7 @@ declare const acquireVsCodeApi: () => VsCodeApi;
 
 const DEFAULTS: UiState = {
   selectedId: null,
+  activeTab: "sessions",
   searchQuery: "",
   dateFilter: "all",
   folderFilter: null,
@@ -102,6 +105,9 @@ const normalizeToolFilter = (value: unknown): string | null =>
 
 const normalizeBool = (value: unknown): boolean => value === true;
 
+const normalizeActiveTab = (value: unknown): ActiveTab =>
+  value === "pipelines" || value === "library" ? value : "sessions";
+
 export class Store {
   readonly vscode: VsCodeApi;
   private current: UiState;
@@ -115,6 +121,7 @@ export class Store {
       ...(saved ?? {}),
       timelineFilter: normalizeFilter(saved?.timelineFilter),
       dateFilter: normalizeDateFilter(saved?.dateFilter),
+      activeTab: normalizeActiveTab(saved?.activeTab),
       folderFilter: typeof saved?.folderFilter === "string" ? saved.folderFilter : null,
       toolFilter: normalizeToolFilter(saved?.toolFilter),
       filesTouchedCollapsed: normalizeBool(saved?.filesTouchedCollapsed),
@@ -133,6 +140,14 @@ export class Store {
   update(patch: Partial<UiState>): void {
     this.current = { ...this.current, ...patch };
     this.schedulePersist();
+  }
+
+  flush(): void {
+    if (this.persistTimer !== null) {
+      window.clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    this.vscode.setState(this.current);
   }
 
   private schedulePersist(): void {

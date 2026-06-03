@@ -26,10 +26,6 @@ export interface SessionPinSet {
   has(id: SessionId): boolean;
 }
 
-export interface SessionHiddenSet {
-  has(id: SessionId): boolean;
-}
-
 interface CachedSummary {
   readonly mtime: number;
   readonly title: string | null;
@@ -45,7 +41,6 @@ export class SessionService {
     private readonly reader: SessionFileReader,
     private readonly overrides?: SessionTitleOverrides,
     private readonly pins?: SessionPinSet,
-    private readonly hidden?: SessionHiddenSet,
   ) {}
 
   invalidate(id: SessionId): void {
@@ -81,7 +76,6 @@ export class SessionService {
 
     const summaries: SessionSummary[] = [];
     for (const { ref, stats } of chosen.values()) {
-      if (this.hidden?.has(ref.sessionId)) continue;
       presentIds.add(ref.sessionId);
       const title = this.titleFor(ref.sessionId);
       const pinned = this.pins?.has(ref.sessionId) ?? false;

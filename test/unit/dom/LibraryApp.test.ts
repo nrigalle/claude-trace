@@ -449,6 +449,14 @@ describe("LibraryApp — assistant body-apply 100% guarantee", () => {
   const findInputTextarea = (root: HTMLElement): HTMLTextAreaElement =>
     root.querySelector(".lib-asst-input .ct-ta-input") as HTMLTextAreaElement;
 
+  const activeCid = (): string => {
+    for (let i = sent.length - 1; i >= 0; i--) {
+      const m = sent[i]!;
+      if (m.type === "assistantAsk") return m.conversationId;
+    }
+    return "c-none";
+  };
+
   const sendThenReply = (root: HTMLElement, app: LibraryApp, message: string, reply: string): void => {
     const input = findInputTextarea(root);
     input.value = message;
@@ -456,6 +464,7 @@ describe("LibraryApp — assistant body-apply 100% guarantee", () => {
     app.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: activeCid(),
       events: [{ kind: "text", text: reply }],
       text: reply,
       suggestedDescription: null,
@@ -525,6 +534,7 @@ describe("LibraryApp — assistant body-apply 100% guarantee", () => {
     app.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: activeCid(),
       events: [{ kind: "text", text: "body" }],
       text: "body",
       suggestedDescription: "A tightened description.",
@@ -552,6 +562,7 @@ describe("LibraryApp — assistant body-apply 100% guarantee", () => {
     app.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: activeCid(),
       events: [],
       text: "",
       suggestedDescription: null,

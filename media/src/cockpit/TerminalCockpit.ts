@@ -52,6 +52,7 @@ export class TerminalCockpit {
   private readonly launcher: CockpitLauncher;
   private readonly views = new Map<string, TerminalView>();
   private readonly tiles = new Map<string, WindowTile>();
+  private readonly pendingData = new Map<string, string[]>();
 
   private state: CockpitState = { profiles: [], spaces: [], terminals: [] };
   private loaded = false;
@@ -122,19 +123,13 @@ export class TerminalCockpit {
         return;
       case "terminalData": {
         const view = this.views.get(msg.sessionId);
-        if (view) {
-          const stick = this.atBottom(view.term);
-          view.term.write(msg.data);
-          const tile = this.tiles.get(view.windowId);
-          if (!view.gotData) {
-            view.gotData = true;
-            if (tile && tile.activeId === msg.sessionId) {
-              tile.bootingOverlay.classList.add("hidden");
-              if (this.pendingFocus.delete(msg.sessionId)) this.focusView(msg.sessionId);
-            }
-          }
-          if (stick && tile && tile.activeId === msg.sessionId) view.term.scrollToBottom();
+        if (!view) {
+          const buf = this.pendingData.get(msg.sessionId);
+          if (buf) buf.push(msg.data);
+          else this.pendingData.set(msg.sessionId, [msg.data]);
+          return;
         }
+        this.writeTerminalData(msg.sessionId, view, msg.data);
         return;
       }
       case "terminalExit": {
@@ -199,7 +194,11 @@ export class TerminalCockpit {
         this.attention.delete(id);
         this.attentionReasons.delete(id);
         this.pendingFocus.delete(id);
+        this.pendingData.delete(id);
       }
+    }
+    for (const id of [...this.pendingData.keys()]) {
+      if (!present.has(id)) this.pendingData.delete(id);
     }
     for (const [wid, tile] of this.tiles) {
       if (!presentWindows.has(wid)) {
@@ -222,14 +221,34 @@ export class TerminalCockpit {
       dropImage: (fileName, dataBase64) =>
         this.deps.send({ type: "cockpitDropImage", sessionId: session.sessionId, fileName, dataBase64 }),
     });
-    this.views.set(session.sessionId, {
+    const view: TerminalView = {
       ...terminal,
       windowId: session.windowId,
       initialised: false,
       gotData: false,
       lastCols: 0,
       lastRows: 0,
-    });
+    };
+    this.views.set(session.sessionId, view);
+    const buffered = this.pendingData.get(session.sessionId);
+    if (buffered) {
+      this.pendingData.delete(session.sessionId);
+      for (const data of buffered) this.writeTerminalData(session.sessionId, view, data);
+    }
+  }
+
+  private writeTerminalData(sessionId: string, view: TerminalView, data: string): void {
+    const stick = this.atBottom(view.term);
+    view.term.write(data);
+    const tile = this.tiles.get(view.windowId);
+    if (!view.gotData && data.length > 0) {
+      view.gotData = true;
+      if (tile && tile.activeId === sessionId) {
+        tile.bootingOverlay.classList.add("hidden");
+        if (this.pendingFocus.delete(sessionId)) this.focusView(sessionId);
+      }
+    }
+    if (stick && tile && tile.activeId === sessionId) view.term.scrollToBottom();
   }
 
   private createWindowTile(windowId: string): void {

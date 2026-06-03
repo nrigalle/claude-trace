@@ -29,7 +29,7 @@ export interface SidebarHandlers {
   onCopyConversation(id: SessionId): void;
   onResumeInCockpit(id: SessionId): void;
   onToggleCollapsed(): void;
-  onDeleteSessions(ids: readonly SessionId[], permanent?: boolean): void;
+  onDeleteSessions(ids: readonly SessionId[]): void;
 }
 
 export class Sidebar {
@@ -53,7 +53,6 @@ export class Sidebar {
   private selectToggle!: HTMLButtonElement;
   private selectRow!: HTMLElement;
   private bulkCount!: HTMLElement;
-  private bulkRemoveBtn!: HTMLButtonElement;
   private bulkDeleteBtn!: HTMLButtonElement;
   private selectAllBtn!: HTMLButtonElement;
 
@@ -69,7 +68,7 @@ export class Sidebar {
       onTogglePin: (id) => this.handlers.onTogglePin(id),
       onCopyConversation: (id) => this.handlers.onCopyConversation(id),
       onResumeInCockpit: (id) => this.handlers.onResumeInCockpit(id),
-      onDeleteSession: (id) => this.handlers.onDeleteSessions([id], false),
+      onDeleteSession: (id) => this.handlers.onDeleteSessions([id]),
       onToggleSelect: (id) => this.toggleSelect(id),
     };
     this.root = h("nav", {
@@ -240,7 +239,7 @@ export class Sidebar {
   private buildSelectBar(): HTMLElement {
     this.selectToggle = h("button", {
       className: "sidebar-select-btn",
-      attrs: { type: "button", title: "Select multiple sessions to remove from the dashboard" },
+      attrs: { type: "button", title: "Select multiple sessions to delete" },
       textContent: "Select",
       on: { click: () => this.toggleSelectMode() },
     });
@@ -251,16 +250,10 @@ export class Sidebar {
       textContent: "Select all",
       on: { click: () => this.toggleSelectAll() },
     });
-    this.bulkRemoveBtn = h("button", {
-      className: "sidebar-bulk-remove",
-      attrs: { type: "button", title: "Hide the selected sessions from the dashboard (reversible; transcripts kept)" },
-      textContent: "Remove",
-      on: { click: () => this.removeSelected() },
-    });
     this.bulkDeleteBtn = h("button", {
       className: "sidebar-bulk-delete",
-      attrs: { type: "button", title: "Delete the selected transcripts from disk (moves to Trash, also removes them from Claude Code)" },
-      textContent: "Delete files",
+      attrs: { type: "button", title: "Delete the selected transcripts (moves to Trash, also removes them from Claude Code)" },
+      textContent: "Delete",
       on: { click: () => this.deleteFilesSelected() },
     });
     const buttons = h(
@@ -269,7 +262,6 @@ export class Sidebar {
       this.selectToggle,
       this.selectAllBtn,
       this.bulkDeleteBtn,
-      this.bulkRemoveBtn,
     );
     this.selectRow = h("div", { className: "sidebar-selectrow" }, this.bulkCount, buttons);
     return this.selectRow;
@@ -298,22 +290,10 @@ export class Sidebar {
     this.renderBulkBar();
   }
 
-  private removeSelected(): void {
-    const ids = [...this.selectedIds] as SessionId[];
-    if (ids.length === 0) return;
-    this.handlers.onDeleteSessions(ids, false);
-    this.selectMode = false;
-    this.listContainer.classList.remove("select-mode");
-    this.selectToggle.textContent = "Select";
-    this.selectToggle.classList.remove("active");
-    this.clearSelectionDom();
-    this.renderBulkBar();
-  }
-
   private deleteFilesSelected(): void {
     const ids = [...this.selectedIds] as SessionId[];
     if (ids.length === 0) return;
-    this.handlers.onDeleteSessions(ids, true);
+    this.handlers.onDeleteSessions(ids);
   }
 
   private visibleSessionItems(): HTMLElement[] {
@@ -355,9 +335,7 @@ export class Sidebar {
     this.selectAllBtn.textContent = allSelected ? "Clear" : "Select all";
     this.selectAllBtn.disabled = visible.length === 0;
     this.bulkCount.textContent = count === 0 ? "Tap sessions to select" : `${count} selected`;
-    this.bulkRemoveBtn.textContent = count > 0 ? `Remove ${count}` : "Remove";
-    this.bulkRemoveBtn.disabled = count === 0;
-    this.bulkDeleteBtn.textContent = count > 0 ? `Delete ${count}` : "Delete files";
+    this.bulkDeleteBtn.textContent = count > 0 ? `Delete ${count}` : "Delete";
     this.bulkDeleteBtn.disabled = count === 0;
   }
 
@@ -455,7 +433,7 @@ export class Sidebar {
 
   private refreshFolderOptions(): void {
     const folders = [...new Set(this.sessions.map((s) => s.cwd).filter((c): c is string => !!c))].sort();
-    const key = folders.join(" ");
+    const key = JSON.stringify(folders);
     if (key === this.folderOptionsKey) return;
     this.folderOptionsKey = key;
     let selected = this.store.state.folderFilter;

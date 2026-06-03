@@ -2,18 +2,28 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import * as pty from "node-pty";
-import { buildCockpitHookSettings } from "../../features/cockpit/infra/cockpitHooks";
-import { PROJECTS_DIR } from "../config";
-import { encodeCwdForProjects } from "../projectPathEncoding";
-import type { EffortChoice, ModelChoice } from "../models";
-import type { TimelineEvent } from "./timeline";
+import { buildCockpitHookSettings } from "../../../features/cockpit/infra/cockpitHooks";
+import {
+  concatTextEvents,
+  extractConversationTurns,
+  extractTimelineEvents,
+} from "../../assistant/conversationTurns";
+import { PROJECTS_DIR } from "../../config";
+import { encodeCwdForProjects } from "../../projectPathEncoding";
+import { modelEffortLevels, type EffortChoice, type ModelChoice } from "../../models";
+import type { ReplayTurn, TimelineEvent } from "../../assistant/timeline";
 
-// A reusable engine that drives a real, resumable `claude` session per key,
-// streams its transcript as a timeline, and resolves when the turn stops.
-// Both the library "Help me write" assistant and the workflow assistant
-// configure this engine; only their system prompt and reply parsing differ.
 
-export type { TimelineEvent };
+export {
+  concatTextEvents,
+  extractConversationTurns,
+  extractTimelineEvents,
+  INTERNAL_MESSAGE_MARKER,
+  SESSION_CONTEXT_CLOSE,
+  SESSION_CONTEXT_OPEN,
+  wrapSessionContext,
+} from "../../assistant/conversationTurns";
+export type { ReplayTurn, TimelineEvent };
 
 export interface ChatPty {
   readonly onData: (listener: (data: string) => void) => unknown;
@@ -48,10 +58,7 @@ export interface ClaudeChatConfig {
   readonly transcriptRoot?: string;
   readonly signalsDir: string;
   readonly hooksDir: string;
-  readonly allowedTools?: readonly string[];
-  readonly disallowedTools?: readonly string[];
   readonly hooks?: Partial<ChatHooks>;
-  readonly inactivityTimeoutMs?: number;
 }
 
 export interface ChatTurnOptions {
@@ -80,13 +87,15 @@ export interface SessionState {
 
 const STREAM_POLL_MS = 500;
 const READY_BEFORE_SUBMIT_MS = 1800;
-const TOOL_RESULT_PREVIEW_CHARS = 220;
+const SUBMIT_QUIET_MS = 350;
 const COLS = 120;
 const ROWS = 40;
-const INACTIVITY_TIMEOUT_MS = 120_000;
-const WATCHDOG_POLL_MS = 2_000;
+const FINAL_POLL_MS = 100;
+const FINAL_STABLE_MS = 300;
+const FINAL_NO_CONTENT_MAX_MS = 6000;
+const FINAL_MAX_WAIT_MS = 30000;
 
-export type StopReason = "stop" | "exit" | "cancel" | "stuck";
+export type StopReason = "stop" | "exit" | "cancel";
 
 export const encodeForClaudeProjects = encodeCwdForProjects;
 
@@ -100,7 +109,6 @@ export class ClaudeChatEngine {
   private readonly ptySpawner: ChatPtySpawner;
   private readonly cwdRoot: string;
   private readonly transcriptRoot: string;
-  private readonly inactivityTimeoutMs: number;
 
   constructor(private readonly config: ClaudeChatConfig) {
     this.claudeBin = config.claudeBin ?? "claude";
@@ -108,8 +116,7 @@ export class ClaudeChatEngine {
     this.ptySpawner = config.ptySpawner ?? NODE_PTY_SPAWNER;
     this.cwdRoot = config.cwdRoot;
     this.transcriptRoot = config.transcriptRoot ?? PROJECTS_DIR;
-    this.inactivityTimeoutMs = config.inactivityTimeoutMs ?? INACTIVITY_TIMEOUT_MS;
-    const defaults = makeFileSignalHooks(config.signalsDir, config.hooksDir, config.allowedTools, config.disallowedTools);
+    const defaults = makeFileSignalHooks(config.signalsDir, config.hooksDir);
     this.hooks = {
       installHooks: config.hooks?.installHooks ?? defaults.installHooks,
       removeHooks: config.hooks?.removeHooks ?? defaults.removeHooks,
@@ -125,8 +132,6 @@ export class ClaudeChatEngine {
     return this.sessions;
   }
 
-  // Re-attach a session that was persisted in a previous run so the next turn
-  // resumes the same claude conversation (--resume) instead of starting fresh.
   adopt(key: string, sessionId: string, sessionCwd: string): void {
     if (this.sessions.has(key)) return;
     const hooksFile = this.hooks.installHooks(sessionId);
@@ -150,11 +155,10 @@ export class ClaudeChatEngine {
     });
   }
 
-  // The full transcript so far, for replaying a saved chat into the panel.
-  history(key: string): readonly TimelineEvent[] {
+  historyTurns(key: string): readonly ReplayTurn[] {
     const state = this.sessions.get(key);
     if (!state) return [];
-    return readEventsFrom(state.transcriptPath, 0);
+    return extractConversationTurns(readTranscript(state.transcriptPath));
   }
 
   dispose(): void {
@@ -185,6 +189,7 @@ export class ClaudeChatEngine {
     state.cancelled = false;
     let poller: ReturnType<typeof setInterval> | null = null;
     let submitTimer: ReturnType<typeof setTimeout> | null = null;
+    let quietTimer: ReturnType<typeof setTimeout> | null = null;
     let lastEmittedJson = "";
     const startOffset = state.transcriptOffset;
     let child: ChatPty | null = null;
@@ -198,10 +203,18 @@ export class ClaudeChatEngine {
         env: process.env as { [key: string]: string },
       });
       state.currentPty = child;
-      child.onData(() => {});
-      submitTimer = setTimeout(() => {
-        if (child) tryWritePty(child, "\r");
-      }, READY_BEFORE_SUBMIT_MS);
+      let submitted = false;
+      const submit = (): void => {
+        if (submitted || !child) return;
+        submitted = true;
+        tryWritePty(child, "\r");
+      };
+      child.onData(() => {
+        if (submitted) return;
+        if (quietTimer !== null) clearTimeout(quietTimer);
+        quietTimer = setTimeout(submit, SUBMIT_QUIET_MS);
+      });
+      submitTimer = setTimeout(submit, READY_BEFORE_SUBMIT_MS);
       const exited = new Promise<void>((resolve) => {
         child!.onExit(() => resolve());
       });
@@ -218,15 +231,13 @@ export class ClaudeChatEngine {
       }, STREAM_POLL_MS);
 
       const reason = await stopPromise;
-      state.transcriptOffset = currentFileSize(state.transcriptPath);
       state.hasFirstTurn = true;
-      if (state.cancelled || reason === "cancel") throw new Error("Cancelled.");
-      if (reason === "stuck") {
-        throw new Error(
-          "The assistant stopped responding. It likely paused for input it can't receive here (an interactive prompt or a tool that needs approval). Your message wasn't lost, try sending it again or rephrasing.",
-        );
+      if (state.cancelled || reason === "cancel") {
+        state.transcriptOffset = currentFileSize(state.transcriptPath);
+        throw new Error("Cancelled.");
       }
-      const events = await readEventsWithRetry(state.transcriptPath, startOffset);
+      const events = await readFinalEvents(state.transcriptPath, startOffset);
+      state.transcriptOffset = currentFileSize(state.transcriptPath);
       const text = concatTextEvents(events);
       if (events.length === 0 && text.length === 0) {
         throw new Error("The assistant didn't return a response. Please try again.");
@@ -235,6 +246,7 @@ export class ClaudeChatEngine {
     } finally {
       if (poller !== null) clearInterval(poller);
       if (submitTimer !== null) clearTimeout(submitTimer);
+      if (quietTimer !== null) clearTimeout(quietTimer);
       if (child) tryKillPty(child);
       state.currentPty = null;
       state.busy = false;
@@ -289,15 +301,18 @@ export class ClaudeChatEngine {
 
   private buildArgs(state: SessionState, message: string, model?: ModelChoice, effort?: EffortChoice): string[] {
     const base = state.hasFirstTurn
-      ? ["--resume", state.sessionId, "--settings", state.hooksFile]
+      ? ["--resume", state.sessionId, "--settings", state.hooksFile, "--dangerously-skip-permissions"]
       : [
           "--session-id", state.sessionId,
           "--settings", state.hooksFile,
+          "--dangerously-skip-permissions",
           "--append-system-prompt", state.systemPrompt,
         ];
     const tuning: string[] = [];
     if (model && model !== "default") tuning.push("--model", model);
-    if (effort && effort !== "default") tuning.push("--effort", effort);
+    const effortOk = effort !== undefined && effort !== "default" &&
+      (model === undefined || model === "default" || modelEffortLevels(model).includes(effort));
+    if (effortOk) tuning.push("--effort", effort);
     return [...this.claudeArgsPrefix, ...base, ...tuning, message];
   }
 
@@ -313,17 +328,13 @@ export class ClaudeChatEngine {
     return new Promise((resolve) => {
       let subscription: { dispose(): void } | null = null;
       let checkInterval: ReturnType<typeof setInterval> | null = null;
-      let watchdog: ReturnType<typeof setInterval> | null = null;
       let finished = false;
       const spawnTime = Date.now();
-      let lastSize = currentFileSize(state.transcriptPath);
-      let lastGrowthAt = Date.now();
       const finish = (reason: StopReason): void => {
         if (finished) return;
         finished = true;
         if (subscription) subscription.dispose();
         if (checkInterval !== null) clearInterval(checkInterval);
-        if (watchdog !== null) clearInterval(watchdog);
         resolve(reason);
       };
       subscription = this.hooks.subscribeStop(state.sessionId, () => finish("stop"));
@@ -331,17 +342,8 @@ export class ClaudeChatEngine {
       checkInterval = setInterval(() => {
         if (state.cancelled) finish("cancel");
       }, 250);
-      const timeout = this.inactivityTimeoutMs;
-      watchdog = setInterval(() => {
-        const size = currentFileSize(state.transcriptPath);
-        if (size > lastSize) {
-          lastSize = size;
-          lastGrowthAt = Date.now();
-          return;
-        }
-        if (Date.now() - lastGrowthAt >= timeout) finish("stuck");
-      }, Math.min(WATCHDOG_POLL_MS, Math.max(50, timeout)));
       void exited.then(() => {
+        if (state.cancelled) { finish("cancel"); return; }
         const elapsed = Date.now() - spawnTime;
         const grace = Math.max(0, 2000 - elapsed);
         setTimeout(() => finish("exit"), grace);
@@ -369,38 +371,47 @@ export const NODE_PTY_SPAWNER: ChatPtySpawner = {
 };
 
 const tryKillPty = (child: ChatPty): void => {
-  try { child.kill(); } catch { return; }
+  try { child.kill(); } catch (err: unknown) { ignoreBestEffortFailure(err); }
 };
 
 const tryWritePty = (child: ChatPty, data: string): void => {
-  try { child.write(data); } catch { return; }
+  try { child.write(data); } catch (err: unknown) { ignoreBestEffortFailure(err); }
 };
 
 const closeWatcher = (watcher: fs.FSWatcher | null): void => {
-  try { watcher?.close(); } catch { return; }
+  try { watcher?.close(); } catch (err: unknown) { ignoreBestEffortFailure(err); }
 };
 
 const removeFile = (filePath: string): void => {
-  try { fs.rmSync(filePath, { force: true }); } catch { return; }
+  try { fs.rmSync(filePath, { force: true }); } catch (err: unknown) { ignoreBestEffortFailure(err); }
 };
+
+const ignoreBestEffortFailure = (_err: unknown): void => {};
 
 const currentFileSize = (filePath: string): number => {
   try { return fs.statSync(filePath).size; } catch { return 0; }
 };
 
-const readEventsWithRetry = async (
+const readFinalEvents = async (
   filePath: string,
   startOffset: number,
 ): Promise<readonly TimelineEvent[]> => {
-  const delays = [50, 100, 200, 400, 800];
-  let lastEvents: readonly TimelineEvent[] = [];
-  for (let attempt = 0; attempt < delays.length + 1; attempt += 1) {
-    const events = readEventsFrom(filePath, startOffset);
-    if (events.some((e) => e.kind === "text")) return events;
-    if (events.length > lastEvents.length) lastEvents = events;
-    if (attempt < delays.length) await new Promise<void>((r) => setTimeout(r, delays[attempt]));
+  const start = Date.now();
+  let lastSize = currentFileSize(filePath);
+  let lastGrowthAt = Date.now();
+  for (;;) {
+    await new Promise<void>((r) => setTimeout(r, FINAL_POLL_MS));
+    const size = currentFileSize(filePath);
+    if (size !== lastSize) { lastSize = size; lastGrowthAt = Date.now(); }
+    const hasContent = size > startOffset;
+    const stableMs = Date.now() - lastGrowthAt;
+    if (hasContent && stableMs >= FINAL_STABLE_MS) {
+      const events = readEventsFrom(filePath, startOffset);
+      if (events.some((e) => e.kind === "text") || stableMs >= FINAL_STABLE_MS * 2) return events;
+    }
+    if (!hasContent && Date.now() - start >= FINAL_NO_CONTENT_MAX_MS) return [];
+    if (Date.now() - start >= FINAL_MAX_WAIT_MS) return readEventsFrom(filePath, startOffset);
   }
-  return lastEvents;
 };
 
 export const readEventsFrom = (filePath: string, startOffset: number): readonly TimelineEvent[] => {
@@ -422,113 +433,19 @@ export const readEventsFrom = (filePath: string, startOffset: number): readonly 
   return extractTimelineEvents(buf.toString("utf8"));
 };
 
-export const extractTimelineEvents = (jsonlChunk: string): readonly TimelineEvent[] => {
-  const events: TimelineEvent[] = [];
-  for (const line of jsonlChunk.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed === "") continue;
-    const obj = parseJsonLine(trimmed);
-    if (obj === null) continue;
-    pushEventsFromEntry(obj, events);
-  }
-  return events;
-};
-
-const parseJsonLine = (line: string): unknown | null => {
-  try { return JSON.parse(line) as unknown; } catch { return null; }
-};
-
-const pushEventsFromEntry = (entry: unknown, out: TimelineEvent[]): void => {
-  if (!entry || typeof entry !== "object") return;
-  const e = entry as { type?: unknown; message?: unknown };
-  if (e.type === "assistant" && e.message && typeof e.message === "object") {
-    const content = (e.message as { content?: unknown }).content;
-    if (!Array.isArray(content)) return;
-    for (const block of content) {
-      if (!block || typeof block !== "object") continue;
-      const b = block as { type?: unknown; text?: unknown; id?: unknown; name?: unknown; input?: unknown };
-      if (b.type === "text" && typeof b.text === "string" && b.text.length > 0) {
-        out.push({ kind: "text", text: b.text });
-      } else if (b.type === "tool_use" && typeof b.name === "string" && typeof b.id === "string") {
-        out.push({ kind: "tool_use", id: b.id, name: b.name, input: previewToolInput(b.input) });
-      }
-    }
-    return;
-  }
-  if (e.type === "user" && e.message && typeof e.message === "object") {
-    const content = (e.message as { content?: unknown }).content;
-    if (!Array.isArray(content)) return;
-    for (const block of content) {
-      if (!block || typeof block !== "object") continue;
-      const b = block as { type?: unknown; tool_use_id?: unknown; content?: unknown; is_error?: unknown };
-      if (b.type !== "tool_result" || typeof b.tool_use_id !== "string") continue;
-      out.push({
-        kind: "tool_result",
-        toolUseId: b.tool_use_id,
-        preview: previewToolResult(b.content),
-        isError: b.is_error === true,
-      });
-    }
-  }
-};
-
-const previewToolInput = (input: unknown): string => {
-  if (input === null || input === undefined) return "";
-  if (typeof input === "string") return truncate(input, TOOL_RESULT_PREVIEW_CHARS);
-  const json = JSON.stringify(input);
-  return typeof json === "string" ? truncate(json, TOOL_RESULT_PREVIEW_CHARS) : "";
-};
-
-const previewToolResult = (content: unknown): string => {
-  if (content === null || content === undefined) return "";
-  if (typeof content === "string") return truncate(content, TOOL_RESULT_PREVIEW_CHARS);
-  if (Array.isArray(content)) {
-    const text = content
-      .map((c) => (c && typeof c === "object" && typeof (c as { text?: unknown }).text === "string"
-        ? (c as { text: string }).text
-        : ""))
-      .filter((s) => s.length > 0)
-      .join("\n");
-    return truncate(text, TOOL_RESULT_PREVIEW_CHARS);
-  }
-  const json = JSON.stringify(content);
-  return typeof json === "string" ? truncate(json, TOOL_RESULT_PREVIEW_CHARS) : "";
-};
-
-const truncate = (s: string, max: number): string => {
-  const clean = s.replace(/\s+/g, " ").trim();
-  return clean.length <= max ? clean : `${clean.slice(0, max - 1)}…`;
-};
-
-export const concatTextEvents = (events: readonly TimelineEvent[]): string => {
-  const hasTools = events.some((e) => e.kind === "tool_use");
-  const pick = (subset: readonly TimelineEvent[]): string =>
-    subset
-      .filter((e): e is TimelineEvent & { kind: "text" } => e.kind === "text")
-      .map((e) => e.text)
-      .join("\n")
-      .trim();
-  if (!hasTools) return pick(events);
-  let lastToolIdx = -1;
-  for (let i = 0; i < events.length; i += 1) {
-    const ev = events[i]!;
-    if (ev.kind === "tool_use" || ev.kind === "tool_result") lastToolIdx = i;
-  }
-  return pick(events.slice(lastToolIdx + 1));
+const readTranscript = (filePath: string): string => {
+  try { return fs.readFileSync(filePath, "utf8"); } catch { return ""; }
 };
 
 export const makeFileSignalHooks = (
   signalsDir: string,
   hooksDir: string,
-  allowedTools: readonly string[] = [],
-  disallowedTools: readonly string[] = [],
 ): ChatHooks => ({
   installHooks: (sessionId: string): string | null => {
     try {
       fs.mkdirSync(hooksDir, { recursive: true });
       fs.mkdirSync(signalsDir, { recursive: true });
-      const base = buildCockpitHookSettings(sessionId, signalsDir);
-      const settings = { ...base, permissions: { allow: allowedTools, deny: disallowedTools } };
+      const settings = buildCockpitHookSettings(sessionId, signalsDir);
       const file = path.join(hooksDir, `${sessionId}.json`);
       fs.writeFileSync(file, JSON.stringify(settings), "utf8");
       return file;
@@ -574,6 +491,7 @@ export const makeFileSignalHooks = (
     } catch {
       pollTimer = setInterval(check, 500);
     }
+    check();
     return {
       dispose: () => {
         closeWatcher(watcher);

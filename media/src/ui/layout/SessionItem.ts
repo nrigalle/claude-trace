@@ -164,9 +164,9 @@ export const renderSessionItem = (
         () => handlers.onSelect(s.session_id),
       ),
       rowAction(
-        "Remove",
-        "Remove from dashboard",
-        "Hide this session from the dashboard. Your Claude transcript and 'claude --resume' stay intact.",
+        "Delete",
+        "Delete session",
+        "Delete this session's transcript. It moves to the Trash and is removed from Claude Code, so 'claude --resume' will no longer find it.",
         ICONS.trash,
         () => handlers.onDeleteSession(s.session_id),
       ),

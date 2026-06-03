@@ -23,8 +23,11 @@ const LIBRARY_MESSAGE_TYPE_TABLE: Record<LibraryWebviewToHost["type"], true> = {
   syncNow: true,
   openLibraryDir: true,
   assistantAsk: true,
-  assistantReset: true,
+  assistantListConversations: true,
+  assistantLoadHistory: true,
   assistantCancel: true,
+  assistantRenameConversation: true,
+  assistantDeleteConversation: true,
 };
 
 const LIBRARY_MESSAGE_TYPES: ReadonlySet<LibraryWebviewToHost["type"]> = new Set(

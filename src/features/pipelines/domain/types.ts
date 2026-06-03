@@ -175,10 +175,16 @@ export const isDeterministicBlock = (
   b.kind === "wait" ||
   b.kind === "reduce";
 
+export type ScheduleRecurrence =
+  | { readonly type: "interval"; readonly everyMs: number }
+  | { readonly type: "daily"; readonly atMinute: number }
+  | { readonly type: "weekly"; readonly weekdays: readonly number[]; readonly atMinute: number }
+  | { readonly type: "monthly"; readonly day: number; readonly atMinute: number };
+
 export interface ScheduleTrigger {
   readonly kind: "schedule";
-  readonly intervalMs: number;
   readonly enabled: boolean;
+  readonly recurrence: ScheduleRecurrence;
 }
 
 export interface WebhookTrigger {

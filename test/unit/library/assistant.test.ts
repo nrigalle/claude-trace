@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   concatTextEvents,
+  currentBodyBlock,
   encodeForClaudeProjects,
   extractTimelineEvents,
   LibraryAssistant,
@@ -28,6 +29,22 @@ describe("systemPromptFor — what we tell Claude", () => {
     expect(prompt).toContain("Write to body");
     expect(prompt).toContain("body field will be REPLACED");
     expect(prompt).toContain("No preamble");
+  });
+
+  it("embeds the catalog of other skills and agents so a chat knows what exists when the user names one", () => {
+    const prompt = systemPromptFor(ctx(), "writeBody", {
+      skills: [{ name: "lint-fixer", description: "Fixes lint" }],
+      agents: [{ name: "security-auditor", description: "Audits for vulns" }],
+    });
+    expect(prompt).toContain("lint-fixer: Fixes lint");
+    expect(prompt).toContain("security-auditor: Audits for vulns");
+    expect(prompt).toMatch(/never go looking on disk/i);
+  });
+
+  it("renders an empty catalog gracefully", () => {
+    const prompt = systemPromptFor(ctx(), "writeBody", { skills: [], agents: [] });
+    expect(prompt).toContain("<library_skills>");
+    expect(prompt).toContain("(none)");
   });
 
   it("in writeBody mode, forbids common preambles that would corrupt the body", () => {
@@ -65,26 +82,26 @@ describe("systemPromptFor — what we tell Claude", () => {
     expect(prompt).toContain("permissionMode");
   });
 
-  it("declares which tools are available and which are forbidden", () => {
+  it("tells the model it has full tools available and to ask questions as plain text (terminal-like)", () => {
     const prompt = systemPromptFor(ctx(), "writeBody");
-    expect(prompt).toContain("WebSearch");
-    expect(prompt).toContain("WebFetch");
-    expect(prompt).toContain("Forbidden tools");
-    expect(prompt).toContain("Bash");
+    expect(prompt).toContain("full tools available");
+    expect(prompt).toMatch(/plain text/i);
   });
 
-  it("embeds the current draft body so Claude has full context", () => {
-    const prompt = systemPromptFor(
-      ctx({ body: "Walk the diff file by file. Look for secrets." }),
-      "writeBody",
-    );
-    expect(prompt).toContain("Walk the diff file by file. Look for secrets.");
-    expect(prompt).toContain("<current_body>");
+  it("notes in the system prompt that the body arrives fresh each turn (not frozen in the prompt)", () => {
+    const prompt = systemPromptFor(ctx(), "writeBody");
+    expect(prompt).toContain("<session_context>");
+    expect(prompt).toMatch(/sent fresh.*every message|always the latest/i);
+  });
+
+  it("sends the current draft body fresh each turn so Claude has full, up-to-date context", () => {
+    const block = currentBodyBlock(ctx({ body: "Walk the diff file by file. Look for secrets." }));
+    expect(block).toContain("Walk the diff file by file. Look for secrets.");
+    expect(block).toContain("<current_body>");
   });
 
   it("notes when the current body is empty so Claude does not hallucinate one", () => {
-    const prompt = systemPromptFor(ctx({ body: "" }), "writeBody");
-    expect(prompt).toContain("(empty)");
+    expect(currentBodyBlock(ctx({ body: "" }))).toContain("(empty)");
   });
 
   it("includes attached skills so Claude knows what context the agent already has", () => {
@@ -223,7 +240,7 @@ describe("extractTimelineEvents — JSONL event parsing", () => {
     const events = extractTimelineEvents(chunk);
     const preview = (events[0] as { preview: string }).preview;
     expect(preview.length).toBeLessThanOrEqual(220);
-    expect(preview.endsWith("…")).toBe(true);
+    expect(preview.endsWith("...")).toBe(true);
   });
 
   it("survives interleaved garbage lines (claude logs sometimes have stray output)", () => {

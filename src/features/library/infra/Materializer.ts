@@ -14,7 +14,7 @@ import {
   type TargetPlan,
 } from "../domain/materialize";
 import { fromProjectPath, type LibrarySnapshot, type ProjectPath } from "../domain/types";
-import { sha256BufferHex, type LibraryStore } from "./LibraryStore";
+import { preserveCorruptFile, sha256BufferHex, type LibraryStore } from "./LibraryStore";
 
 export interface MaterializerOptions {
   readonly globalRoot?: string;
@@ -126,6 +126,7 @@ const readManifest = (file: string): TargetManifest => {
       agents: parsed.agents ?? {},
     };
   } catch {
+    preserveCorruptFile(file);
     return emptyManifest;
   }
 };

@@ -450,7 +450,7 @@ describe("LibraryAssistant — end-to-end against a mock claude binary", () => {
     await assistant.ask(itemCtx, "first");
     const cwdsBefore = fs.readdirSync(projectsDir, { recursive: true })
       .filter((f) => typeof f === "string" && f.endsWith(".jsonl"));
-    assistant.resetItem("skill:resettable");
+    assistant.reset("skill:resettable");
     await assistant.ask(itemCtx, "after reset");
     const cwdsAfter = fs.readdirSync(projectsDir, { recursive: true })
       .filter((f) => typeof f === "string" && f.endsWith(".jsonl"));

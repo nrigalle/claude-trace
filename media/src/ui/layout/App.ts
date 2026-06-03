@@ -32,7 +32,7 @@ export interface AppHandlers {
   onCopyConversation(id: SessionId): void;
   onResumeInCockpit(id: SessionId): void;
   onTogglePin(id: SessionId): void;
-  onDeleteSessions(ids: readonly SessionId[], permanent?: boolean): void;
+  onDeleteSessions(ids: readonly SessionId[]): void;
   onBackToHome(): void;
   onSaveDetailLayout(layout: readonly DetailBlockConfig[]): void;
 }

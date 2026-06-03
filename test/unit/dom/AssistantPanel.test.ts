@@ -5,6 +5,7 @@ import type {
   LibraryWebviewToHost,
   TimelineEvent,
 } from "../../../src/features/library/protocol";
+import { DEFAULT_MODEL_CHOICE } from "../../../src/shared/models";
 
 const baseCtx: AssistantContext = {
   itemKey: "skill:code-review",
@@ -44,6 +45,14 @@ const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 const flushRaf = async (): Promise<void> => {
   await new Promise((r) => requestAnimationFrame(() => r(undefined)));
   await tick();
+};
+
+const cid = (): string => {
+  for (let i = sent.length - 1; i >= 0; i--) {
+    const m = sent[i]!;
+    if (m.type === "assistantAsk") return m.conversationId;
+  }
+  return "c-none";
 };
 
 const sendUserMessage = async (root: HTMLElement, text: string): Promise<void> => {
@@ -109,20 +118,83 @@ describe("AssistantPanel — send mechanics", () => {
     expect(a.mode).toBe("writeBody");
   });
 
+  it("uses the shared default model for a new chat", async () => {
+    const { panel, root } = mount();
+    panel.setOpen(true);
+    await tick();
+    await sendUserMessage(root, "draft");
+    const asked = sent.find((m) => m.type === "assistantAsk") as { model: string };
+    expect(asked.model).toBe(DEFAULT_MODEL_CHOICE);
+  });
+
   it("includes the selected model and effort in assistantAsk", async () => {
     const { panel, root } = mount();
     panel.setOpen(true);
     await tick();
-    const modelSel = root.querySelectorAll(".lib-asst-pick")[0] as HTMLSelectElement;
-    modelSel.value = "claude-sonnet-4-6";
-    modelSel.dispatchEvent(new Event("change"));
-    const effortSel = root.querySelectorAll(".lib-asst-pick")[1] as HTMLSelectElement;
-    effortSel.value = "high";
-    effortSel.dispatchEvent(new Event("change"));
+    const modelDd = root.querySelector(".lib-asst-pick-row")!.querySelectorAll(".ct-dd")[0]!;
+    (modelDd.querySelector(".ct-dd-btn") as HTMLButtonElement).click();
+    (document.querySelector('.ct-dd-menu .ct-dd-opt[data-value="claude-sonnet-4-6"]') as HTMLButtonElement).click();
+    const effortDd = root.querySelector(".lib-asst-pick-row")!.querySelectorAll(".ct-dd")[1]!;
+    (effortDd.querySelector(".ct-dd-btn") as HTMLButtonElement).click();
+    (document.querySelector('.ct-dd-menu .ct-dd-opt[data-value="high"]') as HTMLButtonElement).click();
     await sendUserMessage(root, "draft");
     const asked = sent.find((m) => m.type === "assistantAsk") as { model: string; effort: string };
     expect(asked.model).toBe("claude-sonnet-4-6");
     expect(asked.effort).toBe("high");
+  });
+
+  it("closes a body-mounted dropdown if the assistant header rebuilds while it is open", async () => {
+    const { panel, root } = mount();
+    panel.setOpen(true);
+    await tick();
+    const modelDd = root.querySelector(".lib-asst-pick-row")!.querySelectorAll(".ct-dd")[0]!;
+    (modelDd.querySelector(".ct-dd-btn") as HTMLButtonElement).click();
+    expect(document.querySelector(".ct-dd-menu")).not.toBeNull();
+    panel.switchItem();
+    await tick();
+    expect(document.querySelector(".ct-dd-menu")).toBeNull();
+  });
+
+  it("keeps saved history if it arrives after the user already typed the next turn", async () => {
+    const { panel, root } = mount();
+    panel.setOpen(true);
+    await tick();
+    panel.receive({
+      type: "assistantConversations",
+      itemKey: "skill:code-review",
+      conversations: [{ id: "c-saved", title: "Saved chat", createdAtMs: 1, updatedAtMs: 2, mode: "writeBody" }],
+    });
+    await tick();
+    await sendUserMessage(root, "new question");
+    panel.receive({
+      type: "assistantHistory",
+      itemKey: "skill:code-review",
+      conversationId: "c-saved",
+      turns: [
+        { role: "user", text: "old question", events: [] },
+        { role: "assistant", text: "", events: [{ kind: "text", text: "old answer" }] },
+      ],
+    });
+    await flushRaf();
+    const text = root.querySelector(".lib-asst-history")!.textContent ?? "";
+    expect(text.indexOf("old question")).toBeLessThan(text.indexOf("old answer"));
+    expect(text.indexOf("old answer")).toBeLessThan(text.indexOf("new question"));
+  });
+
+  it("uses the response's item key when a stale conversation-list response arrives after switching items", async () => {
+    const { panel } = mount();
+    panel.setOpen(true);
+    await tick();
+    ctx = { ...baseCtx, itemKey: "skill:other", name: "other" };
+    panel.switchItem();
+    sent.length = 0;
+    panel.receive({
+      type: "assistantConversations",
+      itemKey: "skill:code-review",
+      conversations: [{ id: "c-old-item", title: "Old item chat", createdAtMs: 1, updatedAtMs: 2, mode: "writeBody" }],
+    });
+    const load = sent.find((m) => m.type === "assistantLoadHistory");
+    expect(load).toEqual({ type: "assistantLoadHistory", itemKey: "skill:code-review", conversationId: "c-old-item" });
   });
 
   it("Send is ignored when input is empty or whitespace-only", async () => {
@@ -138,7 +210,7 @@ describe("AssistantPanel — send mechanics", () => {
     panel.setOpen(true);
     await tick();
     await sendUserMessage(root, "first");
-    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", busy: true });
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
     await flushRaf();
     sent.length = 0;
     await sendUserMessage(root, "while busy");
@@ -165,6 +237,7 @@ describe("AssistantPanel — bulletproof 'write to body' guarantee", () => {
     panel.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [{ kind: "text", text: "## Body markdown\n\nUse me when…" }],
       text: "## Body markdown\n\nUse me when…",
       suggestedDescription: null,
@@ -181,6 +254,7 @@ describe("AssistantPanel — bulletproof 'write to body' guarantee", () => {
     panel.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [{ kind: "text", text: "the body" }],
       text: "the body",
       suggestedDescription: "Reviews diffs for security and clarity.",
@@ -200,6 +274,7 @@ describe("AssistantPanel — bulletproof 'write to body' guarantee", () => {
     panel.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [{ kind: "text", text: "I think Y." }],
       text: "I think Y.",
       suggestedDescription: null,
@@ -216,6 +291,7 @@ describe("AssistantPanel — bulletproof 'write to body' guarantee", () => {
     panel.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [],
       text: "",
       suggestedDescription: null,
@@ -232,6 +308,7 @@ describe("AssistantPanel — bulletproof 'write to body' guarantee", () => {
     panel.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [{ kind: "text", text: "version one" }],
       text: "version one",
       suggestedDescription: null,
@@ -241,6 +318,7 @@ describe("AssistantPanel — bulletproof 'write to body' guarantee", () => {
     panel.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [{ kind: "text", text: "version two — better" }],
       text: "version two — better",
       suggestedDescription: null,
@@ -259,12 +337,13 @@ describe("AssistantPanel — bulletproof 'write to body' guarantee", () => {
     panel.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [{ kind: "text", text: "answer for old item" }],
       text: "answer for old item",
       suggestedDescription: null,
     });
     await flushRaf();
-    expect(appliedBody).toEqual(["answer for old item"]);
+    expect(appliedBody).toEqual([]);
   });
 
   it("multiple replies for the same item never produce more onApplyBody calls than expected", async () => {
@@ -276,6 +355,7 @@ describe("AssistantPanel — bulletproof 'write to body' guarantee", () => {
       panel.receive({
         type: "assistantReply",
         itemKey: "skill:code-review",
+      conversationId: cid(),
         events: [{ kind: "text", text: `t${i}` }],
         text: `t${i}`,
         suggestedDescription: null,
@@ -293,6 +373,7 @@ describe("AssistantPanel — bulletproof 'write to body' guarantee", () => {
     panel.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [{ kind: "text", text: "the body" }],
       text: "the body",
       suggestedDescription: null,
@@ -310,9 +391,9 @@ describe("AssistantPanel — streaming progress", () => {
     panel.setOpen(true);
     await tick();
     await sendUserMessage(root, "go");
-    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", busy: true });
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
     const events1: TimelineEvent[] = [{ kind: "text", text: "writing now…" }];
-    panel.receive({ type: "assistantProgress", itemKey: "skill:code-review", events: events1 });
+    panel.receive({ type: "assistantProgress", itemKey: "skill:code-review", conversationId: cid(), events: events1 });
     await flushRaf();
     expect(root.querySelector(".lib-asst-tl-text")?.textContent).toContain("writing now");
   });
@@ -322,10 +403,11 @@ describe("AssistantPanel — streaming progress", () => {
     panel.setOpen(true);
     await tick();
     await sendUserMessage(root, "go");
-    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", busy: true });
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
     panel.receive({
       type: "assistantProgress",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [{ kind: "tool_use", id: "tu_1", name: "WebSearch", input: '{"query":"python production"}' }],
     });
     await flushRaf();
@@ -341,10 +423,11 @@ describe("AssistantPanel — streaming progress", () => {
     panel.setOpen(true);
     await tick();
     await sendUserMessage(root, "go");
-    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", busy: true });
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
     panel.receive({
       type: "assistantProgress",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [
         { kind: "tool_use", id: "tu_1", name: "WebSearch", input: '{"query":"x"}' },
         { kind: "tool_result", toolUseId: "tu_1", preview: "5 results found", isError: false },
@@ -362,10 +445,11 @@ describe("AssistantPanel — streaming progress", () => {
     panel.setOpen(true);
     await tick();
     await sendUserMessage(root, "go");
-    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", busy: true });
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
     panel.receive({
       type: "assistantProgress",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [
         { kind: "tool_use", id: "tu_1", name: "WebFetch", input: "{}" },
         { kind: "tool_result", toolUseId: "tu_1", preview: "Network error", isError: true },
@@ -380,11 +464,12 @@ describe("AssistantPanel — streaming progress", () => {
     panel.setOpen(true);
     await tick();
     await sendUserMessage(root, "go");
-    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", busy: true });
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
     for (let i = 0; i < 5; i++) {
       panel.receive({
         type: "assistantProgress",
         itemKey: "skill:code-review",
+      conversationId: cid(),
         events: [{ kind: "text", text: `chunk ${i}` }],
       });
     }
@@ -401,7 +486,7 @@ describe("AssistantPanel — streaming progress", () => {
     await sendUserMessage(root, "go");
     panel.receive({
       type: "assistantProgress",
-      itemKey: "skill:something-else",
+      itemKey: "skill:something-else", conversationId: "c-foreign",
       events: [{ kind: "text", text: "leaked content from another item" }],
     });
     await flushRaf();
@@ -415,7 +500,8 @@ describe("AssistantPanel — cancel and reset", () => {
     panel.setOpen(true);
     await tick();
     expect(root.querySelector(".lib-asst-cancel")?.classList.contains("hidden")).toBe(true);
-    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", busy: true });
+    await sendUserMessage(root, "go");
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
     await flushRaf();
     expect(root.querySelector(".lib-asst-cancel")?.classList.contains("hidden")).toBe(false);
   });
@@ -424,13 +510,46 @@ describe("AssistantPanel — cancel and reset", () => {
     const { panel, root } = mount();
     panel.setOpen(true);
     await tick();
-    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", busy: true });
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
     await flushRaf();
     (root.querySelector(".lib-asst-cancel") as HTMLButtonElement).click();
-    expect(sent.some((m) => m.type === "assistantCancel" && (m as { itemKey: string }).itemKey === "skill:code-review")).toBe(true);
+    expect(sent.some((m) => m.type === "assistantCancel")).toBe(true);
   });
 
-  it("Reset (↻) sends assistantReset and clears the local conversation", async () => {
+  it("shows a 'Stopped' marker when a cancelled turn ends with no reply", async () => {
+    const { panel, root } = mount();
+    panel.setOpen(true);
+    await tick();
+    await sendUserMessage(root, "go");
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
+    await flushRaf();
+    (root.querySelector(".lib-asst-cancel") as HTMLButtonElement).click();
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: false });
+    await flushRaf();
+    expect(root.querySelector(".lib-asst-stopped")).not.toBeNull();
+  });
+
+  it("does NOT show a 'Stopped' marker when a reply still arrives after Stop was clicked", async () => {
+    const { panel, root } = mount();
+    panel.setOpen(true);
+    await tick();
+    await sendUserMessage(root, "go");
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
+    await flushRaf();
+    (root.querySelector(".lib-asst-cancel") as HTMLButtonElement).click();
+    panel.receive({
+      type: "assistantReply",
+      itemKey: "skill:code-review",
+      conversationId: cid(),
+      events: [{ kind: "text", text: "finished anyway" }],
+      text: "finished anyway",
+      suggestedDescription: null,
+    });
+    await flushRaf();
+    expect(root.querySelector(".lib-asst-stopped")).toBeNull();
+  });
+
+  it("New chat starts a fresh conversation and clears the visible turns", async () => {
     const { panel, root } = mount();
     panel.setOpen(true);
     await tick();
@@ -438,13 +557,15 @@ describe("AssistantPanel — cancel and reset", () => {
     panel.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [{ kind: "text", text: "answered" }],
       text: "answered",
       suggestedDescription: null,
     });
     await flushRaf();
-    (root.querySelector('.lib-asst-icon-btn[aria-label="Restart conversation"]') as HTMLButtonElement).click();
-    expect(sent.some((m) => m.type === "assistantReset")).toBe(true);
+    expect(root.querySelector(".lib-asst-turn")).not.toBeNull();
+    (root.querySelector(".lib-asst-newchat") as HTMLButtonElement).click();
+    await flushRaf();
     expect(root.querySelector(".lib-asst-turn")).toBeNull();
   });
 });
@@ -515,9 +636,9 @@ describe("AssistantPanel — error handling", () => {
     panel.setOpen(true);
     await tick();
     await sendUserMessage(root, "go");
-    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", busy: true });
-    panel.receive({ type: "assistantError", itemKey: "skill:code-review", message: "Claude CLI not found." });
-    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", busy: false });
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
+    panel.receive({ type: "assistantError", itemKey: "skill:code-review", conversationId: cid(), message: "Claude CLI not found." });
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: false });
     await flushRaf();
     expect(root.querySelector(".lib-asst-error")?.textContent).toContain("Claude CLI not found");
     expect((root.querySelector(".lib-asst-send") as HTMLButtonElement).disabled).toBe(false);
@@ -528,7 +649,7 @@ describe("AssistantPanel — error handling", () => {
     panel.setOpen(true);
     await tick();
     await sendUserMessage(root, "go");
-    panel.receive({ type: "assistantError", itemKey: "skill:code-review", message: "transient fail" });
+    panel.receive({ type: "assistantError", itemKey: "skill:code-review", conversationId: cid(), message: "transient fail" });
     await flushRaf();
     expect(root.querySelector(".lib-asst-error")).not.toBeNull();
     await sendUserMessage(root, "retry");
@@ -546,6 +667,7 @@ describe("AssistantPanel — item switching isolation", () => {
     panel.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [{ kind: "text", text: "code-review answer" }],
       text: "code-review answer",
       suggestedDescription: null,
@@ -566,6 +688,7 @@ describe("AssistantPanel — item switching isolation", () => {
     panel.receive({
       type: "assistantReply",
       itemKey: "skill:code-review",
+      conversationId: cid(),
       events: [{ kind: "text", text: "code-review answer" }],
       text: "code-review answer",
       suggestedDescription: null,

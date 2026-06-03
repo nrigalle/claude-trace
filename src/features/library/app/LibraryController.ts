@@ -17,8 +17,9 @@ import type {
   LibraryWebviewToHost,
 } from "../protocol";
 import type { EffortChoice, ModelChoice } from "../../../shared/models";
+import type { ConversationStore } from "../../../shared/infra/assistant/conversationStore";
 import type { ImportScanner } from "../infra/ImportScanner";
-import type { LibraryAssistant } from "../infra/LibraryAssistant";
+import type { LibraryAssistant, LibraryCatalog } from "../infra/LibraryAssistant";
 import type { LibraryImporter } from "../infra/LibraryImporter";
 import type { LibraryStore } from "../infra/LibraryStore";
 import type { Materializer } from "../infra/Materializer";
@@ -47,6 +48,8 @@ export interface LibraryControllerDeps {
   readonly importer: LibraryImporter;
   readonly actions: LibraryActions;
   readonly assistant?: LibraryAssistant;
+  readonly assistantSessions?: ConversationStore;
+  readonly clock: () => number;
 }
 
 export class LibraryController {
@@ -133,26 +136,36 @@ export class LibraryController {
       }
       case "deleteSkill":
         store.deleteSkill(msg.name);
+        this.deps.assistantSessions?.dropKey(`skill:${msg.name}`);
         this.afterMutation();
         return;
       case "deleteAgent":
         store.deleteAgent(msg.name);
+        this.deps.assistantSessions?.dropKey(`agent:${msg.name}`);
         this.afterMutation();
         return;
       case "deleteSkillsBulk":
-        for (const n of msg.names) store.deleteSkill(n);
+        for (const n of msg.names) {
+          store.deleteSkill(n);
+          this.deps.assistantSessions?.dropKey(`skill:${n}`);
+        }
         this.afterMutation();
         return;
       case "deleteAgentsBulk":
-        for (const n of msg.names) store.deleteAgent(n);
+        for (const n of msg.names) {
+          store.deleteAgent(n);
+          this.deps.assistantSessions?.dropKey(`agent:${n}`);
+        }
         this.afterMutation();
         return;
       case "renameSkill":
         store.renameSkill(msg.from, msg.to);
+        this.deps.assistantSessions?.move(`skill:${msg.from}`, `skill:${msg.to}`);
         this.afterMutation();
         return;
       case "renameAgent":
         store.renameAgent(msg.from, msg.to);
+        this.deps.assistantSessions?.move(`agent:${msg.from}`, `agent:${msg.to}`);
         this.afterMutation();
         return;
       case "saveSkill":
@@ -208,65 +221,147 @@ export class LibraryController {
         this.deps.actions.openLibraryDir();
         return;
       case "assistantAsk":
-        await this.handleAssistantAsk(msg.context, msg.message, msg.mode, msg.model, msg.effort);
+        await this.handleAssistantAsk(msg.context, msg.conversationId, msg.message, msg.mode, msg.model, msg.effort);
         return;
-      case "assistantReset":
-        this.deps.assistant?.resetItem(msg.itemKey);
+      case "assistantListConversations":
+        this.handleAssistantListConversations(msg.itemKey);
+        return;
+      case "assistantLoadHistory":
+        this.handleAssistantHistory(msg.itemKey, msg.conversationId);
         return;
       case "assistantCancel":
-        this.deps.assistant?.cancel(msg.itemKey);
+        this.deps.assistant?.cancel(msg.conversationId);
+        return;
+      case "assistantRenameConversation":
+        this.deps.assistantSessions?.rename(msg.itemKey, msg.conversationId, conversationTitle(msg.title));
+        this.handleAssistantListConversations(msg.itemKey);
+        return;
+      case "assistantDeleteConversation":
+        this.deps.assistant?.reset(msg.conversationId);
+        this.deps.assistantSessions?.delete(msg.itemKey, msg.conversationId);
+        this.handleAssistantListConversations(msg.itemKey);
         return;
       default:
         return assertNever(msg);
     }
   }
 
+  private adoptIfSaved(itemKey: string, conversationId: string): void {
+    const assistant = this.deps.assistant;
+    if (!assistant || assistant.sessionInfo(conversationId)) return;
+    const saved = this.deps.assistantSessions?.get(itemKey, conversationId);
+    if (saved) assistant.adopt(conversationId, saved.sessionId, saved.cwd);
+  }
+
+  private handleAssistantListConversations(itemKey: string): void {
+    const conversations = (this.deps.assistantSessions?.list(itemKey) ?? []).map((c) => ({
+      id: c.id,
+      title: c.title,
+      createdAtMs: c.createdAtMs,
+      updatedAtMs: c.updatedAtMs,
+      mode: asMode(c.mode),
+    }));
+    this.deps.host.postMessage({ type: "assistantConversations", itemKey, conversations });
+  }
+
+  private handleAssistantHistory(itemKey: string, conversationId: string): void {
+    const assistant = this.deps.assistant;
+    if (!assistant) return;
+    this.adoptIfSaved(itemKey, conversationId);
+    this.deps.host.postMessage({
+      type: "assistantHistory",
+      itemKey,
+      conversationId,
+      turns: assistant.historyTurns(conversationId),
+    });
+  }
+
+  private persistConversation(itemKey: string, conversationId: string, latestMessage: string, mode: AssistantMode): void {
+    const assistant = this.deps.assistant;
+    const store = this.deps.assistantSessions;
+    if (!assistant || !store) return;
+    const info = assistant.sessionInfo(conversationId);
+    if (!info) return;
+    const now = this.deps.clock();
+    const existing = store.get(itemKey, conversationId);
+    store.upsert(itemKey, {
+      id: conversationId,
+      sessionId: info.sessionId,
+      cwd: info.cwd,
+      title: existing?.title ?? conversationTitle(latestMessage),
+      createdAtMs: existing?.createdAtMs ?? now,
+      updatedAtMs: now,
+      mode,
+    });
+  }
+
   private async handleAssistantAsk(
     context: AssistantContext,
+    conversationId: string,
     message: string,
     mode: AssistantMode,
     model: ModelChoice,
     effort: EffortChoice,
   ): Promise<void> {
+    const itemKey = context.itemKey;
     if (!this.deps.assistant) {
       this.deps.host.postMessage({
         type: "assistantError",
-        itemKey: context.itemKey,
+        itemKey,
+        conversationId,
         message: "Assistant is not available on this build.",
       });
       return;
     }
-    this.deps.host.postMessage({ type: "assistantBusy", itemKey: context.itemKey, busy: true });
+    this.adoptIfSaved(itemKey, conversationId);
+    this.deps.host.postMessage({ type: "assistantBusy", itemKey, conversationId, busy: true });
     try {
       const result = await this.deps.assistant.ask(context, message, {
+        conversationId,
         cwd: this.deps.actions.workspaceCwd?.(),
         mode,
         model,
         effort,
+        catalog: this.assistantCatalog(context),
         onProgress: (events) => {
-          this.deps.host.postMessage({
-            type: "assistantProgress",
-            itemKey: context.itemKey,
-            events,
-          });
+          this.deps.host.postMessage({ type: "assistantProgress", itemKey, conversationId, events });
         },
       });
+      this.persistConversation(itemKey, conversationId, message, mode);
       this.deps.host.postMessage({
         type: "assistantReply",
-        itemKey: context.itemKey,
+        itemKey,
+        conversationId,
         events: result.events,
         text: result.text,
         suggestedDescription: result.suggestedDescription,
       });
+      this.handleAssistantListConversations(itemKey);
     } catch (err) {
-      this.deps.host.postMessage({
-        type: "assistantError",
-        itemKey: context.itemKey,
-        message: err instanceof Error ? err.message : String(err),
-      });
+      const text = err instanceof Error ? err.message : String(err);
+      if (text !== "Cancelled.") {
+        this.deps.host.postMessage({ type: "assistantError", itemKey, conversationId, message: text });
+      }
     } finally {
-      this.deps.host.postMessage({ type: "assistantBusy", itemKey: context.itemKey, busy: false });
+      this.deps.host.postMessage({ type: "assistantBusy", itemKey, conversationId, busy: false });
     }
+  }
+
+  private assistantCatalog(context: AssistantContext): LibraryCatalog {
+    const descOf = (fm: Readonly<Record<string, unknown>>): string => {
+      const d = fm["description"];
+      return typeof d === "string" ? d : "";
+    };
+    return {
+      skills: this.deps.store
+        .listSkills()
+        .filter((s) => !(context.kind === "skill" && (s.name as string) === context.name))
+        .map((s) => ({ name: s.name as string, description: descOf(s.frontmatter) })),
+      agents: this.deps.store
+        .listAgents()
+        .filter((a) => !(context.kind === "agent" && (a.name as string) === context.name))
+        .map((a) => ({ name: a.name as string, description: descOf(a.frontmatter) })),
+    };
   }
 
   private afterMutation(): void {
@@ -323,4 +418,13 @@ export class LibraryController {
 const describeTarget = (target: TargetLocation): string => {
   if (target.kind === "global") return "global (~/.claude)";
   return target.path as string;
+};
+
+const asMode = (m: string | undefined): AssistantMode | undefined =>
+  m === "discuss" || m === "writeBody" ? m : undefined;
+
+const conversationTitle = (firstMessage: string): string => {
+  const oneLine = firstMessage.replace(/\s+/g, " ").trim();
+  if (oneLine.length === 0) return "New chat";
+  return oneLine.length > 48 ? `${oneLine.slice(0, 45)}...` : oneLine;
 };

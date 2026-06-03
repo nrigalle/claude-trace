@@ -9,9 +9,9 @@ export interface InterpolationContext {
 const resolveExpr = (expr: string, ctx: InterpolationContext): string | null => {
   if (expr === "workspace") return ctx.workspace;
   const varMatch = /^vars\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(expr);
-  if (varMatch) return ctx.vars[varMatch[1]!] ?? null;
+  if (varMatch) return ctx.vars[varMatch[1]!] ?? "";
   const blockMatch = /^blocks\.(.+)\.output$/.exec(expr);
-  if (blockMatch) return ctx.blockOutputs[blockMatch[1]!] ?? null;
+  if (blockMatch) return ctx.blockOutputs[blockMatch[1]!] ?? "";
   return null;
 };
 

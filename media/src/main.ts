@@ -58,21 +58,9 @@ const boot = () => {
       if (target) app.updateSessions(sessionsCache, statsCache, new Set([id]));
       client.send({ type: "togglePin", sessionId: id });
     },
-    onDeleteSessions: (ids: readonly SessionId[], permanent = false) => {
+    onDeleteSessions: (ids: readonly SessionId[]) => {
       if (ids.length === 0) return;
-      if (permanent) {
-        client.send({ type: "deleteSessions", sessionIds: ids, permanent: true });
-        return;
-      }
-      const remove = new Set<string>(ids);
-      sessionsCache = sessionsCache.filter((s) => !remove.has(s.session_id));
-      const selected = store.state.selectedId;
-      if (selected && remove.has(selected)) {
-        store.update({ selectedId: null });
-        app.noSelection();
-      }
-      app.updateSessions(sessionsCache, statsCache, new Set());
-      client.send({ type: "deleteSessions", sessionIds: ids, permanent: false });
+      client.send({ type: "deleteSessions", sessionIds: ids });
     },
     onBackToHome: () => {
       store.update({ selectedId: null });
@@ -113,6 +101,7 @@ const boot = () => {
   const setMode = (next: Mode) => {
     if (next === mode) return;
     mode = next;
+    store.update({ activeTab: next });
     sessionsTab.classList.toggle("active", next === "sessions");
     pipelinesTab.classList.toggle("active", next === "pipelines");
     libraryTab.classList.toggle("active", next === "library");
@@ -142,6 +131,7 @@ const boot = () => {
   const modeStack = h("div", { className: "ct-mode-stack" }, sessionsModeEl, pipelinesModeEl, libraryModeEl);
   appHost.appendChild(tabsEl);
   appHost.appendChild(modeStack);
+  if (store.state.activeTab !== "sessions") setMode(store.state.activeTab);
 
   client.onUpdate((msg: HostToWebview) => {
     switch (msg.type) {
@@ -178,6 +168,12 @@ const boot = () => {
   });
   client.send({ type: "ready" });
   client.send({ type: "cockpitReady" });
+
+  const persistNow = () => store.flush();
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") persistNow();
+  });
+  window.addEventListener("pagehide", persistNow);
 };
 
 if (document.readyState === "loading") {

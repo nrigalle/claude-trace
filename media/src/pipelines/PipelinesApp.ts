@@ -10,10 +10,19 @@ import type {
   PipelineId,
   RunId,
   RunState,
+  ScheduleRecurrence,
   Trigger,
   WorkerBlock,
 } from "../../../src/features/pipelines/domain/types";
 import { toBlockId } from "../../../src/features/pipelines/domain/types";
+import {
+  INTERVAL_UNITS,
+  WEEKDAY_LABELS,
+  describeRecurrence,
+  formatMinute,
+  intervalToMs,
+  splitInterval,
+} from "../../../src/features/pipelines/domain/schedule.js";
 import { assertNeverPipelines } from "../../../src/features/pipelines/protocol";
 import type {
   PipelinesHostToWebview,
@@ -745,13 +754,7 @@ export class PipelinesApp {
       rows.push(h("label", { className: "pl-field", style: { flexDirection: "row", alignItems: "center", gap: "8px" } }, enabledCb, h("span", { textContent: "Enabled" })));
 
       if (trigger.kind === "schedule") {
-        const input = h("input", { className: "pl-field-input", attrs: { type: "number", min: "1000", step: "1000" } });
-        input.value = String(trigger.intervalMs);
-        input.addEventListener("input", () => {
-          const n = Number(input.value);
-          this.updateTriggers((ts) => ts.map((t, i) => (i === index && t.kind === "schedule" ? { ...t, intervalMs: Number.isFinite(n) && n > 0 ? n : t.intervalMs } : t)));
-        });
-        rows.push(h("div", { className: "pl-field" }, h("label", { className: "pl-field-label", textContent: "Interval (ms)" }), input));
+        rows.push(...this.scheduleEditorRows(trigger.recurrence, index));
       } else {
         const input = bareTextInput(trigger.token, (v) =>
           this.updateTriggers((ts) => ts.map((t, i) => (i === index && t.kind === "webhook" ? { ...t, token: v } : t))),
@@ -784,7 +787,7 @@ export class PipelinesApp {
         className: "pl-btn ghost",
         attrs: { type: "button" },
         textContent: "+ Schedule",
-        on: { click: () => this.updateTriggers((ts) => [...ts, { kind: "schedule", intervalMs: 3600000, enabled: true }]) },
+        on: { click: () => this.updateTriggers((ts) => [...ts, { kind: "schedule", enabled: true, recurrence: { type: "weekly", weekdays: [1], atMinute: 540 } }]) },
       }),
       h("button", {
         className: "pl-btn ghost",
@@ -795,6 +798,74 @@ export class PipelinesApp {
     );
     body.appendChild(inspectorSection(ICON_PLAY, "Add a trigger", addRow));
     this.panelBody.appendChild(body);
+  }
+
+  private setRecurrence(index: number, recurrence: ScheduleRecurrence): void {
+    this.updateTriggers((ts) => ts.map((t, i) => (i === index && t.kind === "schedule" ? { ...t, recurrence } : t)));
+  }
+
+  private scheduleEditorRows(recurrence: ScheduleRecurrence, index: number): HTMLElement[] {
+    const rows: HTMLElement[] = [];
+    const atMinute = recurrence.type === "interval" ? 540 : recurrence.atMinute;
+
+    const typeSel = h("select", { className: "pl-field-input" },
+      ...(["interval", "daily", "weekly", "monthly"] as const).map((tp) =>
+        h("option", { attrs: { value: tp, ...(recurrence.type === tp ? { selected: "selected" } : {}) }, textContent: `${tp[0]!.toUpperCase()}${tp.slice(1)}` }),
+      ),
+    ) as HTMLSelectElement;
+    typeSel.addEventListener("change", () => this.setRecurrence(index, defaultRecurrenceOfType(typeSel.value, atMinute)));
+    rows.push(h("div", { className: "pl-field" }, h("label", { className: "pl-field-label", textContent: "Repeat" }), typeSel));
+
+    if (recurrence.type === "interval") {
+      const { value, unit } = splitInterval(recurrence.everyMs);
+      const valInput = h("input", { className: "pl-field-input", attrs: { type: "number", min: "1", step: "1" } }) as HTMLInputElement;
+      valInput.value = String(value);
+      const unitSel = h("select", { className: "pl-field-input" },
+        ...INTERVAL_UNITS.map((u) => h("option", { attrs: { value: u.id, ...(u.id === unit ? { selected: "selected" } : {}) }, textContent: u.label })),
+      ) as HTMLSelectElement;
+      const apply = (): void => this.setRecurrence(index, { type: "interval", everyMs: intervalToMs(Number(valInput.value) || 1, unitSel.value) });
+      valInput.addEventListener("input", apply);
+      unitSel.addEventListener("change", apply);
+      rows.push(h("div", { className: "pl-field" }, h("label", { className: "pl-field-label", textContent: "Every" }), h("div", { style: { display: "flex", gap: "8px" } }, valInput, unitSel)));
+    } else {
+      if (recurrence.type === "weekly") {
+        const chips = h("div", { style: { display: "flex", gap: "4px", flexWrap: "wrap" } });
+        WEEKDAY_LABELS.forEach((label, d) => {
+          const on = recurrence.weekdays.includes(d);
+          chips.appendChild(h("button", {
+            className: `pl-btn ghost${on ? " primary" : ""}`,
+            attrs: { type: "button", "aria-pressed": on ? "true" : "false" },
+            textContent: label,
+            on: { click: () => {
+              const set = new Set(recurrence.weekdays);
+              if (set.has(d)) set.delete(d); else set.add(d);
+              const weekdays = [...set].sort((a, b) => a - b);
+              this.setRecurrence(index, { type: "weekly", weekdays: weekdays.length > 0 ? weekdays : [d], atMinute });
+            } },
+          }));
+        });
+        rows.push(h("div", { className: "pl-field" }, h("label", { className: "pl-field-label", textContent: "On days" }), chips));
+      }
+      if (recurrence.type === "monthly") {
+        const dayInput = h("input", { className: "pl-field-input", attrs: { type: "number", min: "1", max: "31", step: "1" } }) as HTMLInputElement;
+        dayInput.value = String(recurrence.day);
+        dayInput.addEventListener("input", () => {
+          const d = Math.min(31, Math.max(1, Math.round(Number(dayInput.value) || 1)));
+          this.setRecurrence(index, { type: "monthly", day: d, atMinute });
+        });
+        rows.push(h("div", { className: "pl-field" }, h("label", { className: "pl-field-label", textContent: "Day of month" }), dayInput));
+      }
+      const timeInput = h("input", { className: "pl-field-input", attrs: { type: "time" } }) as HTMLInputElement;
+      timeInput.value = formatMinute(atMinute);
+      timeInput.addEventListener("input", () => {
+        const m = timeToMinute(timeInput.value);
+        if (m !== null) this.setRecurrence(index, withAtMinute(recurrence, m));
+      });
+      rows.push(h("div", { className: "pl-field" }, h("label", { className: "pl-field-label", textContent: "At time" }), timeInput));
+    }
+
+    rows.push(h("div", { className: "pl-field-hint", textContent: `Runs ${describeRecurrence(recurrence)}, while the Claude Trace tab is open and the computer is awake.` }));
+    return rows;
   }
 
   private updateBlock<T extends Block>(blockId: string, fn: (b: T) => T): void {
@@ -952,3 +1023,30 @@ export class PipelinesApp {
     setTimeout(() => { notice.remove(); }, 6000);
   }
 }
+
+const timeToMinute = (v: string): number | null => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(v.trim());
+  if (!m) return null;
+  const hours = Number(m[1]);
+  const minutes = Number(m[2]);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+};
+
+const withAtMinute = (r: ScheduleRecurrence, atMinute: number): ScheduleRecurrence => {
+  switch (r.type) {
+    case "interval": return r;
+    case "daily": return { type: "daily", atMinute };
+    case "weekly": return { type: "weekly", weekdays: r.weekdays, atMinute };
+    case "monthly": return { type: "monthly", day: r.day, atMinute };
+  }
+};
+
+const defaultRecurrenceOfType = (type: string, atMinute: number): ScheduleRecurrence => {
+  switch (type) {
+    case "daily": return { type: "daily", atMinute };
+    case "weekly": return { type: "weekly", weekdays: [1], atMinute };
+    case "monthly": return { type: "monthly", day: 1, atMinute };
+    default: return { type: "interval", everyMs: 3_600_000 };
+  }
+};

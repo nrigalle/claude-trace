@@ -71,7 +71,7 @@ describe("Sidebar — delete and multi-select", () => {
   afterEach(() => cleanupVsCodeStub());
 
   const mountWith = async (
-    onDeleteSessions: (ids: readonly SessionId[], permanent?: boolean) => void,
+    onDeleteSessions: (ids: readonly SessionId[]) => void,
   ): Promise<HTMLElement> => {
     const { Store, Sidebar } = await loadModules();
     const sidebar = new Sidebar(new Store(), { ...noopHandlers, onDeleteSessions });
@@ -81,17 +81,17 @@ describe("Sidebar — delete and multi-select", () => {
     return host;
   };
 
-  it("a row's Remove action requests deletion of just that session", async () => {
+  it("a row's Delete action requests deletion of just that session", async () => {
     const deleted: SessionId[][] = [];
     const host = await mountWith((ids) => deleted.push([...ids]));
-    const removeBtn = host.querySelector('[aria-label="Remove from dashboard: a"]') as HTMLElement;
-    expect(removeBtn).toBeTruthy();
-    removeBtn.click();
+    const delBtn = host.querySelector('[aria-label="Delete session: a"]') as HTMLElement;
+    expect(delBtn).toBeTruthy();
+    delBtn.click();
     expect(deleted).toHaveLength(1);
     expect(deleted[0]!.map(String)).toEqual(["a"]);
   });
 
-  it("select mode + checkboxes + bulk Remove deletes every selected session in one request", async () => {
+  it("select mode + checkboxes + bulk Delete deletes every selected session in one request", async () => {
     const deleted: SessionId[][] = [];
     const host = await mountWith((ids) => deleted.push([...ids]));
 
@@ -103,9 +103,9 @@ describe("Sidebar — delete and multi-select", () => {
     check("a").click();
     check("c").click();
 
-    const removeBtn = host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement;
-    expect(removeBtn.textContent).toBe("Remove 2");
-    removeBtn.click();
+    const delBtn = host.querySelector(".sidebar-bulk-delete") as HTMLButtonElement;
+    expect(delBtn.textContent).toBe("Delete 2");
+    delBtn.click();
 
     expect(deleted).toHaveLength(1);
     expect(deleted[0]!.map(String).sort()).toEqual(["a", "c"]);
@@ -116,24 +116,10 @@ describe("Sidebar — delete and multi-select", () => {
     const selectBtn = host.querySelector(".sidebar-select-btn") as HTMLButtonElement;
     selectBtn.click();
     (host.querySelector('.session-item[data-session-id="a"] .session-item-check') as HTMLElement).click();
-    expect((host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement).textContent).toBe("Remove 1");
+    expect((host.querySelector(".sidebar-bulk-delete") as HTMLButtonElement).textContent).toBe("Delete 1");
     selectBtn.click();
     selectBtn.click();
-    expect((host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement).textContent).toBe("Remove");
-  });
-
-  it("the bulk 'Delete files' button requests a PERMANENT delete of the selected sessions", async () => {
-    const calls: { ids: string[]; permanent: boolean }[] = [];
-    const host = await mountWith((ids, permanent) =>
-      calls.push({ ids: [...ids].map(String), permanent: permanent ?? false }),
-    );
-    (host.querySelector(".sidebar-select-btn") as HTMLButtonElement).click();
-    (host.querySelector('.session-item[data-session-id="b"] .session-item-check') as HTMLElement).click();
-    const delBtn = host.querySelector(".sidebar-bulk-delete") as HTMLButtonElement;
-    expect(delBtn.textContent).toBe("Delete 1");
-    delBtn.click();
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual({ ids: ["b"], permanent: true });
+    expect((host.querySelector(".sidebar-bulk-delete") as HTMLButtonElement).textContent).toBe("Delete");
   });
 });
 
@@ -529,7 +515,7 @@ describe("Sidebar — folder filter and select-all", () => {
     return el !== null && el.style.display !== "none";
   };
 
-  const mount = async (sessions: readonly SessionSummary[], onDeleteSessions = (_ids: readonly SessionId[], _p?: boolean) => {}) => {
+  const mount = async (sessions: readonly SessionSummary[], onDeleteSessions = (_ids: readonly SessionId[]) => {}) => {
     const { Store, Sidebar } = await loadModules();
     const sidebar = new Sidebar(new Store(), { ...noopHandlers, onDeleteSessions });
     const host = document.createElement("div");
@@ -572,9 +558,9 @@ describe("Sidebar — folder filter and select-all", () => {
     );
     (host.querySelector(".sidebar-select-btn") as HTMLButtonElement).click();
     (host.querySelector(".sidebar-bulk-selectall") as HTMLButtonElement).click();
-    const removeBtn = host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement;
-    expect(removeBtn.textContent).toBe("Remove 3");
-    removeBtn.click();
+    const delBtn = host.querySelector(".sidebar-bulk-delete") as HTMLButtonElement;
+    expect(delBtn.textContent).toBe("Delete 3");
+    delBtn.click();
     expect(deleted[0]!.sort()).toEqual(["a", "b", "c"]);
   });
 
@@ -585,7 +571,7 @@ describe("Sidebar — folder filter and select-all", () => {
     select.dispatchEvent(new Event("change", { bubbles: true }));
     (host.querySelector(".sidebar-select-btn") as HTMLButtonElement).click();
     (host.querySelector(".sidebar-bulk-selectall") as HTMLButtonElement).click();
-    expect((host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement).textContent).toBe("Remove 2");
+    expect((host.querySelector(".sidebar-bulk-delete") as HTMLButtonElement).textContent).toBe("Delete 2");
   });
 
   it("Select all toggles to Clear and deselects everything on a second click", async () => {
@@ -594,10 +580,10 @@ describe("Sidebar — folder filter and select-all", () => {
     const selectAll = host.querySelector(".sidebar-bulk-selectall") as HTMLButtonElement;
     selectAll.click();
     expect(selectAll.textContent).toBe("Clear");
-    expect((host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement).textContent).toBe("Remove 2");
+    expect((host.querySelector(".sidebar-bulk-delete") as HTMLButtonElement).textContent).toBe("Delete 2");
     selectAll.click();
     expect(selectAll.textContent).toBe("Select all");
-    expect((host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement).textContent).toBe("Remove");
+    expect((host.querySelector(".sidebar-bulk-delete") as HTMLButtonElement).textContent).toBe("Delete");
   });
 });
 

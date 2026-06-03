@@ -245,8 +245,10 @@ export class LibraryApp {
         return;
       case "assistantReply":
       case "assistantProgress":
+      case "assistantHistory":
       case "assistantError":
       case "assistantBusy":
+      case "assistantConversations":
         this.assistantPanel.receive(msg);
         return;
       default:

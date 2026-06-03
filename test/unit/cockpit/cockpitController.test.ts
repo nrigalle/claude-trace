@@ -46,6 +46,8 @@ class FakeBackend implements TerminalBackend {
   readonly killed: string[] = [];
   readonly alive = new Set<string>();
   readonly capturedHistory = new Map<string, string | null>();
+  readonly redrawn: string[] = [];
+  redrawResult = true;
   private dataListener: ((id: string, data: string) => void) | null = null;
   private exitListener: ((id: string, code: number) => void) | null = null;
   spawn(spec: TerminalSpawnSpec): void {
@@ -70,6 +72,10 @@ class FakeBackend implements TerminalBackend {
   }
   captureHistory(id: string): string | null {
     return this.capturedHistory.get(id) ?? null;
+  }
+  forceRedraw(id: string): boolean {
+    this.redrawn.push(id);
+    return this.redrawResult;
   }
   onData(l: (id: string, data: string) => void): { dispose(): void } {
     this.dataListener = l;
@@ -99,6 +105,7 @@ let names: Map<string, string>;
 let transcripts: Set<string>;
 let idSeq: number;
 let attentionNotices: string[];
+let attentionSessionIds: string[];
 let cleanedHooks: string[];
 let attentionListener: ((sessionId: string, reason: "stop" | "notify" | "active") => void) | null;
 let savedLayout: import("../../../src/features/cockpit/protocol").CockpitLayout;
@@ -117,7 +124,7 @@ const makeController = (): CockpitController =>
       defaultCwd: () => "/repo",
       newSessionId: () => `uuid-${++idSeq}`,
       transcriptExists: (_cwd, id) => transcripts.has(id),
-      notifyAttention: (name) => attentionNotices.push(name),
+      notifyAttention: (name, sessionId) => { attentionNotices.push(name); attentionSessionIds.push(sessionId); },
       prepareHooks: (id) => `/hooks/${id}.json`,
       cleanupHooks: (id) => cleanedHooks.push(id),
       watchAttention: (listener) => {
@@ -143,6 +150,7 @@ beforeEach(() => {
   transcripts = new Set();
   idSeq = 0;
   attentionNotices = [];
+  attentionSessionIds = [];
   cleanedHooks = [];
   attentionListener = null;
   savedLayout = { trees: {} };
@@ -217,6 +225,7 @@ describe("CockpitController hook-driven attention — deterministic done/needs-y
   it("a Stop signal notifies the user and tells the webview to light up that exact tile", () => {
     attentionListener!("uuid-1", "stop");
     expect(attentionNotices).toContain("Rev 1");
+    expect(attentionSessionIds).toContain("uuid-1");
     expect(host.posted.some((m) => m.type === "terminalAttention" && m.sessionId === "uuid-1" && m.reason === "stop")).toBe(true);
   });
 
@@ -751,5 +760,64 @@ describe("CockpitController pick a working folder for the launch", () => {
       prompt: null,
     });
     expect(backend.spawns[0]!.cwd).toBe("/Users/alex/code/my-api");
+  });
+});
+
+describe("CockpitController — resume on webview re-show", () => {
+  beforeEach(() => {
+    store.saveProfile(defaultProfile(toProfileId("p1"), "Worker"));
+  });
+
+  it("forces a redraw for an alive alternate-screen session instead of replaying stale text", () => {
+    host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
+    backend.capturedHistory.set("uuid-1", "");
+    backend.redrawResult = true;
+    backend.redrawn.length = 0;
+    host.posted.length = 0;
+    host.send({ type: "cockpitReady" });
+    expect(backend.redrawn).toContain("uuid-1");
+    expect(host.posted.some((m) => m.type === "terminalData" && m.sessionId === "uuid-1")).toBe(false);
+  });
+
+  it("falls back to disk history when a redraw is not possible", () => {
+    host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
+    terminalHistoryStore.append("uuid-1", "earlier output\r\n");
+    backend.capturedHistory.set("uuid-1", "");
+    backend.redrawResult = false;
+    backend.redrawn.length = 0;
+    host.posted.length = 0;
+    host.send({ type: "cockpitReady" });
+    expect(backend.redrawn).toContain("uuid-1");
+    const replayed = host.posted.filter(
+      (m): m is Extract<typeof m, { type: "terminalData" }> => m.type === "terminalData" && m.sessionId === "uuid-1",
+    );
+    expect(replayed.map((m) => m.data).join("")).toContain("earlier output");
+  });
+
+  it("replays captured text for a normal-screen session without forcing a redraw", () => {
+    host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
+    backend.capturedHistory.set("uuid-1", "$ ls\r\nfile.txt\r\n");
+    backend.redrawn.length = 0;
+    host.posted.length = 0;
+    host.send({ type: "cockpitReady" });
+    expect(backend.redrawn).not.toContain("uuid-1");
+    const replayed = host.posted.filter(
+      (m): m is Extract<typeof m, { type: "terminalData" }> => m.type === "terminalData" && m.sessionId === "uuid-1",
+    );
+    expect(replayed.map((m) => m.data).join("")).toContain("file.txt");
+  });
+
+  it("does not force a redraw for a paused session and replays its disk history", () => {
+    host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
+    terminalHistoryStore.append("uuid-1", "before pause\r\n");
+    host.send({ type: "cockpitPauseSession", sessionId: "uuid-1" });
+    backend.redrawn.length = 0;
+    host.posted.length = 0;
+    host.send({ type: "cockpitReady" });
+    expect(backend.redrawn).not.toContain("uuid-1");
+    const replayed = host.posted.filter(
+      (m): m is Extract<typeof m, { type: "terminalData" }> => m.type === "terminalData" && m.sessionId === "uuid-1",
+    );
+    expect(replayed.map((m) => m.data).join("")).toContain("before pause");
   });
 });

@@ -1,12 +1,11 @@
 import * as path from "path";
 import { TRACE_DATA_DIR } from "../../../shared/config";
 import {
-  ClaudeChatEngine,
   concatTextEvents,
-  encodeForClaudeProjects,
   extractTimelineEvents,
-  readEventsFrom,
-} from "../../../shared/assistant/claudeChatEngine";
+  wrapSessionContext,
+} from "../../../shared/assistant/conversationTurns";
+import { encodeForClaudeProjects, readEventsFrom } from "../../../shared/infra/assistant/claudeChatEngine";
 import type {
   ChatHooks,
   ChatPty,
@@ -14,7 +13,8 @@ import type {
   ChatPtySpawner,
   SessionState,
   TimelineEvent,
-} from "../../../shared/assistant/claudeChatEngine";
+} from "../../../shared/infra/assistant/claudeChatEngine";
+import { ChatAssistantBase } from "../../../shared/infra/assistant/chatAssistantBase";
 import type {
   AssistantContext,
   AssistantMode,
@@ -33,11 +33,23 @@ export interface AssistantResult {
   readonly suggestedDescription: string | null;
 }
 
+export interface LibraryCatalogEntry {
+  readonly name: string;
+  readonly description: string;
+}
+
+export interface LibraryCatalog {
+  readonly skills: readonly LibraryCatalogEntry[];
+  readonly agents: readonly LibraryCatalogEntry[];
+}
+
 export interface AssistantOptions {
+  readonly conversationId?: string;
   readonly cwd?: string;
   readonly mode?: AssistantMode;
   readonly model?: ModelChoice;
   readonly effort?: EffortChoice;
+  readonly catalog?: LibraryCatalog;
   readonly onProgress?: (events: readonly TimelineEvent[]) => void;
 }
 
@@ -53,14 +65,10 @@ export interface LibraryAssistantConfig {
 const ASSISTANT_CWD_ROOT = path.join(TRACE_DATA_DIR, "library-assistant");
 const ASSISTANT_SIGNALS_DIR = path.join(TRACE_DATA_DIR, "library-assistant", "signals");
 const ASSISTANT_HOOKS_DIR = path.join(TRACE_DATA_DIR, "library-assistant", "hooks");
-const DISALLOWED_TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "Task", "Agent", "AskUserQuestion", "ExitPlanMode"];
-const ALLOWED_TOOLS = ["WebSearch", "WebFetch", "Read", "Grep", "Glob", "TodoWrite"];
 
-export class LibraryAssistant {
-  private readonly engine: ClaudeChatEngine;
-
+export class LibraryAssistant extends ChatAssistantBase {
   constructor(config: LibraryAssistantConfig = {}) {
-    this.engine = new ClaudeChatEngine({
+    super({
       claudeBin: config.claudeBin,
       claudeArgsPrefix: config.claudeArgsPrefix,
       ptySpawner: config.ptySpawner,
@@ -68,22 +76,8 @@ export class LibraryAssistant {
       transcriptRoot: config.transcriptRoot,
       signalsDir: ASSISTANT_SIGNALS_DIR,
       hooksDir: ASSISTANT_HOOKS_DIR,
-      allowedTools: ALLOWED_TOOLS,
-      disallowedTools: DISALLOWED_TOOLS,
       hooks: config.hooks,
     });
-  }
-
-  dispose(): void {
-    this.engine.dispose();
-  }
-
-  resetItem(itemKey: string): void {
-    this.engine.reset(itemKey);
-  }
-
-  cancel(itemKey: string): void {
-    this.engine.cancel(itemKey);
   }
 
   async ask(
@@ -91,18 +85,16 @@ export class LibraryAssistant {
     message: string,
     options: AssistantOptions = {},
   ): Promise<AssistantResult> {
-    const systemPrompt = systemPromptFor(context, options.mode ?? "writeBody");
-    const result = await this.engine.ask(context.itemKey, message, systemPrompt, null, {
+    const key = options.conversationId ?? context.itemKey;
+    const systemPrompt = systemPromptFor(context, options.mode ?? "writeBody", options.catalog);
+    const fullMessage = `${wrapSessionContext(currentBodyBlock(context))}\n\n${message}`;
+    const result = await this.engine.ask(key, fullMessage, systemPrompt, null, {
       model: options.model,
       effort: options.effort,
       onProgress: options.onProgress,
     });
     const parsed = parseReply(result.text);
     return { events: result.events, text: parsed.text, suggestedDescription: parsed.suggestedDescription };
-  }
-
-  buildArgsForTesting(itemKey: string, message: string, model?: ModelChoice, effort?: EffortChoice): string[] | null {
-    return this.engine.buildArgsForTesting(itemKey, message, model, effort);
   }
 
   get items(): Map<string, SessionState> {
@@ -129,7 +121,20 @@ export const parseReply = (text: string): { text: string; suggestedDescription: 
   return { text: kept.join("\n").trim(), suggestedDescription };
 };
 
-export const systemPromptFor = (ctx: AssistantContext, mode: AssistantMode): string => {
+const catalogLines = (entries: readonly LibraryCatalogEntry[]): string =>
+  entries.length > 0
+    ? entries.map((e) => `- ${e.name}: ${e.description.trim().length > 0 ? e.description.trim() : "(no description)"}`).join("\n")
+    : "(none)";
+
+export const currentBodyBlock = (ctx: AssistantContext): string =>
+  [
+    "The current draft of the body (authoritative, up to date as of this turn):",
+    "<current_body>",
+    ctx.body && ctx.body.trim().length > 0 ? ctx.body : "(empty)",
+    "</current_body>",
+  ].join("\n");
+
+export const systemPromptFor = (ctx: AssistantContext, mode: AssistantMode, catalog?: LibraryCatalog): string => {
   const kindLong = ctx.kind === "skill" ? "Claude Code Skill" : "Claude Code Subagent";
   const formatRules = ctx.kind === "skill" ? SKILL_FORMAT : AGENT_FORMAT;
   const attached = ctx.attachedSkills.length > 0
@@ -144,16 +149,20 @@ export const systemPromptFor = (ctx: AssistantContext, mode: AssistantMode): str
     `Current description: ${ctx.description || "(empty)"}`,
     `${attached}`,
     "",
-    "Current draft of the body:",
-    "<current_body>",
-    ctx.body && ctx.body.trim().length > 0 ? ctx.body : "(empty)",
-    "</current_body>",
+    "The current draft of the body is sent fresh in a <session_context> block with every message, so it is always the latest (the user may edit it directly between turns - always work from that, not from a body you wrote earlier).",
+    "",
+    "Your environment: you run inside the Claude Trace library, which holds the user's whole collection of skills and agents. The full catalog of what currently exists is below. This is your authoritative knowledge of their library; never go looking on disk for skill or agent files. When the user mentions another skill or agent by name (for example to compose with it, attach it, or match its style), find it in this catalog and use it. Only the current item's body is yours to write.",
+    "<library_skills>",
+    catalogLines(catalog?.skills ?? []),
+    "</library_skills>",
+    "<library_agents>",
+    catalogLines(catalog?.agents ?? []),
+    "</library_agents>",
     "",
     "2026 Claude Code format reference:",
     formatRules,
     "",
-    "Available tools: WebSearch, WebFetch, Read, Grep, Glob, TodoWrite. Use them when they genuinely help draft this content (e.g. WebSearch to confirm current best practices).",
-    "Forbidden tools: Bash, Edit, Write, NotebookEdit, Task, Agent. These are removed from your context. Do NOT attempt them.",
+    "You have full tools available and they run without approval prompts. Use them when they genuinely help draft this content (e.g. WebSearch to confirm current best practices, or Read/Grep on a repo the user points you at). This panel streams like a terminal but has no interactive picker, so ask any clarifying question as plain text and end your turn rather than using a multiple-choice question tool or plan mode.",
     "",
     "Response rules:",
     modeRules,

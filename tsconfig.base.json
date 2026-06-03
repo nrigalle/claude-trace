@@ -12,7 +12,7 @@
     "exactOptionalPropertyTypes": false,
     "useUnknownInCatchVariables": true,
     "isolatedModules": true,
-    "verbatimModuleSyntax": false,
+    "verbatimModuleSyntax": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,

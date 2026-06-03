@@ -1,4 +1,3 @@
-import * as vscode from "vscode";
 import type { SessionId, SessionSummary } from "../domain/types";
 import { toSessionId } from "../domain/types";
 import type { WebviewHost } from "../infra/WebviewHost";
@@ -22,7 +21,6 @@ export interface DashboardActions {
   exportChatMarkdown(id: SessionId): Promise<void>;
   copyConversation(id: SessionId): void;
   togglePin(id: SessionId): Promise<void>;
-  deleteSessions(ids: readonly SessionId[]): Promise<void>;
   deleteSessionFiles(ids: readonly SessionId[]): Promise<void>;
   setActiveSession(id: SessionId | null): void;
   invalidateSession(id: SessionId): void;
@@ -32,7 +30,7 @@ export interface DashboardActions {
 }
 
 export class DashboardController {
-  private readonly disposables: vscode.Disposable[] = [];
+  private readonly disposables: { dispose(): void }[] = [];
   private readonly scheduler: RefreshScheduler;
   private readonly lastSent = new Map<SessionId, number>();
   private activeSessionId: SessionId | null = null;
@@ -69,9 +67,7 @@ export class DashboardController {
     this.disposed = true;
     this.actions.setActiveSession(null);
     this.scheduler.dispose();
-    for (const d of this.disposables) {
-      try { d.dispose(); } catch {}
-    }
+    for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
   }
 
@@ -135,7 +131,7 @@ export class DashboardController {
           this.dirtySessions.add(id);
         }
         this.listDirty = true;
-        void this.handleDeleteSessions(msg.sessionIds, msg.permanent ?? false);
+        void this.handleDeleteSessions(msg.sessionIds);
         return;
       case "saveDetailLayout":
         this.actions.saveDetailLayout(msg.layout);
@@ -163,10 +159,9 @@ export class DashboardController {
     this.resyncSessions([id]);
   }
 
-  private async handleDeleteSessions(ids: readonly SessionId[], permanent: boolean): Promise<void> {
+  private async handleDeleteSessions(ids: readonly SessionId[]): Promise<void> {
     try {
-      if (permanent) await this.actions.deleteSessionFiles(ids);
-      else await this.actions.deleteSessions(ids);
+      await this.actions.deleteSessionFiles(ids);
     } catch {
       this.actions.showError?.("Could not delete the selected sessions.");
     }

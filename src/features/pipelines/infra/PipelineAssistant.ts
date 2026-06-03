@@ -1,11 +1,12 @@
 import * as path from "path";
 import { TRACE_DATA_DIR } from "../../../shared/config";
+import { wrapSessionContext } from "../../../shared/assistant/conversationTurns";
 import {
-  ClaudeChatEngine,
   type ChatHooks,
   type ChatPtySpawner,
   type TimelineEvent,
-} from "../../../shared/assistant/claudeChatEngine";
+} from "../../../shared/infra/assistant/claudeChatEngine";
+import { ChatAssistantBase } from "../../../shared/infra/assistant/chatAssistantBase";
 import { serializePipeline } from "../domain/parse";
 import { fromPipelineId, type Pipeline } from "../domain/types";
 import { extractProposedPipeline, type ProposedPipeline } from "../domain/assistantProposal";
@@ -37,21 +38,17 @@ export interface PipelineAssistantConfig {
   readonly transcriptRoot?: string;
   readonly hooks?: Partial<ChatHooks>;
   readonly now?: () => number;
-  readonly inactivityTimeoutMs?: number;
 }
 
 const ASSISTANT_CWD_ROOT = path.join(TRACE_DATA_DIR, "pipeline-assistant");
 const ASSISTANT_SIGNALS_DIR = path.join(TRACE_DATA_DIR, "pipeline-assistant", "signals");
 const ASSISTANT_HOOKS_DIR = path.join(TRACE_DATA_DIR, "pipeline-assistant", "hooks");
-const DISALLOWED_TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "Task", "Agent", "AskUserQuestion", "ExitPlanMode"];
-const ALLOWED_TOOLS = ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "TodoWrite"];
 
-export class PipelineAssistant {
-  private readonly engine: ClaudeChatEngine;
+export class PipelineAssistant extends ChatAssistantBase {
   private readonly now: () => number;
 
   constructor(config: PipelineAssistantConfig = {}) {
-    this.engine = new ClaudeChatEngine({
+    super({
       claudeBin: config.claudeBin,
       claudeArgsPrefix: config.claudeArgsPrefix,
       ptySpawner: config.ptySpawner,
@@ -59,24 +56,9 @@ export class PipelineAssistant {
       transcriptRoot: config.transcriptRoot,
       signalsDir: ASSISTANT_SIGNALS_DIR,
       hooksDir: ASSISTANT_HOOKS_DIR,
-      allowedTools: ALLOWED_TOOLS,
-      disallowedTools: DISALLOWED_TOOLS,
       hooks: config.hooks,
-      inactivityTimeoutMs: config.inactivityTimeoutMs,
     });
     this.now = config.now ?? Date.now;
-  }
-
-  dispose(): void {
-    this.engine.dispose();
-  }
-
-  reset(conversationId: string): void {
-    this.engine.reset(conversationId);
-  }
-
-  cancel(conversationId: string): void {
-    this.engine.cancel(conversationId);
   }
 
   async ask(
@@ -85,8 +67,9 @@ export class PipelineAssistant {
     message: string,
     options: PipelineAssistantOptions = {},
   ): Promise<PipelineAssistantResult> {
-    const systemPrompt = systemPromptFor(context.pipeline, context.otherPipelines ?? []);
-    const result = await this.engine.ask(conversationId, message, systemPrompt, context.workspaceCwd, {
+    const systemPrompt = systemPromptFor(context.otherPipelines ?? []);
+    const fullMessage = `${wrapSessionContext(currentWorkflowBlock(context.pipeline))}\n\n${message}`;
+    const result = await this.engine.ask(conversationId, fullMessage, systemPrompt, context.workspaceCwd, {
       model: options.model,
       effort: options.effort,
       onProgress: options.onProgress,
@@ -99,23 +82,6 @@ export class PipelineAssistant {
     });
     return { events: result.events, text: result.text, proposal };
   }
-
-  adopt(conversationId: string, sessionId: string, sessionCwd: string): void {
-    this.engine.adopt(conversationId, sessionId, sessionCwd);
-  }
-
-  history(conversationId: string): readonly TimelineEvent[] {
-    return this.engine.history(conversationId);
-  }
-
-  sessionInfo(conversationId: string): { readonly sessionId: string; readonly cwd: string } | null {
-    const state = this.engine.sessionMap().get(conversationId);
-    return state ? { sessionId: state.sessionId, cwd: state.sessionCwd } : null;
-  }
-
-  buildArgsForTesting(conversationId: string, message: string, model?: ModelChoice, effort?: EffortChoice): string[] | null {
-    return this.engine.buildArgsForTesting(conversationId, message, model, effort);
-  }
 }
 
 const pipelineSummaryLine = (p: Pipeline): string => {
@@ -126,19 +92,30 @@ const pipelineSummaryLine = (p: Pipeline): string => {
   return `- "${p.name}" (id: ${fromPipelineId(p.id)}): ${p.blocks.length} blocks [${kindSummary}]; trigger: ${triggerSummary}`;
 };
 
-export const systemPromptFor = (pipeline: Pipeline, otherPipelines: readonly Pipeline[] = []): string => [
+export const currentWorkflowBlock = (pipeline: Pipeline): string =>
+  [
+    "The workflow currently on the canvas. This is the authoritative, up-to-date",
+    "state - it may have changed since earlier turns (the user edits the canvas",
+    "and applies proposals between messages), so always edit from THIS, not from",
+    "any workflow you proposed earlier in the chat.",
+    "<current_workflow>",
+    serializePipeline(pipeline),
+    "</current_workflow>",
+  ].join("\n");
+
+export const systemPromptFor = (otherPipelines: readonly Pipeline[] = []): string => [
   "You are the Claude Trace Workflow Builder. You are NOT a coding agent. You do not build software, you do not write files, and you do not set up CI/CD. Your single deliverable is a Claude Trace workflow expressed as a fenced ```json block in the schema below, which the UI applies to a visual canvas when the user clicks Apply. Nothing you produce ever lands on disk; the JSON block is the only artifact that matters.",
   "",
   "Hard rules, in order of importance:",
   "- Your ONLY output that does anything is the fenced ```json workflow block. Never output a GitHub Actions workflow, a *.yml/*.yaml file, a Dockerfile, a shell script to save, or any 'paste this file into your repo' answer. If you catch yourself writing YAML or describing a file to save, stop and emit the Claude Trace JSON instead.",
-  "- File-writing and code-running tools are intentionally disabled (Write, Edit, Bash, and any save-to-disk tool). This is BY DESIGN, not a limitation to work around. A denied tool does NOT mean 'read-only, so paste the file as text', it means translate the intent into a Claude Trace block instead. Do not search for a way to write files.",
-  "- The user's repo is READ-ONLY REFERENCE ONLY. Read it with Read/Grep/Glob to understand their logic, then re-express that logic as Claude Trace blocks (worker, script, http, parallel, etc.). The fact that their repo uses GitHub Actions, cron, Make.com, Vercel, or anything else is just context; your output is always a Claude Trace pipeline, never a copy of their CI.",
+  "- You have full tools available and they run without approval prompts, but producing files is NOT your deliverable: writing a workflow to disk does nothing here. The only thing the UI consumes is the fenced ```json block, so translate the user's logic into Claude Trace blocks rather than copying it to disk.",
+  "- Treat the user's repo as reference: read it with Read/Grep/Glob to understand their logic, then re-express that logic as Claude Trace blocks (worker, script, http, parallel, etc.). The fact that their repo uses GitHub Actions, cron, Make.com, Vercel, or anything else is just context; your output is always a Claude Trace pipeline, never a copy of their CI.",
   "",
   "Two modes in one conversation:",
-  "1. INTERVIEW: when anything is unclear, ask focused questions until you are confident. Do not guess. Cover: the trigger (manual / schedule / webhook), each step's inputs and outputs, how data flows between steps, parallelism, and stop conditions. One or two sharp questions per turn. Ask in plain text and end your turn so the user can reply; never call AskUserQuestion or any interactive tool, and never enter plan mode.",
+  "1. INTERVIEW: when anything is unclear, ask focused questions until you are confident. Do not guess. Cover: the trigger (manual / schedule / webhook), each step's inputs and outputs, how data flows between steps, parallelism, and stop conditions. One or two sharp questions per turn. Ask them as plain text and end your turn so the user can reply in the next message. This panel streams like a terminal but has no interactive picker, so ask in your reply text rather than via a multiple-choice question tool or plan mode.",
   "2. PROPOSE: once you are confident (or the user says go), emit the COMPLETE workflow as a single fenced ```json block matching the schema below, with a one or two sentence summary before it. Always emit the whole pipeline, never a diff. The UI parses the LAST json block and applies it on Apply. A turn where the user expects a workflow but you emit no json block is a failure.",
   "",
-  "Tools: Read, Grep, Glob to inspect the repo; WebSearch / WebFetch to confirm an API. That is all.",
+  "Tools: use Read, Grep, Glob to inspect the repo and WebSearch / WebFetch to confirm an API.",
   "",
   "Pipeline JSON schema:",
   "{ \"name\": string, \"blocks\": Block[], \"triggers\": Trigger[] }",
@@ -161,16 +138,11 @@ export const systemPromptFor = (pipeline: Pipeline, otherPipelines: readonly Pip
   "",
   "Triggers:",
   "- Manual: omit triggers (the user clicks Run).",
-  "- Schedule: { kind: 'schedule', intervalMs, enabled } — a FIXED interval only. There is no cron. For 'every Friday', explain it runs on a weekly interval from when enabled, or that a precise day-of-week needs an external scheduler hitting a webhook.",
+  "- Schedule: { kind: 'schedule', enabled, recurrence } where recurrence is one of: { type:'interval', everyMs } | { type:'daily', atMinute } | { type:'weekly', weekdays:[0-6], atMinute } | { type:'monthly', day:1-31, atMinute }. atMinute is minutes past local midnight (e.g. 9am = 540), weekdays 0=Sun..6=Sat. For 'every Friday at 9am' use weekly weekdays:[5] atMinute:540. Schedules fire while the Claude Trace tab is open and the computer is awake.",
   "- Webhook: { kind: 'webhook', token, enabled } — Claude Trace listens locally on 127.0.0.1:<claudeTrace.webhookPort>; a POST to http://127.0.0.1:<port>/?token=<token> starts the run.",
   "On webhooks you GUIDE, you never create one. If the user needs a public endpoint (e.g. Google Sheets or a Vercel function calling in), explain clearly how THEY can create and integrate it: deploy their own endpoint/relay that forwards to the local webhook URL with the token, or expose the local port with a tunnel. Give concrete steps, but do not attempt to deploy it.",
   "",
-  "Your environment: you run inside Claude Trace. You already have, below, the workflow being edited AND every other workflow the user has saved. This is your full, authoritative knowledge of their workflows. Never go looking for workflow files: they live in ~/.claude-trace/automations (NOT in the repo you are cwd'd into), and everything you need is already inline here. Use Read/Grep/Glob ONLY to inspect the user's code/scripts in the repo, never to find workflows.",
-  "",
-  "Current workflow (edit from here):",
-  "<current_workflow>",
-  serializePipeline(pipeline),
-  "</current_workflow>",
+  "Your environment: you run inside Claude Trace. The workflow currently being edited is sent fresh in a <session_context> block with every message (so it is always up to date), and every other saved workflow is listed below. This is your full, authoritative knowledge of their workflows. Never go looking for workflow files: they live in ~/.claude-trace/automations (NOT in the repo you are cwd'd into), and everything you need is already inline. Use Read/Grep/Glob ONLY to inspect the user's code/scripts in the repo, never to find workflows.",
   "",
   otherPipelines.length > 0
     ? `The user has ${otherPipelines.length} other saved workflow(s). A one-line catalog comes first so you can see at a glance what exists, then each full definition follows. When the user says \"the same as <name>\" or \"like my X workflow\", match by name in the catalog and reuse that definition directly.`

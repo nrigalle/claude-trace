@@ -29,6 +29,7 @@ import {
   type Pipeline,
   type RunState,
   type RunStatus,
+  type ScheduleRecurrence,
   type Trigger,
   type WorkerBlock,
 } from "./types";
@@ -254,14 +255,49 @@ const parseTriggers = (raw: unknown): readonly Trigger[] => {
     if (!isObj(t)) continue;
     const enabled = t["enabled"] !== false;
     if (t["kind"] === "schedule") {
-      const intervalMs = asNumber(t["intervalMs"]);
-      if (intervalMs !== null && intervalMs > 0) triggers.push({ kind: "schedule", intervalMs, enabled });
+      let recurrence = parseRecurrence(t["recurrence"]);
+      if (!recurrence) {
+        const intervalMs = asNumber(t["intervalMs"]);
+        if (intervalMs !== null && intervalMs > 0) recurrence = { type: "interval", everyMs: intervalMs };
+      }
+      if (recurrence) triggers.push({ kind: "schedule", enabled, recurrence });
     } else if (t["kind"] === "webhook") {
       const token = asString(t["token"]);
       if (token !== null) triggers.push({ kind: "webhook", token, enabled });
     }
   }
   return triggers;
+};
+
+const clampMinute = (m: number): number => Math.min(1439, Math.max(0, Math.round(m)));
+
+const parseRecurrence = (raw: unknown): ScheduleRecurrence | null => {
+  if (!isObj(raw)) return null;
+  const atMinute = asNumber(raw["atMinute"]);
+  switch (raw["type"]) {
+    case "interval": {
+      const everyMs = asNumber(raw["everyMs"]);
+      return everyMs !== null && everyMs > 0 ? { type: "interval", everyMs } : null;
+    }
+    case "daily":
+      return atMinute !== null ? { type: "daily", atMinute: clampMinute(atMinute) } : null;
+    case "weekly": {
+      const weekdays = Array.isArray(raw["weekdays"])
+        ? raw["weekdays"].filter((d): d is number => typeof d === "number" && Number.isInteger(d) && d >= 0 && d <= 6)
+        : [];
+      return atMinute !== null && weekdays.length > 0
+        ? { type: "weekly", weekdays, atMinute: clampMinute(atMinute) }
+        : null;
+    }
+    case "monthly": {
+      const day = asNumber(raw["day"]);
+      return atMinute !== null && day !== null && Number.isInteger(day) && day >= 1 && day <= 31
+        ? { type: "monthly", day, atMinute: clampMinute(atMinute) }
+        : null;
+    }
+    default:
+      return null;
+  }
 };
 
 const parseBlock = (raw: unknown): Block | null => {

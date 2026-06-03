@@ -30,10 +30,12 @@ describe("interpolate", () => {
     expect(interpolate("Use: ${blocks.design-1.output}", ctx())).toBe("Use: the design doc");
   });
 
-  it("leaves unknown references untouched so the user sees the literal token", () => {
-    expect(interpolate("${vars.missing} ${blocks.nope.output} ${bogus}", ctx())).toBe(
-      "${vars.missing} ${blocks.nope.output} ${bogus}",
-    );
+  it("resolves a recognized-but-undefined var/block reference to empty so the literal token never leaks into prompts/URLs/code", () => {
+    expect(interpolate("a${vars.missing}b${blocks.nope.output}c", ctx())).toBe("abc");
+  });
+
+  it("leaves a truly unrecognized ${...} token untouched", () => {
+    expect(interpolate("keep ${bogus} and ${vars.name}", ctx())).toBe("keep ${bogus} and alex");
   });
 
   it("resolves a block output that is the empty string (present but empty) rather than leaving the token", () => {
@@ -135,11 +137,11 @@ describe("evaluateCondition", () => {
     expect(evaluateCondition("${vars.count} >= 5", c)).toBe(true);
     expect(evaluateCondition("${vars.count} <= 4", c)).toBe(false);
   });
-  it("bare value is truthy unless falsy-like or empty", () => {
+  it("bare value is truthy unless falsy-like, empty, or an undefined variable", () => {
     expect(evaluateCondition("${vars.flag}", c)).toBe(true);
     expect(evaluateCondition("${vars.off}", c)).toBe(false);
     expect(evaluateCondition("${vars.empty}", c)).toBe(false);
-    expect(evaluateCondition("${vars.missing}", c)).toBe(true);
+    expect(evaluateCondition("${vars.missing}", c)).toBe(false);
   });
   it("never throws on malformed conditions — a bad branch expression cannot abort a running pipeline", () => {
     expect(() => evaluateCondition("garbage with no operator", c)).not.toThrow();

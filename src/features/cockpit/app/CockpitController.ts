@@ -45,6 +45,7 @@ export interface TerminalBackend {
   kill(sessionId: string): void;
   isAlive(sessionId: string): boolean;
   captureHistory(sessionId: string): string | null;
+  forceRedraw(sessionId: string): boolean;
   onData(listener: (sessionId: string, data: string) => void): { dispose(): void };
   onExit(listener: (sessionId: string, exitCode: number) => void): { dispose(): void };
   dispose(): void;
@@ -61,7 +62,7 @@ export interface CockpitActions {
   defaultCwd(): string | null;
   newSessionId(): string;
   transcriptExists(cwd: string | null, sessionId: string): boolean;
-  notifyAttention(name: string): void;
+  notifyAttention(name: string, sessionId: string): void;
   prepareHooks(sessionId: string): string | null;
   cleanupHooks(sessionId: string): void;
   watchAttention(listener: (sessionId: string, reason: "stop" | "notify" | "active") => void): { dispose(): void };
@@ -267,7 +268,7 @@ export class CockpitController {
       case "cockpitAttention":
         if (this.attentionActive.has(msg.sessionId)) return;
         this.attentionActive.add(msg.sessionId);
-        this.deps.actions.notifyAttention(msg.name);
+        this.deps.actions.notifyAttention(msg.name, msg.sessionId);
         return;
       case "cockpitDropImage": {
         const imgPath = this.deps.actions.saveDroppedImage(msg.fileName, msg.dataBase64);
@@ -515,7 +516,7 @@ export class CockpitController {
     this.deps.host.postMessage({ type: "terminalAttention", sessionId, reason });
     if (this.attentionActive.has(sessionId)) return;
     this.attentionActive.add(sessionId);
-    this.deps.actions.notifyAttention(managed.name);
+    this.deps.actions.notifyAttention(managed.name, sessionId);
   }
 
   private onActive(sessionId: string): void {
@@ -557,8 +558,11 @@ export class CockpitController {
   private replayTerminalHistory(): void {
     for (const sessionId of this.managed.keys()) {
       const captured = this.deps.terminals.captureHistory(sessionId);
-      if (captured !== null) {
-        if (captured.length > 0) this.deps.host.postMessage({ type: "terminalData", sessionId, data: captured });
+      if (captured !== null && captured.length > 0) {
+        this.deps.host.postMessage({ type: "terminalData", sessionId, data: captured });
+        continue;
+      }
+      if (captured === "" && this.deps.terminals.isAlive(sessionId) && this.deps.terminals.forceRedraw(sessionId)) {
         continue;
       }
       for (const data of this.deps.terminalHistoryStore.read(sessionId)) {

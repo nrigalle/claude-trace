@@ -104,6 +104,10 @@ export abstract class TerminalServiceBase implements TerminalBackend {
     return null;
   }
 
+  forceRedraw(_sessionId: string): boolean {
+    return false;
+  }
+
   onData(listener: (sessionId: string, data: string) => void): { dispose(): void } {
     this.dataListeners.add(listener);
     return { dispose: () => this.dataListeners.delete(listener) };

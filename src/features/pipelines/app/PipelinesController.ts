@@ -7,8 +7,10 @@ import type {
   PipelinesHostToWebview,
   PipelinesWebviewToHost,
   TimelineEvent,
+  WorkflowReplayTurn,
 } from "../protocol";
 import { assertNeverPipelines, type SessionTarget } from "../protocol";
+import { extractProposedPipeline } from "../domain/assistantProposal";
 import {
   applyApprovalApproved,
   firstApprovalAwaitingInput,
@@ -25,6 +27,7 @@ import {
 import { validatePipeline } from "../domain/validate";
 import type { PipelineAssistant } from "../infra/PipelineAssistant";
 import type { AssistantSessionStore } from "../infra/AssistantSessionStore";
+import { INTERNAL_MESSAGE_MARKER, concatTextEvents } from "../../../shared/assistant/conversationTurns";
 import type { EffortChoice, ModelChoice } from "../../../shared/models";
 
 export interface PipelinesHost {
@@ -169,6 +172,7 @@ export class PipelinesController {
     const confirmed = await this.deps.actions.confirmDeletePipeline(existing.name);
     if (!confirmed) return;
     this.deps.pipelineStore.delete(id);
+    this.deps.assistantSessions?.dropPipeline(id);
     this.broadcastList();
   }
 
@@ -333,12 +337,19 @@ export class PipelinesController {
     const assistant = this.deps.assistant;
     if (!assistant) return;
     this.adoptIfSaved(pipelineId, conversationId);
-    this.deps.host.postMessage({
-      type: "pipelineAssistantHistory",
-      pipelineId,
-      conversationId,
-      events: assistant.history(conversationId),
+    const pipeline = this.deps.pipelineStore.get(pipelineId);
+    const turns = assistant.historyTurns(conversationId).map((t): WorkflowReplayTurn => {
+      if (t.role !== "assistant" || !pipeline) return t;
+      const proposal = extractProposedPipeline(concatTextEvents(t.events), {
+        id: pipeline.id,
+        name: pipeline.name,
+        createdAtMs: pipeline.createdAtMs,
+        nowMs: this.deps.clock(),
+      });
+      if (!proposal.hadJson) return t;
+      return { ...t, proposedPipeline: proposal.pipeline, proposalErrors: proposal.errors };
     });
+    this.deps.host.postMessage({ type: "pipelineAssistantHistory", pipelineId, conversationId, turns });
   }
 
   private notice(level: "info" | "warning" | "error", message: string): void {
@@ -349,7 +360,8 @@ export class PipelinesController {
 
 
 const CORRECTION_PROMPT =
-  "That is not a Claude Trace workflow and cannot be applied to the canvas. Do not produce GitHub Actions, YAML, or a file to save. Output the workflow now as a single fenced ```json block in the Claude Trace schema (name, blocks, triggers) and nothing else.";
+  `${INTERNAL_MESSAGE_MARKER}That is not a Claude Trace workflow and cannot be applied to the canvas. Do not produce GitHub Actions, YAML, or a file to save. Output the workflow now as a single fenced ` +
+  "```json block in the Claude Trace schema (name, blocks, triggers) and nothing else.";
 
 const looksLikeForbiddenArtifact = (text: string): boolean =>
   /```\s*ya?ml|workflow_dispatch|github\s*actions|\bjobs:\s|runs-on:|\.ya?ml\b/i.test(text);

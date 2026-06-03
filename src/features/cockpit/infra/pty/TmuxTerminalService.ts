@@ -144,6 +144,21 @@ export class TmuxTerminalService extends TerminalServiceBase {
     }
   }
 
+  override forceRedraw(sessionId: string): boolean {
+    try {
+      const name = tmuxSessionName(sessionId);
+      const clients = this.tmuxOutput(["list-clients", "-t", name, "-F", "#{client_name}"])
+        .split("\n")
+        .map((c) => c.trim())
+        .filter((c) => c.length > 0);
+      if (clients.length === 0) return false;
+      for (const client of clients) this.tmux(["refresh-client", "-t", client]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   kill(sessionId: string): void {
     this.notifyExit(sessionId, 0);
     const proc = this.forget(sessionId);

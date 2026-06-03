@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { systemPromptFor } from "../../../src/features/pipelines/infra/PipelineAssistant";
+import { currentWorkflowBlock, systemPromptFor } from "../../../src/features/pipelines/infra/PipelineAssistant";
 import { toPipelineId, type Pipeline } from "../../../src/features/pipelines/domain/types";
 
 const pipeline = (id: string, name: string): Pipeline => ({
@@ -15,39 +15,41 @@ const pipeline = (id: string, name: string): Pipeline => ({
 
 describe("workflow assistant system prompt", () => {
   it("includes the user's other saved workflows in full so the assistant need not hunt for them", () => {
-    const current = pipeline("p-current", "Current");
     const others = [pipeline("p-clean", "Email cleanup"), pipeline("p-report", "Weekly report")];
-    const prompt = systemPromptFor(current, others);
+    const prompt = systemPromptFor(others);
     expect(prompt).toContain("Email cleanup");
     expect(prompt).toContain("Weekly report");
     expect(prompt).toContain("<existing_workflows>");
-    // a compact catalog lets it see what exists at a glance
     expect(prompt).toContain("<workflow_catalog>");
     expect(prompt).toContain('"Email cleanup"');
-    // it should be told to never go looking for workflow files on disk
     expect(prompt.toLowerCase()).toContain("never go looking for workflow files");
     expect(prompt).toContain("~/.claude-trace/automations");
-    // and the current workflow is still provided
-    expect(prompt).toContain("<current_workflow>");
-    expect(prompt).toContain("Current");
+  });
+
+  it("sends the current workflow fresh each turn (not frozen in the system prompt)", () => {
+    const current = pipeline("p-current", "Current");
+    const block = currentWorkflowBlock(current);
+    expect(block).toContain("<current_workflow>");
+    expect(block).toContain("Current");
+    expect(systemPromptFor([])).not.toContain("<current_workflow>");
+    expect(systemPromptFor([])).toContain("<session_context>");
   });
 
   it("states there are none when the user has no other workflows", () => {
-    const prompt = systemPromptFor(pipeline("p1", "Only one"), []);
+    const prompt = systemPromptFor([]);
     expect(prompt).toContain("no other saved workflows yet");
   });
 
-  it("tells the assistant to ask in plain text and never use interactive tools", () => {
-    const prompt = systemPromptFor(pipeline("p1", "Only one"), []);
-    expect(prompt).toContain("never call AskUserQuestion");
+  it("tells the assistant to ask in plain text rather than via an interactive picker (terminal-like panel)", () => {
+    const prompt = systemPromptFor([]);
     expect(prompt.toLowerCase()).toContain("plain text");
+    expect(prompt.toLowerCase()).toContain("no interactive picker");
   });
 
   it("pins the assistant to producing a Claude Trace JSON workflow, never files or CI YAML", () => {
-    const prompt = systemPromptFor(pipeline("p1", "Only one"), []);
+    const prompt = systemPromptFor([]);
     expect(prompt).toContain("Claude Trace Workflow Builder");
     expect(prompt).toContain("GitHub Actions");
-    expect(prompt.toLowerCase()).toContain("read-only reference");
-    expect(prompt.toLowerCase()).toContain("intentionally disabled");
+    expect(prompt.toLowerCase()).toContain("reference");
   });
 });

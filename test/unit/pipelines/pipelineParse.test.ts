@@ -377,11 +377,21 @@ describe("pipeline triggers round-trip + backward compat", () => {
     const p: Pipeline = {
       id: toPipelineId("p"), name: "P", createdAtMs: 1, updatedAtMs: 2, blocks: [],
       triggers: [
-        { kind: "schedule", intervalMs: 60000, enabled: true },
+        { kind: "schedule", enabled: true, recurrence: { type: "weekly", weekdays: [5], atMinute: 540 } },
+        { kind: "schedule", enabled: true, recurrence: { type: "interval", everyMs: 60000 } },
         { kind: "webhook", token: "secret-x", enabled: false },
       ],
     };
     expect(parsePipeline(JSON.parse(serializePipeline(p)))).toEqual(p);
+  });
+
+  it("migrates a legacy intervalMs schedule trigger to an interval recurrence", () => {
+    const parsed = parsePipeline(withTriggers([
+      { kind: "schedule", intervalMs: 90000, enabled: true },
+    ]));
+    expect(parsed!.triggers).toEqual([
+      { kind: "schedule", enabled: true, recurrence: { type: "interval", everyMs: 90000 } },
+    ]);
   });
 
   it("defaults triggers to [] when the field is absent (old pipelines)", () => {
@@ -396,6 +406,20 @@ describe("pipeline triggers round-trip + backward compat", () => {
       { kind: "schedule", intervalMs: 5000, enabled: true },
       { kind: "webhook", enabled: true },
     ]));
-    expect(parsed!.triggers).toEqual([{ kind: "schedule", intervalMs: 5000, enabled: true }]);
+    expect(parsed!.triggers).toEqual([{ kind: "schedule", enabled: true, recurrence: { type: "interval", everyMs: 5000 } }]);
+  });
+
+  it("rejects fractional weekly weekdays because Date.getDay() can never match them", () => {
+    const parsed = parsePipeline(withTriggers([
+      { kind: "schedule", enabled: true, recurrence: { type: "weekly", weekdays: [1.5], atMinute: 540 } },
+    ]));
+    expect(parsed!.triggers).toEqual([]);
+  });
+
+  it("rejects fractional monthly days instead of rounding model-generated JSON", () => {
+    const parsed = parsePipeline(withTriggers([
+      { kind: "schedule", enabled: true, recurrence: { type: "monthly", day: 1.5, atMinute: 540 } },
+    ]));
+    expect(parsed!.triggers).toEqual([]);
   });
 });

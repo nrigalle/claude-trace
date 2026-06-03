@@ -67,8 +67,10 @@ const LIBRARY_MESSAGE_TYPE_TABLE: Record<LibraryHostToWebview["type"], true> = {
   librarySyncProgress: true,
   assistantReply: true,
   assistantProgress: true,
+  assistantHistory: true,
   assistantError: true,
   assistantBusy: true,
+  assistantConversations: true,
 };
 const LIBRARY_MESSAGE_TYPES: ReadonlySet<LibraryHostToWebview["type"]> = new Set(
   Object.keys(LIBRARY_MESSAGE_TYPE_TABLE) as LibraryHostToWebview["type"][],

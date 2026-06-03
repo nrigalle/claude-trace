@@ -251,6 +251,7 @@ export class LibraryStore {
       if (parsed?.version !== 1 || !Array.isArray(parsed.projects)) return [];
       return parsed.projects;
     } catch {
+      preserveCorruptFile(this.paths.projectsFile);
       return [];
     }
   }
@@ -273,6 +274,7 @@ export class LibraryStore {
         agents: parsed.agents ?? {},
       };
     } catch {
+      preserveCorruptFile(this.paths.assignmentsFile);
       return EMPTY_ASSIGNMENTS;
     }
   }
@@ -352,6 +354,15 @@ export const atomicWrite = (target: string, contents: string): void => {
   const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmp, contents, "utf8");
   fs.renameSync(tmp, target);
+};
+
+export const preserveCorruptFile = (file: string): void => {
+  if (!fs.existsSync(file)) return;
+  try {
+    fs.renameSync(file, `${file}.corrupt-${Date.now()}`);
+  } catch {
+    return;
+  }
 };
 
 export const sha256BufferHex = (buf: Buffer): string =>

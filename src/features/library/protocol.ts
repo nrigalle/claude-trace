@@ -10,6 +10,7 @@ import type {
   SkillName,
 } from "./domain/types";
 import type { EffortChoice, ModelChoice } from "../../shared/models";
+import type { ReplayTurn } from "../../shared/assistant/timeline";
 
 export type LibraryNotice = {
   readonly level: "info" | "warning" | "error";
@@ -38,15 +39,25 @@ export interface AssistantTurn {
   readonly text: string;
 }
 
+export interface AssistantConversationMeta {
+  readonly id: string;
+  readonly title: string;
+  readonly createdAtMs: number;
+  readonly updatedAtMs: number;
+  readonly mode?: AssistantMode;
+}
+
 export type LibraryHostToWebview =
   | { readonly type: "librarySnapshot"; readonly snapshot: LibrarySnapshot }
   | { readonly type: "libraryNotice"; readonly notice: LibraryNotice }
   | { readonly type: "libraryImportCandidates"; readonly candidates: readonly ImportCandidate[] }
   | { readonly type: "librarySyncProgress"; readonly working: boolean }
-  | { readonly type: "assistantReply"; readonly itemKey: string; readonly events: readonly TimelineEvent[]; readonly text: string; readonly suggestedDescription: string | null }
-  | { readonly type: "assistantProgress"; readonly itemKey: string; readonly events: readonly TimelineEvent[] }
-  | { readonly type: "assistantError"; readonly itemKey: string; readonly message: string }
-  | { readonly type: "assistantBusy"; readonly itemKey: string; readonly busy: boolean };
+  | { readonly type: "assistantReply"; readonly itemKey: string; readonly conversationId: string; readonly events: readonly TimelineEvent[]; readonly text: string; readonly suggestedDescription: string | null }
+  | { readonly type: "assistantProgress"; readonly itemKey: string; readonly conversationId: string; readonly events: readonly TimelineEvent[] }
+  | { readonly type: "assistantHistory"; readonly itemKey: string; readonly conversationId: string; readonly turns: readonly ReplayTurn[] }
+  | { readonly type: "assistantError"; readonly itemKey: string; readonly conversationId: string; readonly message: string }
+  | { readonly type: "assistantBusy"; readonly itemKey: string; readonly conversationId: string; readonly busy: boolean }
+  | { readonly type: "assistantConversations"; readonly itemKey: string; readonly conversations: readonly AssistantConversationMeta[] };
 
 export type TimelineEvent =
   | { readonly kind: "text"; readonly text: string }
@@ -86,9 +97,12 @@ export type LibraryWebviewToHost =
   | { readonly type: "importCandidates"; readonly items: readonly ImportCandidate[] }
   | { readonly type: "syncNow" }
   | { readonly type: "openLibraryDir" }
-  | { readonly type: "assistantAsk"; readonly context: AssistantContext; readonly message: string; readonly mode: AssistantMode; readonly model: ModelChoice; readonly effort: EffortChoice }
-  | { readonly type: "assistantReset"; readonly itemKey: string }
-  | { readonly type: "assistantCancel"; readonly itemKey: string };
+  | { readonly type: "assistantAsk"; readonly context: AssistantContext; readonly conversationId: string; readonly message: string; readonly mode: AssistantMode; readonly model: ModelChoice; readonly effort: EffortChoice }
+  | { readonly type: "assistantListConversations"; readonly itemKey: string }
+  | { readonly type: "assistantLoadHistory"; readonly itemKey: string; readonly conversationId: string }
+  | { readonly type: "assistantCancel"; readonly conversationId: string }
+  | { readonly type: "assistantRenameConversation"; readonly itemKey: string; readonly conversationId: string; readonly title: string }
+  | { readonly type: "assistantDeleteConversation"; readonly itemKey: string; readonly conversationId: string };
 
 export interface LibrarySaveRequest {
   readonly skill?: SkillItem;

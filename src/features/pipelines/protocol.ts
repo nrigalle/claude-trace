@@ -7,10 +7,10 @@ import type {
   RunStatus,
 } from "./domain/types";
 import type { ValidationError } from "./domain/validate";
-import type { TimelineEvent } from "../../shared/assistant/timeline";
+import type { TimelineEvent, ReplayTurn } from "../../shared/assistant/timeline";
 import type { EffortChoice, ModelChoice } from "../../shared/models";
 
-export type { TimelineEvent };
+export type { TimelineEvent, ReplayTurn };
 
 export interface RunSummary {
   readonly runId: RunId;
@@ -34,6 +34,11 @@ export interface AssistantConversationMeta {
   readonly updatedAtMs: number;
 }
 
+export interface WorkflowReplayTurn extends ReplayTurn {
+  readonly proposedPipeline?: Pipeline | null;
+  readonly proposalErrors?: readonly string[];
+}
+
 export type SessionTarget =
   | { readonly kind: "self" }
   | { readonly kind: "merger" }
@@ -55,7 +60,7 @@ export type PipelinesHostToWebview =
       readonly proposalErrors: readonly string[];
     }
   | { readonly type: "pipelineAssistantProgress"; readonly pipelineId: PipelineId; readonly conversationId: string; readonly events: readonly TimelineEvent[] }
-  | { readonly type: "pipelineAssistantHistory"; readonly pipelineId: PipelineId; readonly conversationId: string; readonly events: readonly TimelineEvent[] }
+  | { readonly type: "pipelineAssistantHistory"; readonly pipelineId: PipelineId; readonly conversationId: string; readonly turns: readonly WorkflowReplayTurn[] }
   | { readonly type: "pipelineAssistantError"; readonly pipelineId: PipelineId; readonly conversationId: string; readonly message: string }
   | { readonly type: "pipelineAssistantBusy"; readonly pipelineId: PipelineId; readonly conversationId: string; readonly busy: boolean }
   | { readonly type: "pipelineAssistantConversations"; readonly pipelineId: PipelineId; readonly conversations: readonly AssistantConversationMeta[] };

@@ -18,6 +18,7 @@ import type {
 } from "./types";
 import { assertNever } from "../../../shared/assertNever";
 import { isValidVarName } from "./interpolate";
+import { isValidRecurrence } from "./schedule";
 
 export type ValidationCode =
   | "empty-name"
@@ -45,7 +46,7 @@ export type ValidationCode =
   | "loop-target-not-earlier"
   | "condition-target-missing"
   | "condition-target-not-later"
-  | "trigger-invalid-interval"
+  | "trigger-invalid-schedule"
   | "trigger-empty-token";
 
 export interface ValidationError {
@@ -101,8 +102,8 @@ export const validatePipeline = (p: Pipeline): readonly ValidationError[] => {
   });
 
   for (const t of p.triggers) {
-    if (t.kind === "schedule" && (!Number.isFinite(t.intervalMs) || t.intervalMs <= 0)) {
-      errors.push({ code: "trigger-invalid-interval", message: "Schedule trigger interval must be a positive number of milliseconds." });
+    if (t.kind === "schedule" && !isValidRecurrence(t.recurrence)) {
+      errors.push({ code: "trigger-invalid-schedule", message: "Schedule trigger needs a valid interval or a day and time." });
     }
     if (t.kind === "webhook" && t.token.trim().length === 0) {
       errors.push({ code: "trigger-empty-token", message: "Webhook trigger needs a secret token." });

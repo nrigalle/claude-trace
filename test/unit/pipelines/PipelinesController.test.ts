@@ -958,13 +958,14 @@ describe("PipelinesController — dispose", () => {
 describe("PipelinesController — workflow assistant enforcement", () => {
   class FakeAssistant {
     readonly asks: string[] = [];
+    replayTurns: { role: "user" | "assistant"; text: string; events: readonly { kind: string; text?: string }[] }[] = [];
     constructor(private readonly scripted: { text: string; pipeline: Pipeline | null; hadJson: boolean }[]) {}
     sessionInfo(): { sessionId: string; cwd: string } | null { return { sessionId: "s1", cwd: "/tmp/x" }; }
     adopt(): void {}
     cancel(): void {}
     reset(): void {}
     dispose(): void {}
-    history(): readonly never[] { return []; }
+    historyTurns(): unknown { return this.replayTurns; }
     ask(_conversationId: string, _ctx: unknown, message: string): Promise<{ events: readonly never[]; text: string; proposal: { pipeline: Pipeline | null; hadJson: boolean; errors: readonly string[] } }> {
       this.asks.push(message);
       const step = this.scripted[Math.min(this.asks.length - 1, this.scripted.length - 1)]!;
@@ -1019,5 +1020,34 @@ describe("PipelinesController — workflow assistant enforcement", () => {
     expect(fake.asks).toHaveLength(1);
     const replies = host.messagesOfType("pipelineAssistantReply");
     expect(replies[0]!.proposedPipeline).toBeNull();
+  });
+
+  it("restores the Apply card on reload by re-extracting the proposal from a saved assistant turn (#5A)", async () => {
+    const fake = new FakeAssistant([]);
+    const json = JSON.stringify({
+      name: "Proposed",
+      blocks: [{ id: "w1", kind: "worker", name: "Step", prompt: "Do it", model: "claude-sonnet-4-6", effort: "high" }],
+      triggers: [],
+    });
+    fake.replayTurns = [
+      { role: "user", text: "build me a workflow", events: [] },
+      { role: "assistant", text: "", events: [{ kind: "text", text: "Here you go.\n```json\n" + json + "\n```" }] },
+    ];
+    pipelineStore.save(proposed);
+    makeWithAssistant(fake);
+
+    host.send({ type: "pipelineAssistantLoadHistory", pipelineId: proposed.id, conversationId: "c1" });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const histories = host.messagesOfType("pipelineAssistantHistory");
+    expect(histories).toHaveLength(1);
+    const turns = histories[0]!.turns;
+    expect(turns).toHaveLength(2);
+    expect(turns[0]!.role).toBe("user");
+    expect(turns[0]!.proposedPipeline).toBeUndefined();
+    expect(turns[1]!.role).toBe("assistant");
+    expect(turns[1]!.proposedPipeline).not.toBeNull();
+    expect(turns[1]!.proposedPipeline!.name).toBe("Proposed");
+    expect(turns[1]!.proposalErrors).toEqual([]);
   });
 });

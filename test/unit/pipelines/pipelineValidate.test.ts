@@ -390,8 +390,13 @@ describe("validate — agent blocks", () => {
 
 describe("validate — triggers", () => {
   it("flags a schedule trigger with a non-positive interval", () => {
-    const errs = validatePipeline(pipeline({ triggers: [{ kind: "schedule", intervalMs: 0, enabled: true }] }));
-    expect(errs.map((e) => e.code)).toContain("trigger-invalid-interval");
+    const errs = validatePipeline(pipeline({ triggers: [{ kind: "schedule", enabled: true, recurrence: { type: "interval", everyMs: 0 } }] }));
+    expect(errs.map((e) => e.code)).toContain("trigger-invalid-schedule");
+  });
+
+  it("flags a weekly schedule with no weekdays", () => {
+    const errs = validatePipeline(pipeline({ triggers: [{ kind: "schedule", enabled: true, recurrence: { type: "weekly", weekdays: [], atMinute: 540 } }] }));
+    expect(errs.map((e) => e.code)).toContain("trigger-invalid-schedule");
   });
 
   it("flags a webhook trigger with an empty token", () => {
@@ -401,7 +406,8 @@ describe("validate — triggers", () => {
 
   it("accepts valid triggers", () => {
     expect(validatePipeline(pipeline({ triggers: [
-      { kind: "schedule", intervalMs: 1000, enabled: true },
+      { kind: "schedule", enabled: true, recurrence: { type: "interval", everyMs: 1000 } },
+      { kind: "schedule", enabled: true, recurrence: { type: "weekly", weekdays: [5], atMinute: 540 } },
       { kind: "webhook", token: "abc", enabled: false },
     ] }))).toEqual([]);
   });

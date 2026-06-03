@@ -59,6 +59,7 @@ beforeEach(() => {
       trackedProjects: (): readonly ProjectEntry[] => [],
       openLibraryDir: () => {},
     },
+    clock: () => 1000,
   });
 });
 
