@@ -172,4 +172,19 @@ describe("SessionService — summary cache invalidation", () => {
     expect(ids.has(toSessionId(`svc-evict-a-${stamp}`))).toBe(false);
     expect(ids.has(toSessionId(`svc-evict-b-${stamp}`))).toBe(true);
   });
+
+  it("dedupes the same session id across two project dirs, keeping the most-recently-modified file", () => {
+    const stamp = Date.now();
+    const id = `svc-dup-${stamp}`;
+    const older = writeSession(`-svc-dup-old-${stamp}`, id, [assistantTurn("2026-05-01T10:00:00Z")]);
+    const newer = writeSession(`-svc-dup-new-${stamp}`, id, [assistantTurn("2026-05-01T11:00:00Z")]);
+    fs.utimesSync(older, new Date(2026, 0, 1), new Date(2026, 0, 1));
+    fs.utimesSync(newer, new Date(2026, 5, 1), new Date(2026, 5, 1));
+
+    const svc = new SessionService(new SessionFileReader());
+    const out = svc.list();
+    const matches = out.filter((s) => s.session_id === toSessionId(id));
+    expect(matches).toHaveLength(1);
+    expect(svc.filePathFor(toSessionId(id))).toBe(newer);
+  });
 });

@@ -47,7 +47,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 const positionalPrompt = positionalArgs.join(' ');
 
-const encodeCwd = (c) => c.replace(/[\\\\/:]/g, '-');
+const encodeCwd = (c) => c.replace(/[^a-zA-Z0-9]/g, '-');
 const cwdDir = path.join(projectsDir, encodeCwd(cwd));
 fs.mkdirSync(cwdDir, { recursive: true });
 

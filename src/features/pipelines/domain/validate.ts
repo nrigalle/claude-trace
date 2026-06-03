@@ -41,6 +41,10 @@ export type ValidationCode =
   | "evaluator-empty-goal"
   | "map-empty-list"
   | "map-invalid-item-var"
+  | "loop-target-missing"
+  | "loop-target-not-earlier"
+  | "condition-target-missing"
+  | "condition-target-not-later"
   | "trigger-invalid-interval"
   | "trigger-empty-token";
 
@@ -63,6 +67,8 @@ export const validatePipeline = (p: Pipeline): readonly ValidationError[] => {
   }
 
   const seen = new Set<BlockId>();
+  const indexOf = new Map<BlockId, number>();
+  p.blocks.forEach((b, i) => { if (!indexOf.has(b.id)) indexOf.set(b.id, i); });
   for (const b of p.blocks) {
     if (seen.has(b.id)) {
       errors.push({
@@ -74,6 +80,25 @@ export const validatePipeline = (p: Pipeline): readonly ValidationError[] => {
     seen.add(b.id);
     errors.push(...validateBlock(b));
   }
+
+  p.blocks.forEach((b, i) => {
+    if (b.kind === "loop" && b.loopBackToBlockId !== null) {
+      const target = indexOf.get(b.loopBackToBlockId);
+      if (target === undefined) {
+        errors.push({ code: "loop-target-missing", message: `Loop "${b.name}" loops back to a block that does not exist.`, blockId: b.id });
+      } else if (target >= i) {
+        errors.push({ code: "loop-target-not-earlier", message: `Loop "${b.name}" must loop back to an earlier block.`, blockId: b.id });
+      }
+    }
+    if (b.kind === "condition" && b.skipToBlockId !== null) {
+      const target = indexOf.get(b.skipToBlockId);
+      if (target === undefined) {
+        errors.push({ code: "condition-target-missing", message: `Condition "${b.name}" skips to a block that does not exist.`, blockId: b.id });
+      } else if (target <= i) {
+        errors.push({ code: "condition-target-not-later", message: `Condition "${b.name}" must skip ahead to a later block (or end).`, blockId: b.id });
+      }
+    }
+  });
 
   for (const t of p.triggers) {
     if (t.kind === "schedule" && (!Number.isFinite(t.intervalMs) || t.intervalMs <= 0)) {

@@ -193,11 +193,12 @@ describe("validatePipeline — Loop block", () => {
     expect(errors.some((e) => e.code === "loop-empty-goal")).toBe(true);
   });
 
-  it("accepts a Loop with iterations, a target, and a non-empty goal", () => {
+  it("accepts a Loop with iterations, an earlier target, and a non-empty goal", () => {
     expect(
       validatePipeline(
         pipeline({
           blocks: [
+            block({ id: toBlockId("target") }),
             {
               id: toBlockId("l1"),
               kind: "loop",
@@ -211,6 +212,66 @@ describe("validatePipeline — Loop block", () => {
         }),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("validatePipeline — loop/condition target resolution", () => {
+  it("rejects a loop pointing back to a block that does not exist", () => {
+    const p = pipeline({
+      blocks: [
+        block({ id: toBlockId("a") }),
+        { id: toBlockId("loop"), kind: "loop", name: "Loop", goal: "g", maxIterations: 3, loopBackToBlockId: toBlockId("ghost"), evaluatorModel: "default" },
+      ],
+    });
+    expect(validatePipeline(p).map((e) => e.code)).toContain("loop-target-missing");
+  });
+
+  it("rejects a loop pointing to a later block instead of an earlier one", () => {
+    const p = pipeline({
+      blocks: [
+        { id: toBlockId("loop"), kind: "loop", name: "Loop", goal: "g", maxIterations: 3, loopBackToBlockId: toBlockId("a"), evaluatorModel: "default" },
+        block({ id: toBlockId("a") }),
+      ],
+    });
+    expect(validatePipeline(p).map((e) => e.code)).toContain("loop-target-not-earlier");
+  });
+
+  it("rejects a condition that skips to a missing block", () => {
+    const p = pipeline({
+      blocks: [
+        block({ id: toBlockId("a") }),
+        { id: toBlockId("cond"), kind: "condition", name: "Cond", expression: "1 == 1", skipToBlockId: toBlockId("ghost") },
+      ],
+    });
+    expect(validatePipeline(p).map((e) => e.code)).toContain("condition-target-missing");
+  });
+
+  it("rejects a condition that skips backward instead of ahead", () => {
+    const p = pipeline({
+      blocks: [
+        block({ id: toBlockId("a") }),
+        { id: toBlockId("cond"), kind: "condition", name: "Cond", expression: "1 == 1", skipToBlockId: toBlockId("a") },
+      ],
+    });
+    expect(validatePipeline(p).map((e) => e.code)).toContain("condition-target-not-later");
+  });
+
+  it("accepts a condition that skips ahead, or to the end (null)", () => {
+    const ahead = pipeline({
+      blocks: [
+        { id: toBlockId("cond"), kind: "condition", name: "Cond", expression: "1 == 1", skipToBlockId: toBlockId("b") },
+        block({ id: toBlockId("a") }),
+        block({ id: toBlockId("b") }),
+      ],
+    });
+    expect(validatePipeline(ahead)).toEqual([]);
+    const toEnd = pipeline({
+      blocks: [
+        block({ id: toBlockId("a") }),
+        { id: toBlockId("cond"), kind: "condition", name: "Cond", expression: "1 == 1", skipToBlockId: null },
+      ],
+    });
+    expect(validatePipeline(toEnd)).toEqual([]);
   });
 });
 

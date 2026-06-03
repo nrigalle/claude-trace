@@ -58,6 +58,8 @@ export class LibraryController {
 
   dispose(): void {
     for (const d of this.disposables) d.dispose();
+    this.disposables.length = 0;
+    this.deps.assistant?.dispose();
   }
 
   pushSnapshot(): void {

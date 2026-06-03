@@ -84,11 +84,7 @@ export class Materializer {
       Object.keys(plan.nextManifest.agents).length > 0
     ) {
       fs.mkdirSync(root, { recursive: true });
-      fs.writeFileSync(
-        manifestPath,
-        `${JSON.stringify(plan.nextManifest, null, 2)}\n`,
-        "utf8",
-      );
+      atomicWrite(manifestPath, `${JSON.stringify(plan.nextManifest, null, 2)}\n`);
     }
     return { written: plan.writes.length, deleted: plan.fileDeletes.length };
   }
@@ -162,6 +158,16 @@ const applyPlan = (root: string, libraryRoot: string, plan: TargetPlan): void =>
   for (const d of plan.dirDeletes) deleteDir(root, d);
 };
 
+let tmpCounter = 0;
+const uniqueTmp = (target: string): string =>
+  `${target}.${process.pid}.${Date.now().toString(36)}.${(tmpCounter++).toString(36)}.tmp`;
+
+const atomicWrite = (target: string, contents: string): void => {
+  const tmp = uniqueTmp(target);
+  fs.writeFileSync(tmp, contents, "utf8");
+  fs.renameSync(tmp, target);
+};
+
 const writeFile = (root: string, libraryRoot: string, w: FileWrite): void => {
   const target = path.join(root, w.relativePath);
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -169,15 +175,12 @@ const writeFile = (root: string, libraryRoot: string, w: FileWrite): void => {
     if (!w.sourcePath) return;
     const source = path.join(libraryRoot, w.sourcePath);
     if (!fs.existsSync(source)) return;
-    const tmp = `${target}.${process.pid}.tmp`;
+    const tmp = uniqueTmp(target);
     fs.copyFileSync(source, tmp);
     fs.renameSync(tmp, target);
     return;
   }
-  const contents = w.contents ?? "";
-  const tmp = `${target}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, contents, "utf8");
-  fs.renameSync(tmp, target);
+  atomicWrite(target, w.contents ?? "");
 };
 
 const deleteFile = (root: string, d: FileDelete): void => {

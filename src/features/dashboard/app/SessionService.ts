@@ -14,6 +14,7 @@ import type {
 import {
   ensureProjectsDirExists,
   SessionFileReader,
+  type SessionFileStats,
 } from "../infra/SessionFileReader";
 import { discoverSessionRefs, type SessionRef } from "../infra/paths";
 
@@ -68,16 +69,20 @@ export class SessionService {
 
   list(): SessionSummary[] {
     ensureProjectsDirExists(PROJECTS_DIR);
-    const refs = discoverSessionRefs();
-    this.refs = new Map(refs.map((r) => [r.sessionId, r]));
+    const chosen = new Map<SessionId, { ref: SessionRef; stats: SessionFileStats }>();
+    for (const ref of discoverSessionRefs()) {
+      const stats = this.reader.statSafe(ref);
+      if (!stats) continue;
+      const existing = chosen.get(ref.sessionId);
+      if (!existing || stats.mtime > existing.stats.mtime) chosen.set(ref.sessionId, { ref, stats });
+    }
+    this.refs = new Map([...chosen].map(([id, c]) => [id, c.ref]));
     const presentIds = new Set<SessionId>();
 
     const summaries: SessionSummary[] = [];
-    for (const ref of refs) {
+    for (const { ref, stats } of chosen.values()) {
       if (this.hidden?.has(ref.sessionId)) continue;
       presentIds.add(ref.sessionId);
-      const stats = this.reader.statSafe(ref);
-      if (!stats) continue;
       const title = this.titleFor(ref.sessionId);
       const pinned = this.pins?.has(ref.sessionId) ?? false;
 

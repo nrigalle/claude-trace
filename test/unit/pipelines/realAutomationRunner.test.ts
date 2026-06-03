@@ -6,17 +6,17 @@ import {
 import { encodeCwdForProjects } from "../../../src/shared/projectPathEncoding";
 
 describe("encodeCwdForProjects", () => {
-  it("turns absolute paths into Claude's dash-encoded project directory name", () => {
+  it("matches Claude Code's real rule: every non-alphanumeric becomes a dash (dots included)", () => {
     expect(encodeCwdForProjects("/Users/alex/.claude-trace/runs/r1/b1")).toBe(
-      "-Users-alex-.claude-trace-runs-r1-b1",
+      "-Users-alex--claude-trace-runs-r1-b1",
     );
   });
 
-  it("preserves any non-separator characters verbatim", () => {
-    expect(encodeCwdForProjects("/a/b c/d.e_f")).toBe("-a-b c-d.e_f");
+  it("dashes out dots, spaces and underscores (the chars the old encoder wrongly kept)", () => {
+    expect(encodeCwdForProjects("/a/b c/d.e_f")).toBe("-a-b-c-d-e-f");
   });
 
-  it("encodes Windows drive separators and backslashes into a single path segment", () => {
+  it("encodes Windows drive separators and backslashes", () => {
     expect(encodeCwdForProjects("C:\\Users\\alex\\project")).toBe("C--Users-alex-project");
   });
 });

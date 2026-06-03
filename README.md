@@ -110,7 +110,7 @@ git clone https://github.com/nrigalle/claude-trace.git
 cd claude-trace
 npm install
 npm run compile      # build the extension and webview bundles
-npm run test:unit    # 1124 tests, vitest
+npm run test:unit    # 1146 tests, vitest
 ```
 
 Press `F5` in VS Code to launch a development host. The code is organized by feature under `src/features/` (dashboard, cockpit, pipelines, library), with pure logic in each `domain/`, VS Code and filesystem adapters in `infra/`, and orchestration in `app/`. The webview is its own TypeScript bundle under `media/src/`.

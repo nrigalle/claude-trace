@@ -58,6 +58,8 @@ import type { PipelinesControllerDeps } from "./PipelinesController";
 
 const SELF_KEY = "_self";
 const MERGER_KEY = "_merger";
+const MAX_PARALLEL_WORKER_TURNS = 12;
+const MAX_MAP_ITEMS = 500;
 
 type HandleKey = string;
 
@@ -514,7 +516,7 @@ export class RunEngine {
     this.persistAndBroadcastRun();
 
     const list = active.state.variables[block.listVar] ?? "";
-    const items = list.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+    const items = list.split("\n").map((l) => l.trim()).filter((l) => l.length > 0).slice(0, MAX_MAP_ITEMS);
     const mutators = this.linearMutators(block.id);
     const outputs: string[] = [];
 
@@ -733,9 +735,12 @@ export class RunEngine {
     const mutators = this.parallelWorkerMutators(parallelBlock.id, worker.id);
     let handle = initialHandle;
     let sinceMs = initialSinceMs;
+    let turns = 0;
+    let lastWorkerText = "";
 
     try {
       while (true) {
+        turns += 1;
         const turnEnd = await handle.waitForTurnEnd(sinceMs, signal);
         if (turnEnd === "aborted") throw new InterruptedError();
         if (turnEnd === "terminal-closed") {
@@ -748,6 +753,7 @@ export class RunEngine {
         active.state = mutators.applyStopped(active.state, this.deps.clock());
         const workerText = handle.readLastAssistantText();
         if (workerText.length > 0) {
+          lastWorkerText = workerText;
           active.state = mutators.applyWorkerOutput(active.state, workerText);
         }
         this.persistAndBroadcastRun();
@@ -772,6 +778,13 @@ export class RunEngine {
 
         if (decision.kind === "success" || decision.kind === "loop-done") {
           summaries.set(worker.id, decision.summary);
+          return;
+        }
+
+        if (turns >= MAX_PARALLEL_WORKER_TURNS) {
+          summaries.set(worker.id, lastWorkerText.length > 0
+            ? `(stopped after ${MAX_PARALLEL_WORKER_TURNS} turns without converging)\n${lastWorkerText}`
+            : `(stopped after ${MAX_PARALLEL_WORKER_TURNS} turns without converging)`);
           return;
         }
 
@@ -924,6 +937,8 @@ export class RunEngine {
 
   private runCwd(): string {
     const active = this.active!;
+    const workspace = this.deps.workspaceCwd?.();
+    if (workspace) return workspace;
     return this.deps.runStore.pipelineCwdFor(active.runId, active.state.pipelineId);
   }
 

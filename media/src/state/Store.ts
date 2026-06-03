@@ -30,6 +30,7 @@ export interface UiState {
   selectedId: SessionId | null;
   searchQuery: string;
   dateFilter: DateFilter;
+  folderFilter: string | null;
   timelineFilter: TimelineFilter;
   toolFilter: string | null;
   expandedEvent: number | null;
@@ -55,6 +56,7 @@ const DEFAULTS: UiState = {
   selectedId: null,
   searchQuery: "",
   dateFilter: "all",
+  folderFilter: null,
   timelineFilter: "all",
   toolFilter: null,
   expandedEvent: null,
@@ -113,6 +115,7 @@ export class Store {
       ...(saved ?? {}),
       timelineFilter: normalizeFilter(saved?.timelineFilter),
       dateFilter: normalizeDateFilter(saved?.dateFilter),
+      folderFilter: typeof saved?.folderFilter === "string" ? saved.folderFilter : null,
       toolFilter: normalizeToolFilter(saved?.toolFilter),
       filesTouchedCollapsed: normalizeBool(saved?.filesTouchedCollapsed),
       memoryEditsCollapsed: normalizeBool(saved?.memoryEditsCollapsed),

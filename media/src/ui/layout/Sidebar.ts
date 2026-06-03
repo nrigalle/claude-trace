@@ -17,6 +17,12 @@ import { renderSidebarSkeletons } from "./Loading.js";
 import { renderSessionItem, type SessionItemHandlers } from "./SessionItem.js";
 import { SidebarResizer } from "./SidebarResizer.js";
 
+const compactFolder = (cwd: string): string => {
+  const segments = cwd.split("/").filter(Boolean);
+  if (segments.length <= 2) return cwd;
+  return `…/${segments.slice(-2).join("/")}`;
+};
+
 export interface SidebarHandlers {
   onSelect(id: SessionId): void;
   onTogglePin(id: SessionId): void;
@@ -35,6 +41,8 @@ export class Sidebar {
   private readonly listContainer: HTMLElement;
   private readonly searchInput: HTMLInputElement;
   private readonly dateFilterChips = new Map<DateFilter, HTMLButtonElement>();
+  private folderSelect!: HTMLSelectElement;
+  private folderOptionsKey = "";
   private sessions: readonly SessionSummary[] = [];
   private byIdCache: Map<string, SessionSummary> | null = null;
   private byIdCacheFor: readonly SessionSummary[] | null = null;
@@ -47,6 +55,7 @@ export class Sidebar {
   private bulkCount!: HTMLElement;
   private bulkRemoveBtn!: HTMLButtonElement;
   private bulkDeleteBtn!: HTMLButtonElement;
+  private selectAllBtn!: HTMLButtonElement;
 
   constructor(
     private readonly store: Store,
@@ -118,6 +127,7 @@ export class Sidebar {
     this.root.appendChild(searchBox);
 
     this.root.appendChild(this.buildDateFilters());
+    this.root.appendChild(this.buildFolderFilter());
     this.root.appendChild(this.buildSelectBar());
 
     this.listContainer = h("div", {
@@ -156,6 +166,7 @@ export class Sidebar {
     this.sessions = sessions;
     this.byIdCache = null;
     this.byIdCacheFor = null;
+    this.refreshFolderOptions();
     const liveIds = new Set<string>(sessions.map((s) => s.session_id));
     for (const id of [...this.selectedIds]) if (!liveIds.has(id)) this.selectedIds.delete(id);
 
@@ -234,6 +245,12 @@ export class Sidebar {
       on: { click: () => this.toggleSelectMode() },
     });
     this.bulkCount = h("span", { className: "sidebar-bulk-count" });
+    this.selectAllBtn = h("button", {
+      className: "sidebar-bulk-selectall",
+      attrs: { type: "button", title: "Select every session currently shown" },
+      textContent: "Select all",
+      on: { click: () => this.toggleSelectAll() },
+    });
     this.bulkRemoveBtn = h("button", {
       className: "sidebar-bulk-remove",
       attrs: { type: "button", title: "Hide the selected sessions from the dashboard (reversible; transcripts kept)" },
@@ -250,6 +267,7 @@ export class Sidebar {
       "div",
       { className: "sidebar-bulk-buttons" },
       this.selectToggle,
+      this.selectAllBtn,
       this.bulkDeleteBtn,
       this.bulkRemoveBtn,
     );
@@ -298,6 +316,27 @@ export class Sidebar {
     this.handlers.onDeleteSessions(ids, true);
   }
 
+  private visibleSessionItems(): HTMLElement[] {
+    return [...this.listContainer.querySelectorAll<HTMLElement>(".session-item")].filter(
+      (el) => el.style.display !== "none" && !!el.dataset.sessionId,
+    );
+  }
+
+  private toggleSelectAll(): void {
+    const items = this.visibleSessionItems();
+    const allSelected = items.length > 0 && items.every((el) => this.selectedIds.has(el.dataset.sessionId!));
+    for (const el of items) {
+      const id = el.dataset.sessionId!;
+      if (allSelected) this.selectedIds.delete(id);
+      else this.selectedIds.add(id);
+      el.classList.toggle("selected", !allSelected);
+      const check = el.querySelector(".session-item-check");
+      check?.classList.toggle("checked", !allSelected);
+      check?.setAttribute("aria-pressed", String(!allSelected));
+    }
+    this.renderBulkBar();
+  }
+
   private clearSelectionDom(): void {
     this.selectedIds.clear();
     this.listContainer.querySelectorAll(".session-item.selected").forEach((n) => n.classList.remove("selected"));
@@ -311,6 +350,10 @@ export class Sidebar {
     this.selectRow.classList.toggle("select-active", this.selectMode);
     if (!this.selectMode) return;
     const count = this.selectedIds.size;
+    const visible = this.visibleSessionItems();
+    const allSelected = visible.length > 0 && visible.every((el) => this.selectedIds.has(el.dataset.sessionId!));
+    this.selectAllBtn.textContent = allSelected ? "Clear" : "Select all";
+    this.selectAllBtn.disabled = visible.length === 0;
     this.bulkCount.textContent = count === 0 ? "Tap sessions to select" : `${count} selected`;
     this.bulkRemoveBtn.textContent = count > 0 ? `Remove ${count}` : "Remove";
     this.bulkRemoveBtn.disabled = count === 0;
@@ -321,6 +364,7 @@ export class Sidebar {
   private applyFilter(): void {
     const q = this.store.state.searchQuery.toLowerCase().trim();
     const dateFilter = this.store.state.dateFilter;
+    const folderFilter = this.store.state.folderFilter;
     const onlyFavorites = dateFilter === "favorites";
     const byId = this.sessionsById();
     const now = new Date();
@@ -328,6 +372,10 @@ export class Sidebar {
       const id = el.dataset.sessionId;
       const session = id ? byId.get(id) : undefined;
       if (!session) {
+        el.style.display = "none";
+        return;
+      }
+      if (folderFilter !== null && session.cwd !== folderFilter) {
         el.style.display = "none";
         return;
       }
@@ -388,6 +436,40 @@ export class Sidebar {
       chip.setAttribute("aria-pressed", String(active));
     }
     this.applyFilter();
+  }
+
+  private buildFolderFilter(): HTMLElement {
+    this.folderSelect = h("select", {
+      className: "folder-filter-select",
+      attrs: { "aria-label": "Filter sessions by folder" },
+      on: {
+        change: () => {
+          const value = this.folderSelect.value;
+          this.store.update({ folderFilter: value === "" ? null : value });
+          this.applyFilter();
+        },
+      },
+    }) as HTMLSelectElement;
+    return h("div", { className: "folder-filter", attrs: { role: "group", "aria-label": "Filter by folder" } }, this.folderSelect);
+  }
+
+  private refreshFolderOptions(): void {
+    const folders = [...new Set(this.sessions.map((s) => s.cwd).filter((c): c is string => !!c))].sort();
+    const key = folders.join(" ");
+    if (key === this.folderOptionsKey) return;
+    this.folderOptionsKey = key;
+    let selected = this.store.state.folderFilter;
+    if (selected !== null && !folders.includes(selected)) {
+      selected = null;
+      this.store.update({ folderFilter: null });
+    }
+    while (this.folderSelect.firstChild) this.folderSelect.removeChild(this.folderSelect.firstChild);
+    this.folderSelect.appendChild(h("option", { attrs: { value: "" }, textContent: folders.length > 0 ? "All folders" : "No folders" }));
+    for (const folder of folders) {
+      this.folderSelect.appendChild(h("option", { attrs: { value: folder, title: folder }, textContent: compactFolder(folder) }));
+    }
+    this.folderSelect.value = selected ?? "";
+    this.folderSelect.disabled = folders.length === 0;
   }
 
   private capturedActiveSessionId(): string | null {

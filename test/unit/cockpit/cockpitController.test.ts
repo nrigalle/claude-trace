@@ -445,14 +445,26 @@ describe("CockpitController persistence and resume — a session NEVER vanishes 
     expect(terminals[0]!.alive).toBe(true);
   });
 
-  it("resumes via --resume when a transcript exists, but re-launches with --session-id when it does not", () => {
+  it("always resumes with --resume (never reuses --session-id, which claude rejects as 'already used')", () => {
     host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
     backend = new FakeBackend();
     host = new FakeHost();
     makeController();
     host.send({ type: "cockpitReady" });
-    expect(backend.spawns[0]!.initialInput).toContain("--session-id uuid-1");
-    expect(backend.spawns[0]!.initialInput).not.toContain("--resume");
+    expect(backend.spawns[0]!.initialInput).toContain("--resume uuid-1");
+    expect(backend.spawns[0]!.initialInput).not.toContain("--session-id");
+  });
+
+  it("Resume after a session exits re-runs claude with --resume, not a duplicate --session-id", () => {
+    host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
+    backend.emitExit("uuid-1", 0);
+    const before = backend.spawns.length;
+    host.send({ type: "cockpitResumeSession", sessionId: "uuid-1" });
+    expect(backend.spawns.length).toBe(before + 1);
+    const resumed = backend.spawns[backend.spawns.length - 1]!;
+    expect(resumed.sessionId).toBe("uuid-1");
+    expect(resumed.initialInput).toContain("--resume uuid-1");
+    expect(resumed.initialInput).not.toContain("--session-id");
   });
 
   it("moving a session to a folder updates its space and persists it (survives reload in that folder)", () => {

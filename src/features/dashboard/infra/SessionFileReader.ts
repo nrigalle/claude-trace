@@ -5,6 +5,8 @@ import { createParseContext, parseNativeLine, type ParseContext } from "../domai
 import type { SessionId, TraceEvent } from "../domain/types";
 import type { SessionRef } from "./paths";
 
+const MAX_TRANSCRIPT_BYTES = 20 * 1024 * 1024;
+
 interface CacheEntry {
   mtime: number;
   size: number;
@@ -106,14 +108,21 @@ export class SessionFileReader {
 
   private fullRead(ref: SessionRef, stats: SessionFileStats): readonly TraceEvent[] {
     let raw: string;
+    const truncated = stats.size > MAX_TRANSCRIPT_BYTES;
     try {
-      raw = fs.readFileSync(ref.filePath, "utf-8");
+      raw = truncated ? readPrefix(ref.filePath, MAX_TRANSCRIPT_BYTES) : fs.readFileSync(ref.filePath, "utf-8");
     } catch {
       this.cache.delete(ref.sessionId);
       return [];
     }
     const lines = raw.split("\n");
-    const partial = raw.endsWith("\n") ? "" : (lines.pop() ?? "");
+    let partial: string;
+    if (truncated) {
+      lines.pop();
+      partial = "";
+    } else {
+      partial = raw.endsWith("\n") ? "" : (lines.pop() ?? "");
+    }
     const parseCtx = createParseContext(ref.sessionId);
     const events: TraceEvent[] = [];
     for (const line of lines) {
@@ -141,6 +150,20 @@ export class SessionFileReader {
     for (const [id] of toEvict) this.cache.delete(id);
   }
 }
+
+const readPrefix = (filePath: string, maxBytes: number): string => {
+  let fd = -1;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(maxBytes);
+    const read = fs.readSync(fd, buf, 0, maxBytes, 0);
+    return buf.toString("utf-8", 0, read);
+  } finally {
+    if (fd !== -1) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+};
 
 export const ensureProjectsDirExists = (dir: string): void => {
   if (!fs.existsSync(dir)) {

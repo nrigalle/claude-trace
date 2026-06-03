@@ -10,10 +10,44 @@ export interface SessionRef {
   readonly filePath: string;
 }
 
-export const decodeProjectDirName = (encoded: string): string | null => {
-  if (!encoded) return null;
-  if (!encoded.startsWith("-")) return null;
-  return encoded.replace(/-/g, "/");
+const firstCwdInTranscript = (filePath: string): string | null => {
+  let fd = -1;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(65536);
+    const read = fs.readSync(fd, buf, 0, buf.length, 0);
+    for (const line of buf.toString("utf8", 0, read).split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const obj = JSON.parse(trimmed) as { cwd?: unknown };
+        if (typeof obj.cwd === "string" && obj.cwd.length > 0) return obj.cwd;
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== -1) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+};
+
+export const cwdForProjectDir = (projectDirPath: string): string | null => {
+  let files: string[];
+  try {
+    files = fs.readdirSync(projectDirPath).filter((f) => f.endsWith(".jsonl"));
+  } catch {
+    return null;
+  }
+  for (const file of files) {
+    const cwd = firstCwdInTranscript(path.join(projectDirPath, file));
+    if (cwd) return cwd;
+  }
+  return null;
 };
 
 export const filenameToSessionId = (filename: string): SessionId | null => {

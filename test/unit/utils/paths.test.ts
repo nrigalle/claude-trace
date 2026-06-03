@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PROJECTS_DIR } from "../../../src/shared/config";
+import * as os from "node:os";
 import {
-  decodeProjectDirName,
+  cwdForProjectDir,
   discoverSessionRefs,
   filenameToSessionId,
   parseUriPath,
@@ -45,18 +46,27 @@ describe("parseUriPath", () => {
   });
 });
 
-describe("decodeProjectDirName", () => {
-  it("returns null for empty input", () => {
-    expect(decodeProjectDirName("")).toBeNull();
+describe("cwdForProjectDir", () => {
+  it("reads the real cwd from a transcript (handles paths the lossy decoder mangled, e.g. hyphens/dots)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ct-proj-"));
+    const realCwd = "/Users/me/Desktop/lead-pipeline.v2";
+    fs.writeFileSync(
+      path.join(dir, "abc.jsonl"),
+      `${JSON.stringify({ type: "user", cwd: realCwd })}\n${JSON.stringify({ type: "assistant" })}\n`,
+    );
+    expect(cwdForProjectDir(dir)).toBe(realCwd);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("returns null when input does not start with a dash", () => {
-    expect(decodeProjectDirName("no-leading-dash")).toBeNull();
-    expect(decodeProjectDirName("home-user-project")).toBeNull();
+  it("returns null when no transcript carries a cwd", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ct-proj-"));
+    fs.writeFileSync(path.join(dir, "abc.jsonl"), `${JSON.stringify({ type: "assistant" })}\n`);
+    expect(cwdForProjectDir(dir)).toBeNull();
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("converts dash-prefixed encoded path", () => {
-    expect(decodeProjectDirName("-home-user-project")).toBe("/home/user/project");
+  it("returns null for a missing directory", () => {
+    expect(cwdForProjectDir(path.join(os.tmpdir(), `nope-${Date.now()}`))).toBeNull();
   });
 });
 

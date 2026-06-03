@@ -4,6 +4,7 @@ import * as path from "path";
 import * as pty from "node-pty";
 import { buildCockpitHookSettings } from "../../features/cockpit/infra/cockpitHooks";
 import { PROJECTS_DIR } from "../config";
+import { encodeCwdForProjects } from "../projectPathEncoding";
 import type { EffortChoice, ModelChoice } from "../models";
 import type { TimelineEvent } from "./timeline";
 
@@ -87,8 +88,7 @@ const WATCHDOG_POLL_MS = 2_000;
 
 export type StopReason = "stop" | "exit" | "cancel" | "stuck";
 
-export const encodeForClaudeProjects = (cwd: string): string =>
-  cwd.replace(/[^a-zA-Z0-9-]/g, "-");
+export const encodeForClaudeProjects = encodeCwdForProjects;
 
 const encodeForFs = (key: string): string => key.replace(/[^A-Za-z0-9-]/g, "_");
 

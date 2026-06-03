@@ -103,10 +103,11 @@ const renderField = (
       h("span", { className: "lib-field-label", textContent: label }),
     );
   }
+  const asList = Array.isArray(current) || LIST_FIELDS.has(key);
   const input = h("input", {
     className: "lib-input",
     attrs: { type: "text" },
-    on: { input: () => onChange(input.value) },
+    on: { input: () => onChange(asList ? parseListInput(input.value) : input.value) },
   });
   input.value = scalarToString(current);
   return h("label", { className: "lib-field" },
@@ -135,6 +136,11 @@ export const renderBodyEditor = (
     element,
   );
 };
+
+const LIST_FIELDS: ReadonlySet<string> = new Set(["allowed-tools", "disallowedTools"]);
+
+const parseListInput = (raw: string): readonly string[] =>
+  raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
 
 const scalarToString = (v: FrontmatterValue | undefined): string => {
   if (v === undefined || v === null) return "";

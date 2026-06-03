@@ -52,7 +52,7 @@ import { spawn } from "child_process";
 import { computeBeforeContent } from "./features/dashboard/domain/reverseApply";
 import { buildUnifiedDiff } from "./features/dashboard/domain/unifiedDiff";
 import { ensureProjectsDirExists, SessionFileReader } from "./features/dashboard/infra/SessionFileReader";
-import { decodeProjectDirName } from "./features/dashboard/infra/paths";
+import { cwdForProjectDir, isHiddenAssistantProject } from "./features/dashboard/infra/paths";
 import { SessionDirectoryWatcher, type WatcherListener } from "./features/dashboard/infra/SessionDirectoryWatcher";
 import { SessionFilePoller } from "./features/dashboard/infra/SessionFilePoller";
 import { BudgetMonitor } from "./features/dashboard/infra/BudgetMonitor";
@@ -309,13 +309,23 @@ export function activate(context: vscode.ExtensionContext): void {
         "Delete",
       );
       if (choice !== "Delete") return;
+      const failed: string[] = [];
       for (const id of ids) {
         const filePath = service.filePathFor(id);
         if (!filePath) continue;
         try {
           await vscode.workspace.fs.delete(vscode.Uri.file(filePath), { useTrash: true });
-        } catch {}
-        service.invalidate(id);
+          service.invalidate(id);
+        } catch (err) {
+          failed.push(filePath);
+        }
+      }
+      if (failed.length > 0) {
+        void vscode.window.showErrorMessage(
+          failed.length === 1
+            ? `Could not delete the transcript: ${failed[0]}. It may be open or locked; it is still on disk.`
+            : `Could not delete ${failed.length} transcripts (still on disk). The first was ${failed[0]}.`,
+        );
       }
     },
     async exportChatMarkdown(id: SessionId): Promise<void> {
@@ -351,6 +361,9 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     saveDetailLayout(layout: readonly DetailLayoutEntry[]): void {
       void context.globalState.update("ct.detailLayout", layout);
+    },
+    showError(message: string): void {
+      void vscode.window.showErrorMessage(message);
     },
   };
 
@@ -547,12 +560,14 @@ export function activate(context: vscode.ExtensionContext): void {
         try {
           const entries = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true });
           const out: ProjectEntry[] = [];
+          const seen = new Set<string>();
           for (const entry of entries) {
             if (!entry.isDirectory()) continue;
-            const decoded = decodeProjectDirName(entry.name);
-            if (!decoded || !fs.existsSync(decoded)) continue;
-            const label = path.basename(decoded);
-            out.push({ path: toProjectPath(decoded), label, source: "tracked" });
+            if (isHiddenAssistantProject(entry.name)) continue;
+            const cwd = cwdForProjectDir(path.join(PROJECTS_DIR, entry.name));
+            if (!cwd || seen.has(cwd) || !fs.existsSync(cwd)) continue;
+            seen.add(cwd);
+            out.push({ path: toProjectPath(cwd), label: path.basename(cwd), source: "tracked" });
           }
           return out;
         } catch {

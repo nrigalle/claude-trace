@@ -26,6 +26,7 @@ interface FakeTerm {
   buffer: FakeBuffer;
   selection: string;
   pastes: string[];
+  writes: string[];
   oscHandlers: ((data: string) => boolean)[];
   options: FakeTermOptions;
 }
@@ -49,6 +50,7 @@ vi.mock("@xterm/xterm", () => ({
     buffer: FakeBuffer = { active: { type: "normal", viewportY: 0, baseY: 0 } };
     selection = "";
     pastes: string[] = [];
+    writes: string[] = [];
     oscHandlers: ((data: string) => boolean)[] = [];
     options: FakeTermOptions;
     unicode = { activeVersion: "" };
@@ -80,7 +82,9 @@ vi.mock("@xterm/xterm", () => ({
       this.selection = "";
     }
     open(): void {}
-    write(): void {}
+    write(data: string): void {
+      this.writes.push(data);
+    }
     paste(data: string): void {
       this.pastes.push(data);
       this.dataCb?.(data.replace(/\r\n/g, "\r").replace(/\n/g, "\r"));
@@ -570,6 +574,17 @@ describe("TerminalCockpit — DOM identity (mount once, mutate in place)", () =>
     expect(sent).toContainEqual({ type: "cockpitResumeSession", sessionId: "a" });
     expect(booting.classList.contains("hidden")).toBe(false);
     expect(tile.classList.contains("exited")).toBe(false);
+    expect(terms[0]!.writes.join("")).toContain("\x1b[?1003l");
+  });
+
+  it("resets mouse-tracking modes when a session exits so a bare shell can't flood the pane", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "X")]) });
+    terms[0]!.writes.length = 0;
+    cockpit.receive({ type: "terminalExit", sessionId: "a", exitCode: 0 });
+    const written = terms[0]!.writes.join("");
+    expect(written).toContain("\x1b[?1000l");
+    expect(written).toContain("\x1b[?1006l");
+    expect(written).toContain("\x1b[?2004l");
   });
 
   it("pins the active terminal to the bottom as output arrives (so the input is always reachable)", () => {

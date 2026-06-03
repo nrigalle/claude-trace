@@ -409,8 +409,63 @@
 }
 
 .sidebar-selectrow:not(.select-active) .sidebar-bulk-delete,
-.sidebar-selectrow:not(.select-active) .sidebar-bulk-remove {
+.sidebar-selectrow:not(.select-active) .sidebar-bulk-remove,
+.sidebar-selectrow:not(.select-active) .sidebar-bulk-selectall {
   display: none;
+}
+
+.sidebar-bulk-selectall {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid var(--ct-border);
+  border-radius: 7px;
+  color: var(--ct-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.sidebar-bulk-selectall:hover:not(:disabled) {
+  color: var(--ct-text-primary);
+  border-color: var(--ct-claude);
+}
+
+.sidebar-bulk-selectall:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.folder-filter {
+  padding: 0 12px 10px;
+}
+
+.folder-filter-select {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--ct-bg-2);
+  border: 1px solid var(--ct-border);
+  border-radius: 7px;
+  color: var(--ct-text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.folder-filter-select:hover {
+  border-color: var(--ct-claude);
+}
+
+.folder-filter-select:focus-visible {
+  outline: 2px solid var(--ct-focus);
+  outline-offset: 1px;
+}
+
+.folder-filter-select:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .sidebar-bulk-remove {

@@ -28,6 +28,7 @@ export interface DashboardActions {
   invalidateSession(id: SessionId): void;
   loadDetailLayout(): readonly DetailLayoutEntry[];
   saveDetailLayout(layout: readonly DetailLayoutEntry[]): void;
+  showError?(message: string): void;
 }
 
 export class DashboardController {
@@ -145,24 +146,34 @@ export class DashboardController {
   }
 
   private async handleRename(id: SessionId): Promise<void> {
-    await this.actions.renameSession(id);
-    this.lastSent.delete(id);
-    this.dirtySessions.add(id);
-    this.listDirty = true;
-    if (this.host.visible) this.flush();
+    try {
+      await this.actions.renameSession(id);
+    } catch {
+      this.actions.showError?.("Could not rename the session.");
+    }
+    this.resyncSessions([id]);
   }
 
   private async handleTogglePin(id: SessionId): Promise<void> {
-    await this.actions.togglePin(id);
-    this.lastSent.delete(id);
-    this.dirtySessions.add(id);
-    this.listDirty = true;
-    if (this.host.visible) this.flush();
+    try {
+      await this.actions.togglePin(id);
+    } catch {
+      this.actions.showError?.("Could not update the pin.");
+    }
+    this.resyncSessions([id]);
   }
 
   private async handleDeleteSessions(ids: readonly SessionId[], permanent: boolean): Promise<void> {
-    if (permanent) await this.actions.deleteSessionFiles(ids);
-    else await this.actions.deleteSessions(ids);
+    try {
+      if (permanent) await this.actions.deleteSessionFiles(ids);
+      else await this.actions.deleteSessions(ids);
+    } catch {
+      this.actions.showError?.("Could not delete the selected sessions.");
+    }
+    this.resyncSessions(ids);
+  }
+
+  private resyncSessions(ids: readonly SessionId[]): void {
     for (const id of ids) {
       this.lastSent.delete(id);
       this.dirtySessions.add(id);

@@ -1,2 +1,2 @@
 export const encodeCwdForProjects = (cwd: string): string =>
-  cwd.replace(/[\\/:]/g, "-");
+  cwd.replace(/[^a-zA-Z0-9]/g, "-");

@@ -15,6 +15,8 @@ import { CockpitLauncher } from "./cockpitLauncher.js";
 import { createCockpitTerminal, type CockpitTerminalView } from "./terminalCore.js";
 import { ALL_FOLDER, compactPath, formatStartTime, newId } from "./cockpitUtils.js";
 
+const RESET_INPUT_MODES = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?2004l";
+
 export interface TerminalCockpitDeps {
   send(msg: CockpitWebviewToHost): void;
 }
@@ -137,7 +139,7 @@ export class TerminalCockpit {
       }
       case "terminalExit": {
         const view = this.views.get(msg.sessionId);
-        if (view) view.term.write(`\r\n\x1b[2m[process exited · code ${msg.exitCode}]\x1b[0m\r\n`);
+        if (view) view.term.write(`${RESET_INPUT_MODES}\r\n\x1b[2m[process exited · code ${msg.exitCode}]\x1b[0m\r\n`);
         this.renderGrid();
         return;
       }
@@ -266,6 +268,7 @@ export class TerminalCockpit {
             const tile = this.tiles.get(windowId);
             const view = this.views.get(sessionId);
             if (view) {
+              view.term.write(RESET_INPUT_MODES);
               view.gotData = false;
               view.lastCols = 0;
               view.lastRows = 0;

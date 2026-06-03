@@ -83,4 +83,14 @@ describe("serializeFile", () => {
     const re = parseFile(out);
     expect(re.frontmatter["skills"]).toEqual(["lint", "diff-read"]);
   });
+
+  it("parses a tab-indented list instead of silently dropping it", () => {
+    const result = parseFile("---\nname: t\ntools:\n\t- Read\n\t- Write\n---\nbody");
+    expect(result.frontmatter["tools"]).toEqual(["Read", "Write"]);
+  });
+
+  it("parses tab-indented block scalar text", () => {
+    const result = parseFile("---\nname: t\ndescription: |\n\tline one\n\tline two\n---\nbody");
+    expect(result.frontmatter["description"]).toBe("line one\nline two");
+  });
 });

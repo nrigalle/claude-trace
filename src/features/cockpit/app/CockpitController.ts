@@ -487,14 +487,13 @@ export class CockpitController {
     const forceInitialInput = this.paused.has(key);
     let initialInput = "";
     if (managed.kind === "claude") {
-      const hasTranscript = this.deps.actions.transcriptExists(managed.cwd, key);
       const command = buildClaudeCommand({
         mode: managed.permissionMode,
         model: managed.model,
         effort: managed.effort,
         name: managed.name,
         settingsPath: this.deps.actions.prepareHooks(key),
-        ...(hasTranscript ? { resumeId: key } : { sessionId: key }),
+        resumeId: key,
       }, this.deps.terminals.shellQuoteStyle());
       initialInput = `${command}\r`;
     }

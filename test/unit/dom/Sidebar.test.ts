@@ -518,6 +518,89 @@ describe("Sidebar — realistic filter stress (100 sessions, mixed pinned and da
   });
 });
 
+describe("Sidebar — folder filter and select-all", () => {
+  beforeEach(() => installVsCodeStub());
+  afterEach(() => cleanupVsCodeStub());
+
+  const withCwd = (id: string, cwd: string): SessionSummary => ({ ...summary(id), cwd });
+
+  const isVisible = (host: HTMLElement, id: string): boolean => {
+    const el = host.querySelector<HTMLElement>(`.session-item[data-session-id="${id}"]`);
+    return el !== null && el.style.display !== "none";
+  };
+
+  const mount = async (sessions: readonly SessionSummary[], onDeleteSessions = (_ids: readonly SessionId[], _p?: boolean) => {}) => {
+    const { Store, Sidebar } = await loadModules();
+    const sidebar = new Sidebar(new Store(), { ...noopHandlers, onDeleteSessions });
+    const host = document.createElement("div");
+    sidebar.mount(host);
+    sidebar.updateSessions(sessions, new Set());
+    return host;
+  };
+
+  it("populates the folder select with each distinct cwd plus an 'All folders' option", async () => {
+    const host = await mount([withCwd("a", "/Users/me/projA"), withCwd("b", "/Users/me/projB"), withCwd("c", "/Users/me/projA")]);
+    const select = host.querySelector<HTMLSelectElement>(".folder-filter-select")!;
+    const values = [...select.options].map((o) => o.value);
+    expect(values).toEqual(["", "/Users/me/projA", "/Users/me/projB"]);
+  });
+
+  it("filtering by a folder shows only sessions started in that folder", async () => {
+    const host = await mount([withCwd("a", "/Users/me/projA"), withCwd("b", "/Users/me/projB"), withCwd("c", "/Users/me/projA")]);
+    const select = host.querySelector<HTMLSelectElement>(".folder-filter-select")!;
+    select.value = "/Users/me/projA";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(isVisible(host, "a")).toBe(true);
+    expect(isVisible(host, "c")).toBe(true);
+    expect(isVisible(host, "b")).toBe(false);
+  });
+
+  it("a session with no cwd is hidden when a folder filter is active", async () => {
+    const host = await mount([withCwd("a", "/Users/me/projA"), summary("nocwd")]);
+    const select = host.querySelector<HTMLSelectElement>(".folder-filter-select")!;
+    select.value = "/Users/me/projA";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(isVisible(host, "a")).toBe(true);
+    expect(isVisible(host, "nocwd")).toBe(false);
+  });
+
+  it("Select all selects every visible session for a one-shot bulk delete", async () => {
+    const deleted: string[][] = [];
+    const host = await mount(
+      [withCwd("a", "/p/x"), withCwd("b", "/p/x"), withCwd("c", "/p/x")],
+      (ids) => deleted.push([...ids].map(String)),
+    );
+    (host.querySelector(".sidebar-select-btn") as HTMLButtonElement).click();
+    (host.querySelector(".sidebar-bulk-selectall") as HTMLButtonElement).click();
+    const removeBtn = host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement;
+    expect(removeBtn.textContent).toBe("Remove 3");
+    removeBtn.click();
+    expect(deleted[0]!.sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("Select all only selects sessions visible under the active folder filter", async () => {
+    const host = await mount([withCwd("a", "/p/x"), withCwd("b", "/p/y"), withCwd("c", "/p/x")]);
+    const select = host.querySelector<HTMLSelectElement>(".folder-filter-select")!;
+    select.value = "/p/x";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    (host.querySelector(".sidebar-select-btn") as HTMLButtonElement).click();
+    (host.querySelector(".sidebar-bulk-selectall") as HTMLButtonElement).click();
+    expect((host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement).textContent).toBe("Remove 2");
+  });
+
+  it("Select all toggles to Clear and deselects everything on a second click", async () => {
+    const host = await mount([withCwd("a", "/p/x"), withCwd("b", "/p/x")]);
+    (host.querySelector(".sidebar-select-btn") as HTMLButtonElement).click();
+    const selectAll = host.querySelector(".sidebar-bulk-selectall") as HTMLButtonElement;
+    selectAll.click();
+    expect(selectAll.textContent).toBe("Clear");
+    expect((host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement).textContent).toBe("Remove 2");
+    selectAll.click();
+    expect(selectAll.textContent).toBe("Select all");
+    expect((host.querySelector(".sidebar-bulk-remove") as HTMLButtonElement).textContent).toBe("Remove");
+  });
+});
+
 describe("Sidebar — date filter × pinned interaction (user spec)", () => {
   beforeEach(() => installVsCodeStub());
   afterEach(() => cleanupVsCodeStub());

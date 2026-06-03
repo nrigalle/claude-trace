@@ -44,7 +44,7 @@ const parseYamlFrontmatter = (yaml: string): Frontmatter => {
     const line = rawLines[i] ?? "";
     i += 1;
     if (line.trim() === "" || line.trim().startsWith("#")) continue;
-    const indent = leadingSpaces(line);
+    const indent = leadingIndent(line);
     if (indent !== 0) continue;
     const colon = findUnquotedColon(line);
     if (colon < 0) continue;
@@ -63,9 +63,9 @@ const parseYamlFrontmatter = (yaml: string): Frontmatter => {
   return out;
 };
 
-const leadingSpaces = (s: string): number => {
+const leadingIndent = (s: string): number => {
   let n = 0;
-  while (n < s.length && s.charCodeAt(n) === 32) n += 1;
+  while (n < s.length && (s.charCodeAt(n) === 32 || s.charCodeAt(n) === 9)) n += 1;
   return n;
 };
 
@@ -96,7 +96,7 @@ const collectChildren = (lines: readonly string[], startIndex: number): ChildBlo
       i += 1;
       continue;
     }
-    const indent = leadingSpaces(line);
+    const indent = leadingIndent(line);
     if (indent === 0) break;
     children.push(line);
     i += 1;
@@ -108,7 +108,7 @@ const parseChildren = (lines: readonly string[], blockScalar: boolean): Frontmat
   if (blockScalar) {
     const minIndent = lines
       .filter((l) => l.trim() !== "")
-      .reduce((min, l) => Math.min(min, leadingSpaces(l)), Number.POSITIVE_INFINITY);
+      .reduce((min, l) => Math.min(min, leadingIndent(l)), Number.POSITIVE_INFINITY);
     const indent = Number.isFinite(minIndent) ? minIndent : 0;
     return lines.map((l) => l.slice(indent)).join("\n").trimEnd();
   }
