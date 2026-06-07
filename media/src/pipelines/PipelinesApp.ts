@@ -8,13 +8,14 @@ import type {
   ParallelBlock,
   Pipeline,
   PipelineId,
+  PoolBlock,
   RunId,
   RunState,
   ScheduleRecurrence,
   Trigger,
   WorkerBlock,
 } from "../../../src/features/pipelines/domain/types";
-import { toBlockId } from "../../../src/features/pipelines/domain/types";
+import { toBlockId, clampConcurrency } from "../../../src/features/pipelines/domain/types";
 import {
   INTERVAL_UNITS,
   WEEKDAY_LABELS,
@@ -45,6 +46,8 @@ import {
   buildRunBlockState,
   computeRunSignature,
   startEndState,
+  runDisplayName,
+  runDateGroup,
 } from "./pipelineRunState.js";
 import { createBlock, defaultWorker, makeId, orchStatusFor } from "./pipelineBlockMeta.js";
 import {
@@ -94,10 +97,14 @@ export class PipelinesApp {
   private runs: readonly RunSummary[] = [];
   private selection: Selection = { kind: "none" };
   private panel: PanelMode = { kind: "none" };
+  private autoOpenRunForPipeline: PipelineId | null = null;
+  private runsSearchQuery = "";
+  private runsStatusFilter = "all";
   private zoom = 1;
   private loopDefineMode: string | null = null;
   private readonly activeParallelWorker = new Map<string, string>();
   private renderedRunSignature: string | null = null;
+  private lastAssistantGroup: string | null = null;
   private readonly inspectors: PipelineInspectors;
   private readonly runDetail: RunDetailPanel;
   private readonly canvas: PipelineCanvas;
@@ -179,15 +186,20 @@ export class PipelinesApp {
 
     this.assistant = new WorkflowAssistantPanel({
       send: (msg) => this.deps.send(msg),
-      getPipeline: () => (this.selection.kind === "pipeline" ? this.selection.draft : null),
+      getPipeline: () => this.currentPipeline(),
       onApply: (pipeline) => this.applyProposedPipeline(pipeline),
     });
 
+    const canvasMain = h(
+      "div",
+      { className: "pl-canvas-main" },
+      this.canvasEl,
+      zoomHost,
+    );
     const canvasBody = h(
       "div",
       { className: "pl-canvas-body" },
-      this.canvasEl,
-      zoomHost,
+      canvasMain,
       this.panelEl,
       this.assistant.element(),
     );
@@ -252,6 +264,7 @@ export class PipelinesApp {
       findBlockName: (blockId) => this.findBlockName(blockId),
       addParallelWorker: (blockId) => this.addParallelWorker(blockId),
       removeParallelWorker: (blockId, workerId) => this.removeParallelWorker(blockId, workerId),
+      setPoolConcurrency: (blockId, concurrency) => this.setPoolConcurrency(blockId, concurrency),
       removeBlock: (blockId) => this.removeBlock(blockId),
       send: (msg) => this.deps.send(msg),
     });
@@ -262,6 +275,7 @@ export class PipelinesApp {
       loadPipeline: (pipelineId) => this.deps.send({ type: "loadPipeline", pipelineId }),
       deleteRun: (runId) => this.deps.send({ type: "deleteRun", runId }),
       selectRun: (runId) => this.handleSelectRun(runId),
+      renameRun: (runId, name) => this.deps.send({ type: "renameRun", runId, name }),
     });
     this.toolbar = new PipelineToolbar({
       canvasToolbar: this.canvasToolbar,
@@ -275,6 +289,7 @@ export class PipelinesApp {
       handleDelete: () => this.handleDelete(),
       killRun: (runId) => this.deps.send({ type: "killRun", runId }),
       resumeRun: (runId) => this.deps.send({ type: "resumeRun", runId }),
+      renameRun: (runId, name) => this.deps.send({ type: "renameRun", runId, name }),
       onAssistant: () => this.assistant.setOpen(!this.assistant.isOpen()),
       navigateToPipeline: (draft, view) => {
         this.selection = { kind: "pipeline", draft, dirty: false, view };
@@ -290,6 +305,19 @@ export class PipelinesApp {
 
   element(): HTMLElement {
     return this.root;
+  }
+
+  private currentPipeline(): Pipeline | null {
+    if (this.selection.kind === "pipeline") return this.selection.draft;
+    if (this.selection.kind === "run") return this.selection.latest?.pipelineSnapshot ?? null;
+    return null;
+  }
+
+  private syncAssistant(): void {
+    const id = (this.currentPipeline()?.id ?? null) as string | null;
+    if (id === this.lastAssistantGroup) return;
+    this.lastAssistantGroup = id;
+    this.assistant.switchPipeline();
   }
 
   receive(msg: PipelinesHostToWebview): void {
@@ -328,11 +356,25 @@ export class PipelinesApp {
         this.renderPanel();
         return;
       case "runUpdate":
+        if (this.autoOpenRunForPipeline !== null && msg.run.pipelineId === this.autoOpenRunForPipeline) {
+          this.autoOpenRunForPipeline = null;
+          this.selection = { kind: "run", runId: msg.run.runId, latest: msg.run };
+          this.panel = { kind: "none" };
+          this.renderRunDetail(msg.run);
+          this.renderPanel();
+          this.sidebar.render();
+          return;
+        }
         if (this.selection.kind === "run" && this.selection.runId === msg.run.runId) {
           this.selection = { kind: "run", runId: msg.run.runId, latest: msg.run };
           this.renderRunDetail(msg.run);
+          if (this.panel.kind === "run-block-detail") this.renderPanel();
         }
         this.sidebar.render();
+        return;
+      case "sessionTranscript":
+        this.runDetail.cacheTranscript(msg.sessionId, msg.text);
+        if (this.panel.kind === "run-block-detail") this.renderPanel();
         return;
       case "validationFailed":
         this.showNotice("error", msg.errors.map((e) => `• ${e.message}`).join("\n"));
@@ -363,7 +405,11 @@ export class PipelinesApp {
     const onMove = (e: MouseEvent) => {
       if (!dragging) return;
       const dx = startX - e.clientX;
-      const cap = Math.min(MAX_PX_FALLBACK, Math.floor(window.innerWidth * 0.8));
+      const body = this.panelEl.parentElement;
+      const containerW = body ? body.getBoundingClientRect().width : window.innerWidth;
+      const asst = this.assistant.element();
+      const asstW = asst.classList.contains("hidden") ? 0 : asst.getBoundingClientRect().width;
+      const cap = Math.max(MIN, Math.min(MAX_PX_FALLBACK, containerW - asstW - 320));
       const next = Math.max(MIN, Math.min(cap, startWidth + dx));
       this.canvasArea.style.setProperty("--pl-panel-width", `${next}px`);
     };
@@ -406,6 +452,7 @@ export class PipelinesApp {
   }
 
   private renderEmpty(): void {
+    this.renderedRunSignature = null;
     clear(this.canvasToolbar);
     clear(this.canvasEl);
     this.canvas.clearStack();
@@ -421,14 +468,16 @@ export class PipelinesApp {
         }),
       ),
     );
+    this.syncAssistant();
   }
 
   private renderEditor(): void {
     if (this.selection.kind !== "pipeline") return;
+    this.renderedRunSignature = null;
     const draft = this.selection.draft;
     const view = this.selection.view ?? "editor";
     this.toolbar.render(draft, view);
-    this.assistant.switchPipeline();
+    this.syncAssistant();
     clear(this.canvasEl);
 
     if (view === "runs") {
@@ -461,6 +510,8 @@ export class PipelinesApp {
     draft.blocks.forEach((block, index) => {
       if (block.kind === "parallel") {
         stack.appendChild(this.canvas.renderParallelExpanded(block));
+      } else if (block.kind === "pool") {
+        stack.appendChild(this.canvas.renderPoolExpanded(block));
       } else {
         stack.appendChild(this.canvas.renderBlockRowWithOrch(this.canvas.renderBlockNode(block)));
       }
@@ -475,13 +526,13 @@ export class PipelinesApp {
   }
 
   private renderPipelineRunsList(pipelineId: PipelineId): void {
-    const pipelineRuns = this.runs
+    const allRuns = this.runs
       .filter((r) => r.pipelineId === pipelineId)
       .sort((a, b) => b.startedAtMs - a.startedAtMs);
 
     const container = h("div", { className: "pl-runs-page" });
 
-    if (pipelineRuns.length === 0) {
+    if (allRuns.length === 0) {
       container.appendChild(
         h(
           "div",
@@ -493,14 +544,76 @@ export class PipelinesApp {
           }),
         ),
       );
-    } else {
-      const list = h("div", { className: "pl-runs-list" });
-      for (const r of pipelineRuns) {
-        list.appendChild(this.sidebar.renderRunRow(r, false));
-      }
-      container.appendChild(list);
+      this.canvasEl.appendChild(container);
+      return;
     }
 
+    const listEl = h("div", { className: "pl-runs-list" });
+    const refresh = (): void => {
+      clear(listEl);
+      const q = this.runsSearchQuery.trim().toLowerCase();
+      const filtered = allRuns.filter(
+        (r) =>
+          (this.runsStatusFilter === "all" || r.status === this.runsStatusFilter) &&
+          (q === "" || runDisplayName(r.name, r.pipelineName, r.startedAtMs).toLowerCase().includes(q)),
+      );
+      if (filtered.length === 0) {
+        listEl.appendChild(h("div", { className: "pl-runs-empty-filter", textContent: "No runs match." }));
+        return;
+      }
+      const now = Date.now();
+      let currentGroup = "";
+      for (const r of filtered) {
+        const group = runDateGroup(r.startedAtMs, now);
+        if (group !== currentGroup) {
+          currentGroup = group;
+          listEl.appendChild(h("div", { className: "pl-runs-group-label", textContent: group }));
+        }
+        const selected = this.selection.kind === "run" && this.selection.runId === r.runId;
+        listEl.appendChild(this.sidebar.renderRunRow(r, selected));
+      }
+    };
+
+    const searchInput = h("input", {
+      className: "pl-runs-search",
+      attrs: { type: "search", placeholder: "Search runs by name…", spellcheck: "false" },
+      on: {
+        input: (e) => {
+          this.runsSearchQuery = (e.currentTarget as HTMLInputElement).value;
+          refresh();
+        },
+      },
+    }) as HTMLInputElement;
+    searchInput.value = this.runsSearchQuery;
+
+    const chipsRow = h("div", { className: "pl-runs-filters" });
+    const renderChips = (): void => {
+      clear(chipsRow);
+      const statuses = ["all", "running", "paused-needs-input", "completed", "failed", "interrupted"];
+      for (const s of statuses) {
+        const count = s === "all" ? allRuns.length : allRuns.filter((r) => r.status === s).length;
+        if (s !== "all" && count === 0) continue;
+        const label = s === "all" ? "All" : s === "paused-needs-input" ? "Paused" : s.charAt(0).toUpperCase() + s.slice(1);
+        chipsRow.appendChild(
+          h("button", {
+            className: `pl-runs-chip${this.runsStatusFilter === s ? " active" : ""}${s !== "all" ? ` pl-status-${s}` : ""}`,
+            attrs: { type: "button" },
+            on: {
+              click: () => {
+                this.runsStatusFilter = s;
+                renderChips();
+                refresh();
+              },
+            },
+          }, h("span", { textContent: label }), h("span", { className: "pl-runs-chip-count", textContent: String(count) })),
+        );
+      }
+    };
+
+    container.appendChild(h("div", { className: "pl-runs-header" }, searchInput, chipsRow));
+    container.appendChild(listEl);
+    renderChips();
+    refresh();
     this.canvasEl.appendChild(container);
   }
 
@@ -520,6 +633,7 @@ export class PipelinesApp {
   }
 
   private renderRunLoading(): void {
+    this.renderedRunSignature = null;
     clear(this.canvasToolbar);
     clear(this.canvasEl);
     this.canvas.clearStack();
@@ -534,12 +648,15 @@ export class PipelinesApp {
 
   private renderRunDetail(run: RunState): void {
     this.toolbar.renderRunHeader(run);
+    this.syncAssistant();
     const signature = computeRunSignature(run);
     if (signature === this.renderedRunSignature && this.canvas.hasStack()) {
+      this.updateRunResults(run);
       this.canvas.updateRunInPlace(run);
       return;
     }
     clear(this.canvasEl);
+    this.updateRunResults(run);
     const stack = h("div", { className: "pl-canvas-stack" });
     stack.appendChild(this.canvas.renderStaticNode("start", "Start", "Workflow entry", ICON_START, startEndState(run.status, "start")));
     stack.appendChild(this.canvas.renderConnector(null));
@@ -550,6 +667,8 @@ export class PipelinesApp {
       const runState = buildRunBlockState(run.runId, blockRun, definition);
       if (definition.kind === "parallel") {
         stack.appendChild(this.canvas.renderParallelExpanded(definition, runState));
+      } else if (definition.kind === "pool") {
+        stack.appendChild(this.canvas.renderPoolExpanded(definition, runState));
       } else {
         stack.appendChild(
           this.canvas.renderBlockRowWithOrch(
@@ -567,6 +686,56 @@ export class PipelinesApp {
     this.renderedRunSignature = signature;
     this.applyZoom();
     requestAnimationFrame(() => this.canvas.drawLoopArrows());
+  }
+
+  private updateRunResults(run: RunState): void {
+    const existing = this.canvasEl.querySelector<HTMLElement>(".pl-run-results");
+    const next = this.renderRunResults(run);
+    if (!next) {
+      existing?.remove();
+      return;
+    }
+    if (existing) {
+      existing.replaceWith(next);
+      return;
+    }
+    this.canvasEl.insertBefore(next, this.canvasEl.firstChild);
+  }
+
+  private renderRunResults(run: RunState): HTMLElement | null {
+    if (run.status === "running" || run.status === "paused-needs-input") return null;
+    let found: { name: string; output: string } | null = null;
+    run.blocks.forEach((br, i) => {
+      const def = run.pipelineSnapshot.blocks[i];
+      if (def && br.output && br.output.trim().length > 0) {
+        found = { name: def.name || def.kind, output: br.output };
+      }
+    });
+    if (!found) return null;
+    const result: { name: string; output: string } = found;
+    const copyBtn = h("button", {
+      className: "pl-btn",
+      attrs: { type: "button", title: "Copy results" },
+      textContent: "Copy",
+      on: {
+        click: () => {
+          void navigator.clipboard?.writeText(result.output);
+          this.showNotice("info", "Results copied to clipboard.");
+        },
+      },
+    });
+    return h(
+      "div",
+      { className: "pl-run-results" },
+      h(
+        "div",
+        { className: "pl-run-results-head" },
+        h("span", { className: "pl-run-results-title", textContent: "Results" }),
+        h("span", { className: "pl-run-results-src", textContent: `from "${result.name}"` }),
+        copyBtn,
+      ),
+      h("pre", { className: "pl-run-results-body", textContent: result.output }),
+    );
   }
 
   private openLibraryAt(index: number): void {
@@ -886,6 +1055,8 @@ export class PipelinesApp {
     draft.blocks.forEach((block, index) => {
       if (block.kind === "parallel") {
         stack.appendChild(this.canvas.renderParallelExpanded(block));
+      } else if (block.kind === "pool") {
+        stack.appendChild(this.canvas.renderPoolExpanded(block));
       } else {
         stack.appendChild(this.canvas.renderBlockRowWithOrch(this.canvas.renderBlockNode(block)));
       }
@@ -912,6 +1083,11 @@ export class PipelinesApp {
       workers: [...b.workers, { ...newWorker, name: `Worker ${b.workers.length + 1}` }],
     }));
     this.activeParallelWorker.set(blockId, newWorker.id);
+    this.refreshInspectorOnly();
+  }
+
+  private setPoolConcurrency(blockId: string, concurrency: number): void {
+    this.updateBlock<PoolBlock>(blockId, (b) => ({ ...b, concurrency: clampConcurrency(concurrency) }));
     this.refreshInspectorOnly();
   }
 
@@ -1003,6 +1179,7 @@ export class PipelinesApp {
       this.showNotice("warning", "Save the workflow before running it.");
       return;
     }
+    this.autoOpenRunForPipeline = this.selection.draft.id;
     this.deps.send({ type: "runPipeline", pipelineId: this.selection.draft.id });
   }
 

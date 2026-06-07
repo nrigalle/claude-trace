@@ -16,6 +16,7 @@ export interface RunSummary {
   readonly runId: RunId;
   readonly pipelineId: PipelineId;
   readonly pipelineName: string;
+  readonly name: string;
   readonly startedAtMs: number;
   readonly endedAtMs: number | null;
   readonly status: RunStatus;
@@ -48,6 +49,7 @@ export type PipelinesHostToWebview =
   | { readonly type: "pipelinesList"; readonly payload: PipelinesListPayload }
   | { readonly type: "pipelineDetail"; readonly pipeline: Pipeline }
   | { readonly type: "runUpdate"; readonly run: RunState }
+  | { readonly type: "sessionTranscript"; readonly sessionId: string; readonly text: string }
   | { readonly type: "validationFailed"; readonly errors: readonly ValidationError[] }
   | { readonly type: "notice"; readonly level: "info" | "warning" | "error"; readonly message: string }
   | {
@@ -82,7 +84,15 @@ export type PipelinesWebviewToHost =
       readonly sessionId: string | null;
     }
   | { readonly type: "loadRun"; readonly runId: RunId }
+  | { readonly type: "renameRun"; readonly runId: RunId; readonly name: string }
+  | { readonly type: "loadSessionTranscript"; readonly sessionId: string }
   | { readonly type: "resumeRun"; readonly runId: RunId }
+  | {
+      readonly type: "submitInput";
+      readonly runId: RunId;
+      readonly blockId: BlockId;
+      readonly rows: readonly Record<string, string>[];
+    }
   | {
       readonly type: "pipelineAssistantAsk";
       readonly pipeline: Pipeline;

@@ -3,7 +3,9 @@ import { isPipelineValid, validatePipeline } from "../../../src/features/pipelin
 import {
   toBlockId,
   toPipelineId,
+  type InputBlock,
   type Pipeline,
+  type PoolBlock,
   type WorkerBlock,
 } from "../../../src/features/pipelines/domain/types";
 
@@ -410,5 +412,93 @@ describe("validate — triggers", () => {
       { kind: "schedule", enabled: true, recurrence: { type: "weekly", weekdays: [5], atMinute: 540 } },
       { kind: "webhook", token: "abc", enabled: false },
     ] }))).toEqual([]);
+  });
+});
+
+describe("validatePipeline — Worker Pool", () => {
+  const pool = (overrides: Partial<PoolBlock> = {}): PoolBlock => ({
+    id: toBlockId("pool1"),
+    kind: "pool",
+    name: "Drain leads",
+    listVar: "leads",
+    itemVar: "item",
+    concurrency: 4,
+    prompt: "Enrich ${vars.item}",
+    model: "claude-sonnet-4-6",
+    effort: "medium",
+    outputVar: "enriched",
+    ...overrides,
+  });
+
+  it("accepts a fully-specified pool block", () => {
+    expect(validatePipeline(pipeline({ blocks: [pool()] }))).toEqual([]);
+  });
+
+  it("rejects an empty list source", () => {
+    const codes = validatePipeline(pipeline({ blocks: [pool({ listVar: "  " })] })).map((e) => e.code);
+    expect(codes).toContain("pool-empty-list");
+  });
+
+  it("rejects an invalid item variable name", () => {
+    const codes = validatePipeline(pipeline({ blocks: [pool({ itemVar: "1 bad" })] })).map((e) => e.code);
+    expect(codes).toContain("pool-invalid-item-var");
+  });
+
+  it("rejects concurrency out of the 1..20 range or non-integer", () => {
+    expect(validatePipeline(pipeline({ blocks: [pool({ concurrency: 0 })] })).map((e) => e.code)).toContain("pool-invalid-concurrency");
+    expect(validatePipeline(pipeline({ blocks: [pool({ concurrency: 21 })] })).map((e) => e.code)).toContain("pool-invalid-concurrency");
+    expect(validatePipeline(pipeline({ blocks: [pool({ concurrency: 2.5 })] })).map((e) => e.code)).toContain("pool-invalid-concurrency");
+  });
+
+  it("rejects an empty per-item prompt", () => {
+    const codes = validatePipeline(pipeline({ blocks: [pool({ prompt: "   " })] })).map((e) => e.code);
+    expect(codes).toContain("block-empty-prompt");
+  });
+});
+
+describe("validatePipeline — input block", () => {
+  const input = (overrides: Partial<InputBlock> = {}): InputBlock => ({
+    id: toBlockId("in1"),
+    kind: "input",
+    name: "Collect leads",
+    message: "Fill the table.",
+    columns: [
+      { key: "site", label: "Site", type: "url", options: [], required: true, help: null },
+      { key: "category", label: "Category", type: "enum", options: ["Massage"], required: true, help: null },
+    ],
+    outputVar: "rows",
+    ...overrides,
+  });
+
+  it("accepts a fully-specified input block", () => {
+    expect(validatePipeline(pipeline({ blocks: [input()] }))).toEqual([]);
+  });
+
+  it("rejects an input block with no columns", () => {
+    const codes = validatePipeline(pipeline({ blocks: [input({ columns: [] })] })).map((e) => e.code);
+    expect(codes).toContain("input-no-columns");
+  });
+
+  it("rejects a column with an empty key", () => {
+    const codes = validatePipeline(pipeline({ blocks: [input({ columns: [{ key: "  ", label: "A", type: "text", options: [], required: false, help: null }] })] })).map((e) => e.code);
+    expect(codes).toContain("input-column-empty-key");
+  });
+
+  it("rejects a duplicate column key", () => {
+    const codes = validatePipeline(pipeline({ blocks: [input({ columns: [
+      { key: "x", label: "A", type: "text", options: [], required: false, help: null },
+      { key: "x", label: "B", type: "text", options: [], required: false, help: null },
+    ] })] })).map((e) => e.code);
+    expect(codes).toContain("input-duplicate-column-key");
+  });
+
+  it("rejects an enum column with no options", () => {
+    const codes = validatePipeline(pipeline({ blocks: [input({ columns: [{ key: "cat", label: "Cat", type: "enum", options: [], required: true, help: null }] })] })).map((e) => e.code);
+    expect(codes).toContain("input-enum-needs-options");
+  });
+
+  it("rejects an invalid output variable name", () => {
+    const codes = validatePipeline(pipeline({ blocks: [input({ outputVar: "not valid" })] })).map((e) => e.code);
+    expect(codes).toContain("invalid-output-var");
   });
 });

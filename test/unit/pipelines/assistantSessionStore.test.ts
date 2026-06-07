@@ -54,7 +54,6 @@ describe("AssistantSessionStore — many conversations per workflow", () => {
     const a = store.get(pid, "a")!;
     expect(a.title).toBe("My cleanup chat");
     expect(a.updatedAtMs).toBe(100);
-    // order unchanged: b (300) still before a (100)
     expect(store.list(pid).map((c) => c.id)).toEqual(["b", "a"]);
   });
 

@@ -12,6 +12,12 @@ import { StubAutomationRunner } from "../../stubs/StubAutomationRunner";
 import { StubDeterministicRunner } from "../../stubs/StubDeterministicRunner";
 import { PipelineStore } from "../../../src/features/pipelines/infra/PipelineStore";
 import { RunStore } from "../../../src/features/pipelines/infra/RunStore";
+import {
+  initialRunState,
+  applyBlockSpawned,
+  applyBlockStopped,
+  applyDecision,
+} from "../../../src/features/pipelines/domain/scheduler";
 import { AssistantSessionStore } from "../../../src/features/pipelines/infra/AssistantSessionStore";
 import type { PipelineAssistant } from "../../../src/features/pipelines/infra/PipelineAssistant";
 import {
@@ -964,6 +970,7 @@ describe("PipelinesController — workflow assistant enforcement", () => {
     adopt(): void {}
     cancel(): void {}
     reset(): void {}
+    isBusy(): boolean { return false; }
     dispose(): void {}
     historyTurns(): unknown { return this.replayTurns; }
     ask(_conversationId: string, _ctx: unknown, message: string): Promise<{ events: readonly never[]; text: string; proposal: { pipeline: Pipeline | null; hadJson: boolean; errors: readonly string[] } }> {
@@ -1008,6 +1015,23 @@ describe("PipelinesController — workflow assistant enforcement", () => {
     expect(replies[0]!.proposedPipeline!.name).toBe("Enrich");
   });
 
+  it("retries the real message when the resume produced a non-answer ('No response requested.')", async () => {
+    const fake = new FakeAssistant([
+      { text: "No response requested.", pipeline: null, hadJson: false },
+      { text: "Sure — which trigger do you want?", pipeline: null, hadJson: false },
+    ]);
+    makeWithAssistant(fake);
+
+    host.send({ type: "pipelineAssistantAsk", pipeline: proposed, conversationId: "c1", message: "build me a workflow", model: "default", effort: "default" });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(fake.asks, "the real message is re-issued after the degenerate continuation reply").toHaveLength(2);
+    expect(fake.asks[1]).toContain("build me a workflow");
+    const replies = host.messagesOfType("pipelineAssistantReply");
+    expect(replies).toHaveLength(1);
+    expect(replies[0]!.text).toBe("Sure — which trigger do you want?");
+  });
+
   it("does not auto-correct a normal interview question with no code block", async () => {
     const fake = new FakeAssistant([
       { text: "Which trigger do you want: manual, schedule, or webhook?", pipeline: null, hadJson: false },
@@ -1049,5 +1073,362 @@ describe("PipelinesController — workflow assistant enforcement", () => {
     expect(turns[1]!.proposedPipeline).not.toBeNull();
     expect(turns[1]!.proposedPipeline!.name).toBe("Proposed");
     expect(turns[1]!.proposalErrors).toEqual([]);
+  });
+
+  it("persists the conversation session on first progress so a reload mid-turn can still recover it", async () => {
+    const sessions = new AssistantSessionStore(path.join(tmp, "asst-sessions-progress.json"));
+    class ProgressThenFailAssistant {
+      sessionInfo(): { sessionId: string; cwd: string } { return { sessionId: "sess-x", cwd: "/tmp/x" }; }
+      adopt(): void {}
+      cancel(): void {}
+      reset(): void {}
+      isBusy(): boolean { return false; }
+      dispose(): void {}
+      historyTurns(): unknown { return []; }
+      ask(
+        _conversationId: string,
+        _ctx: unknown,
+        _message: string,
+        options: { onProgress?: (events: readonly { kind: string }[]) => void },
+      ): Promise<never> {
+        options.onProgress?.([{ kind: "text" }]);
+        return Promise.reject(new Error("Cancelled."));
+      }
+    }
+    const ctrl = new PipelinesController({
+      host,
+      pipelineStore,
+      runStore,
+      runner: new StubAutomationRunner({ workerDurationMs: 1, judgeDurationMs: 1 }),
+      deterministic: new StubDeterministicRunner(),
+      actions: makeActions(),
+      clock: tick,
+      newRunId,
+      assistant: new ProgressThenFailAssistant() as unknown as PipelineAssistant,
+      assistantSessions: sessions,
+      workspaceCwd: () => null,
+    });
+    pipelineStore.save(proposed);
+
+    host.send({ type: "pipelineAssistantAsk", pipeline: proposed, conversationId: "c-reload", message: "build it", model: "default", effort: "default" });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(sessions.get(proposed.id, "c-reload"), "session must be saved on first progress, before any reply").toBeTruthy();
+    ctrl.dispose();
+  });
+});
+
+describe("PipelinesController — worker pool (bounded concurrency)", () => {
+  it("drains the list with at most K concurrent sessions and collects outputs in list order", async () => {
+    const runner = new StubAutomationRunner({ workerDurationMs: 25, judgeDurationMs: 1 });
+    const deterministic = new StubDeterministicRunner();
+    deterministic.scriptHandler = () => ({ stdout: "alpha\nbravo\ncharlie\ndelta\necho", stderr: "", exitCode: 0 });
+    const ctrl = new PipelinesController({
+      host,
+      pipelineStore,
+      runStore,
+      runner,
+      deterministic,
+      actions: makeActions(),
+      clock: tick,
+      newRunId,
+    });
+
+    const p: Pipeline = {
+      id: toPipelineId("p-pool"),
+      name: "Pool run",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      triggers: [],
+      blocks: [
+        { id: toBlockId("seed"), kind: "script", name: "Seed", interpreter: "bash", code: "echo list", outputVar: "leads" },
+        {
+          id: toBlockId("pool"),
+          kind: "pool",
+          name: "Drain",
+          listVar: "leads",
+          itemVar: "item",
+          concurrency: 2,
+          prompt: "Process ${vars.item}",
+          model: "default",
+          effort: "medium",
+          outputVar: "results",
+        },
+      ],
+    };
+    pipelineStore.save(p);
+
+    const peaks: number[] = [];
+    const poller = setInterval(() => peaks.push(runner.activeSessionCount()), 2);
+    host.send({ type: "runPipeline", pipelineId: p.id });
+    try {
+      await waitForRunCompletion(() => {
+        const runs = host.messagesOfType("runUpdate");
+        return runs.length > 0 && runs[runs.length - 1]!.run.status === "completed";
+      }, 5000);
+    } finally {
+      clearInterval(poller);
+    }
+
+    const final = host.messagesOfType("runUpdate").at(-1)!.run;
+    const poolRun = final.blocks.find((b) => b.blockId === toBlockId("pool"))!;
+    expect(poolRun.status).toBe("done");
+    expect(poolRun.sessions, "one session per list item").toHaveLength(5);
+    expect(poolRun.sessions.every((s) => s.endedAtMs !== null), "every item session finished").toBe(true);
+    expect(Math.max(...peaks, 0), "never more than the concurrency cap running at once").toBeLessThanOrEqual(2);
+
+    const lines = (final.variables["results"] ?? "").split("\n");
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toContain("alpha");
+    expect(lines[1]).toContain("bravo");
+    expect(lines[4]).toContain("echo");
+
+    ctrl.dispose();
+  });
+
+  it("fails the pool block instead of silently completing when a file list source is missing", async () => {
+    const runner = new StubAutomationRunner({ workerDurationMs: 5, judgeDurationMs: 1 });
+    const ctrl = new PipelinesController({
+      host,
+      pipelineStore,
+      runStore,
+      runner,
+      deterministic: new StubDeterministicRunner(),
+      actions: makeActions(),
+      clock: tick,
+      newRunId,
+    });
+
+    const p: Pipeline = {
+      id: toPipelineId("p-pool-missing"),
+      name: "Pool missing list",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      triggers: [],
+      blocks: [
+        {
+          id: toBlockId("pool"),
+          kind: "pool",
+          name: "Drain",
+          listVar: "missing.jsonl",
+          itemVar: "item",
+          concurrency: 2,
+          prompt: "Process ${vars.item}",
+          model: "default",
+          effort: "medium",
+          outputVar: "results",
+        },
+      ],
+    };
+    pipelineStore.save(p);
+
+    host.send({ type: "runPipeline", pipelineId: p.id });
+    await waitForRunCompletion(() => {
+      const runs = host.messagesOfType("runUpdate");
+      return runs.length > 0 && runs[runs.length - 1]!.run.status === "failed";
+    }, 5000);
+
+    const final = host.messagesOfType("runUpdate").at(-1)!.run;
+    const poolRun = final.blocks[0]!;
+    expect(poolRun.status).toBe("failed");
+    expect(poolRun.failureReason).toContain("No such file: missing.jsonl");
+    expect(poolRun.sessions).toHaveLength(0);
+    ctrl.dispose();
+  });
+
+  it("marks the pool block failed and closes sibling sessions when one pooled session crashes", async () => {
+    const runner = new StubAutomationRunner({
+      workerDurationMs: 50,
+      judgeDurationMs: 1,
+      crashOnPrompt: (prompt) => prompt.includes("bad"),
+    });
+    const deterministic = new StubDeterministicRunner();
+    deterministic.scriptHandler = () => ({ stdout: "good\nbad\nnext", stderr: "", exitCode: 0 });
+    const ctrl = new PipelinesController({
+      host,
+      pipelineStore,
+      runStore,
+      runner,
+      deterministic,
+      actions: makeActions(),
+      clock: tick,
+      newRunId,
+    });
+
+    const p: Pipeline = {
+      id: toPipelineId("p-pool-crash"),
+      name: "Pool crash",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      triggers: [],
+      blocks: [
+        { id: toBlockId("seed"), kind: "script", name: "Seed", interpreter: "bash", code: "echo list", outputVar: "items" },
+        {
+          id: toBlockId("pool"),
+          kind: "pool",
+          name: "Drain",
+          listVar: "items",
+          itemVar: "item",
+          concurrency: 2,
+          prompt: "Process ${vars.item}",
+          model: "default",
+          effort: "medium",
+          outputVar: "results",
+        },
+      ],
+    };
+    pipelineStore.save(p);
+
+    host.send({ type: "runPipeline", pipelineId: p.id });
+    await waitForRunCompletion(() => {
+      const runs = host.messagesOfType("runUpdate");
+      return runs.length > 0 && runs[runs.length - 1]!.run.status === "failed";
+    }, 5000);
+
+    const final = host.messagesOfType("runUpdate").at(-1)!.run;
+    const poolRun = final.blocks.find((b) => b.blockId === toBlockId("pool"))!;
+    expect(poolRun.status).toBe("failed");
+    expect(poolRun.failureReason).toContain("Terminal was closed before Claude finished responding.");
+    expect(poolRun.sessions.length).toBeGreaterThanOrEqual(2);
+    expect(poolRun.sessions.every((session) => session.endedAtMs !== null)).toBe(true);
+    ctrl.dispose();
+  });
+});
+
+describe("PipelinesController — orphaned run reconciliation + resume", () => {
+  it("marks a persisted 'running' run as interrupted on startup, then resumeRun finishes it from the next pending block", async () => {
+    const p = pipeline("p-orphan", "Orphan", [block("a", "A", "do a"), block("b", "B", "do b")]);
+    pipelineStore.save(p);
+
+    let seed = initialRunState(p, newRunId(), tick());
+    seed = applyBlockSpawned(seed, toBlockId("a"), "sess-a", "do a", tick());
+    seed = applyBlockStopped(seed, toBlockId("a"), tick());
+    seed = applyDecision(seed, toBlockId("a"), { kind: "success", summary: "A done" }, tick());
+    expect(seed.status).toBe("running");
+    runStore.save(seed);
+    const runId = seed.runId;
+
+    makeController();
+    expect(runStore.get(runId)!.status, "orphaned running run is reconciled to interrupted").toBe("interrupted");
+
+    host.send({ type: "resumeRun", runId });
+    await waitForRunCompletion(() => {
+      const runs = host.messagesOfType("runUpdate");
+      return runs.length > 0 && runs[runs.length - 1]!.run.status === "completed";
+    });
+
+    const final = host.messagesOfType("runUpdate").at(-1)!.run;
+    expect(final.blocks.find((b) => b.blockId === toBlockId("a"))!.status).toBe("done");
+    expect(final.blocks.find((b) => b.blockId === toBlockId("b"))!.status).toBe("done");
+  });
+
+  it("loading a stale 'running' run (engine not driving it) returns it as interrupted, never stuck running", () => {
+    const p = pipeline("p-stale", "Stale", [block("a", "A", "do a"), block("b", "B", "do b")]);
+    pipelineStore.save(p);
+    let seed = initialRunState(p, newRunId(), tick());
+    seed = applyBlockSpawned(seed, toBlockId("a"), "sess-a", "do a", tick());
+    seed = applyBlockStopped(seed, toBlockId("a"), tick());
+    seed = applyDecision(seed, toBlockId("a"), { kind: "success", summary: "A" }, tick());
+    runStore.save(seed);
+
+    makeController();
+    host.send({ type: "loadRun", runId: seed.runId });
+
+    const update = host.messagesOfType("runUpdate").at(-1)!.run;
+    expect(update.runId).toBe(seed.runId);
+    expect(update.status, "a run with no live engine is never reported as still running").toBe("interrupted");
+  });
+});
+
+describe("PipelinesController — input table (pause for user rows, then drain)", () => {
+  it("pauses for the user to fill the table, then feeds the rows into a downstream pool in order", async () => {
+    const runner = new StubAutomationRunner({ workerDurationMs: 5, judgeDurationMs: 1 });
+    const ctrl = new PipelinesController({
+      host,
+      pipelineStore,
+      runStore,
+      runner,
+      deterministic: new StubDeterministicRunner(),
+      actions: makeActions(),
+      clock: tick,
+      newRunId,
+    });
+
+    const p: Pipeline = {
+      id: toPipelineId("p-input"),
+      name: "Input run",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      triggers: [],
+      blocks: [
+        {
+          id: toBlockId("in1"),
+          kind: "input",
+          name: "Collect leads",
+          message: "Fill one row per lead.",
+          columns: [
+            { key: "site", label: "Site", type: "url", options: [], required: true, help: null },
+            { key: "category", label: "Category", type: "enum", options: ["Massage", "Hair salon"], required: true, help: null },
+          ],
+          outputVar: "rows",
+        },
+        {
+          id: toBlockId("pool"),
+          kind: "pool",
+          name: "Drain",
+          listVar: "rows",
+          itemVar: "row",
+          concurrency: 2,
+          prompt: "Build a mockup for ${row}",
+          model: "default",
+          effort: "medium",
+          outputVar: "results",
+        },
+      ],
+    };
+    pipelineStore.save(p);
+
+    host.send({ type: "runPipeline", pipelineId: p.id });
+
+    await waitForRunCompletion(() =>
+      host.messagesOfType("runUpdate").some((m) => m.run.status === "paused-needs-input"),
+    );
+    const paused = host.messagesOfType("runUpdate").map((m) => m.run).find((r) => r.status === "paused-needs-input")!;
+    expect(paused.blocks.find((b) => b.blockId === toBlockId("in1"))!.status).toBe("stuck");
+    expect(paused.blocks.find((b) => b.blockId === toBlockId("pool"))!.status).toBe("pending");
+
+    await flushMicrotasks();
+
+    host.send({
+      type: "submitInput",
+      runId: paused.runId,
+      blockId: toBlockId("in1"),
+      rows: [
+        { site: "https://a.test", category: "Massage" },
+        { site: "https://b.test", category: "Hair salon" },
+        { site: "https://c.test", category: "Massage" },
+      ],
+    });
+
+    await waitForRunCompletion(() => {
+      const runs = host.messagesOfType("runUpdate");
+      return runs.length > 0 && runs[runs.length - 1]!.run.status === "completed";
+    }, 5000);
+
+    const final = host.messagesOfType("runUpdate").at(-1)!.run;
+    const rowsVar = (final.variables["rows"] ?? "").split("\n");
+    expect(rowsVar).toHaveLength(3);
+    expect(JSON.parse(rowsVar[0]!)).toEqual({ site: "https://a.test", category: "Massage" });
+    const poolRun = final.blocks.find((b) => b.blockId === toBlockId("pool"))!;
+    expect(poolRun.status).toBe("done");
+    expect(poolRun.sessions, "one session per submitted row").toHaveLength(3);
+    expect((final.variables["results"] ?? "").split("\n")).toHaveLength(3);
+    expect(
+      poolRun.sessions[0]!.promptSent,
+      "the bare \\${row} item reference is substituted with the row JSON, not passed literally",
+    ).toContain("https://a.test");
+    expect(poolRun.sessions[0]!.promptSent).not.toContain("${row}");
+
+    ctrl.dispose();
   });
 });

@@ -11,18 +11,21 @@ import type {
   FileOperation,
   HttpBlock,
   HttpMethod,
+  InputBlock,
+  InputColumnType,
   Interpreter,
   LlmBlock,
   LoopBlock,
   MapBlock,
   ParallelBlock,
+  PoolBlock,
   ReduceBlock,
   ReduceMode,
   ScriptBlock,
   WaitBlock,
   WorkerBlock,
 } from "../../../src/features/pipelines/domain/types";
-import { toBlockId } from "../../../src/features/pipelines/domain/types";
+import { clampConcurrency, toBlockId } from "../../../src/features/pipelines/domain/types";
 import {
   ICON_APPROVAL,
   ICON_CONDITION,
@@ -30,6 +33,7 @@ import {
   ICON_FILE,
   ICON_FILE_TEXT,
   ICON_HTTP,
+  ICON_INPUT,
   ICON_MAP,
   ICON_PARALLEL,
   ICON_REDUCE,
@@ -43,6 +47,7 @@ import {
 import {
   FILE_OP_OPTIONS,
   HTTP_METHOD_OPTIONS,
+  INPUT_COLUMN_TYPE_OPTIONS,
   INTERPRETER_OPTIONS,
   REDUCE_MODE_OPTIONS,
 } from "./pipelineCatalog.js";
@@ -116,8 +121,14 @@ export class PipelineInspectors {
       case "map":
         this.renderMapInspector(block);
         return;
+      case "pool":
+        this.renderPoolInspector(block);
+        return;
       case "approval":
         this.renderApprovalInspector(block);
+        return;
+      case "input":
+        this.renderInputInspector(block);
         return;
       default:
         assertNever(block);
@@ -871,6 +882,95 @@ export class PipelineInspectors {
     this.host.panelBody.appendChild(form);
   }
 
+  private renderPoolInspector(block: PoolBlock): void {
+    const form = h("div", { className: "pl-inspector-form" });
+    form.appendChild(identitySection(block.name, "Name", (v) =>
+      this.host.updateBlock(block.id, (b) => ({ ...(b as PoolBlock), name: v })),
+    ));
+
+    form.appendChild(
+      inspectorSection(
+        ICON_MAP,
+        "Items",
+        h(
+          "div",
+          { style: { display: "flex", flexDirection: "column", gap: "12px" } },
+          h(
+            "div",
+            { className: "pl-field" },
+            h("label", { className: "pl-field-label", textContent: "List source (variable or a file in the workspace)" }),
+            bareTextInput(block.listVar, (v) => this.host.updateBlock(block.id, (b) => ({ ...(b as PoolBlock), listVar: v }))),
+            h("div", { className: "pl-field-hint", textContent: "A variable name, ${vars.X}, ${blocks.ID.output}, or a path like leads.jsonl. One item per line." }),
+          ),
+          h(
+            "div",
+            { className: "pl-field" },
+            h("label", { className: "pl-field-label", textContent: "Item variable name" }),
+            bareTextInput(block.itemVar, (v) => this.host.updateBlock(block.id, (b) => ({ ...(b as PoolBlock), itemVar: v }))),
+            h("div", { className: "pl-field-hint", textContent: "Each item is exposed to the prompt as ${vars.<name>}." }),
+          ),
+        ),
+      ),
+    );
+
+    const concurrencyInput = h("input", {
+      className: "pl-field-input",
+      attrs: { type: "number", min: "1", max: "20", step: "1" },
+      on: {
+        input: (e) => {
+          const parsed = parseInt((e.currentTarget as HTMLInputElement).value, 10);
+          if (!Number.isFinite(parsed)) return;
+          this.host.updateBlock(block.id, (b) => ({ ...(b as PoolBlock), concurrency: clampConcurrency(parsed) }));
+        },
+      },
+    }) as HTMLInputElement;
+    concurrencyInput.value = String(block.concurrency);
+    form.appendChild(
+      inspectorSection(
+        ICON_SLIDERS,
+        "Concurrency",
+        h(
+          "div",
+          { className: "pl-field" },
+          h("label", { className: "pl-field-label", textContent: "Max sessions running at once (1–20)" }),
+          concurrencyInput,
+          h("div", { className: "pl-field-hint", textContent: "Each running item is a tool-enabled Claude session. Pick what your machine can handle." }),
+        ),
+      ),
+    );
+
+    const prompt = boundTextarea(block.prompt, "Prompt run once per item…", "pl-block-prompt", (v) =>
+      this.host.updateBlock(block.id, (b) => ({ ...(b as PoolBlock), prompt: v })),
+    );
+    form.appendChild(inspectorSection(ICON_FILE_TEXT, "Per-item prompt", h("div", {}, prompt, refHint())));
+
+    form.appendChild(
+      inspectorSection(
+        ICON_SLIDERS,
+        "Execution",
+        h(
+          "div",
+          { style: { display: "flex", flexDirection: "column", gap: "12px" } },
+          fieldModel(block.model, (v) => this.host.updateBlock(block.id, (b) => ({ ...(b as PoolBlock), model: v }))),
+          fieldEffort(block.effort, (v) => this.host.updateBlock(block.id, (b) => ({ ...(b as PoolBlock), effort: v }))),
+        ),
+      ),
+    );
+
+    form.appendChild(
+      inspectorSection(
+        ICON_TAG,
+        "Output",
+        outputVarField(block.outputVar, (v) =>
+          this.host.updateBlock(block.id, (b) => ({ ...(b as PoolBlock), outputVar: v })),
+        ),
+      ),
+    );
+
+    form.appendChild(dangerRemoveSection(() => this.host.removeBlock(block.id)));
+    this.host.panelBody.appendChild(form);
+  }
+
   private renderApprovalInspector(block: ApprovalBlock): void {
     const form = h("div", { className: "pl-inspector-form" });
     form.appendChild(identitySection(block.name, "Name", (v) =>
@@ -884,6 +984,135 @@ export class PipelineInspectors {
 
     form.appendChild(dangerRemoveSection(() => this.host.removeBlock(block.id)));
     this.host.panelBody.appendChild(form);
+  }
+
+  private renderInputInspector(block: InputBlock): void {
+    const form = h("div", { className: "pl-inspector-form" });
+    form.appendChild(identitySection(block.name, "Name", (v) =>
+      this.host.updateBlock(block.id, (b) => ({ ...(b as InputBlock), name: v })),
+    ));
+
+    const message = boundTextarea(block.message, "Message shown above the table when the run pauses…", "pl-block-prompt", (v) =>
+      this.host.updateBlock(block.id, (b) => ({ ...(b as InputBlock), message: v })),
+    );
+    form.appendChild(inspectorSection(ICON_INPUT, "Prompt", h("div", {}, message, refHint())));
+
+    form.appendChild(
+      inspectorSection(ICON_SLIDERS, "Columns", this.inputColumnsEditor(block), { meta: String(block.columns.length) }),
+    );
+
+    form.appendChild(
+      inspectorSection(
+        ICON_TAG,
+        "Output",
+        outputVarField(block.outputVar, (v) =>
+          this.host.updateBlock(block.id, (b) => ({ ...(b as InputBlock), outputVar: v })),
+        ),
+      ),
+    );
+
+    form.appendChild(dangerRemoveSection(() => this.host.removeBlock(block.id)));
+    this.host.panelBody.appendChild(form);
+  }
+
+  private inputColumnsEditor(block: InputBlock): HTMLElement {
+    const container = h("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } });
+    block.columns.forEach((column, index) => {
+      const row = h("div", { style: { display: "flex", flexDirection: "column", gap: "6px" } });
+      row.appendChild(
+        h(
+          "div",
+          { style: { display: "flex", gap: "8px", alignItems: "center" } },
+          bareTextInput(column.key, (v) =>
+            this.host.updateBlock(block.id, (b) => ({
+              ...(b as InputBlock),
+              columns: (b as InputBlock).columns.map((c, i) => (i === index ? { ...c, key: v } : c)),
+            })),
+          ),
+          bareTextInput(column.label, (v) =>
+            this.host.updateBlock(block.id, (b) => ({
+              ...(b as InputBlock),
+              columns: (b as InputBlock).columns.map((c, i) => (i === index ? { ...c, label: v } : c)),
+            })),
+          ),
+          selectFromOptions(INPUT_COLUMN_TYPE_OPTIONS, column.type, (v) => {
+            this.host.updateBlock(block.id, (b) => ({
+              ...(b as InputBlock),
+              columns: (b as InputBlock).columns.map((c, i) => (i === index ? { ...c, type: v as InputColumnType } : c)),
+            }));
+            this.host.refreshInspectorOnly();
+          }),
+          h("button", {
+            className: "pl-btn ghost",
+            attrs: { type: "button", title: "Remove column" },
+            textContent: "✕",
+            on: {
+              click: () => {
+                this.host.updateBlock(block.id, (b) => ({
+                  ...(b as InputBlock),
+                  columns: (b as InputBlock).columns.filter((_, i) => i !== index),
+                }));
+                this.host.refreshInspectorOnly();
+              },
+            },
+          }),
+        ),
+      );
+      const requiredLabel = h(
+        "label",
+        { style: { display: "flex", gap: "6px", alignItems: "center", fontSize: "12px", opacity: "0.85" } },
+        h("input", {
+          attrs: { type: "checkbox", ...(column.required ? { checked: "" } : {}) },
+          on: {
+            change: (e) =>
+              this.host.updateBlock(block.id, (b) => ({
+                ...(b as InputBlock),
+                columns: (b as InputBlock).columns.map((c, i) =>
+                  i === index ? { ...c, required: (e.currentTarget as HTMLInputElement).checked } : c,
+                ),
+              })),
+          },
+        }),
+        h("span", { textContent: "Required" }),
+      );
+      row.appendChild(requiredLabel);
+      if (column.type === "enum") {
+        const opts = h(
+          "div",
+          { className: "pl-field" },
+          h("label", { className: "pl-field-label", textContent: "Dropdown options (comma separated)" }),
+          bareTextInput(column.options.join(", "), (v) =>
+            this.host.updateBlock(block.id, (b) => ({
+              ...(b as InputBlock),
+              columns: (b as InputBlock).columns.map((c, i) =>
+                i === index
+                  ? { ...c, options: v.split(",").map((s) => s.trim()).filter((s) => s.length > 0) }
+                  : c,
+              ),
+            })),
+          ),
+        );
+        row.appendChild(opts);
+      }
+      container.appendChild(row);
+    });
+    container.appendChild(
+      h("button", {
+        className: "pl-btn ghost",
+        attrs: { type: "button" },
+        textContent: "+ Add column",
+        on: {
+          click: () => {
+            this.host.updateBlock(block.id, (b) => ({
+              ...(b as InputBlock),
+              columns: [...(b as InputBlock).columns, { key: "", label: "", type: "text", options: [], required: false, help: null }],
+            }));
+            this.host.refreshInspectorOnly();
+          },
+        },
+      }),
+    );
+    return container;
   }
 
   private blocksAfter(blockId: string): readonly Block[] {

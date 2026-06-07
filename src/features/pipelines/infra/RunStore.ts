@@ -28,6 +28,7 @@ export class RunStore {
         runId: state.runId,
         pipelineId: state.pipelineId,
         pipelineName: state.pipelineSnapshot.name,
+        name: state.name,
         startedAtMs: state.startedAtMs,
         endedAtMs: state.endedAtMs,
         status: state.status,

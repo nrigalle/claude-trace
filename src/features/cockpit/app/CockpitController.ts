@@ -559,14 +559,14 @@ export class CockpitController {
     for (const sessionId of this.managed.keys()) {
       const captured = this.deps.terminals.captureHistory(sessionId);
       if (captured !== null && captured.length > 0) {
-        this.deps.host.postMessage({ type: "terminalData", sessionId, data: captured });
+        this.deps.host.postMessage({ type: "terminalData", sessionId, data: captured, replay: true });
         continue;
       }
       if (captured === "" && this.deps.terminals.isAlive(sessionId) && this.deps.terminals.forceRedraw(sessionId)) {
         continue;
       }
       for (const data of this.deps.terminalHistoryStore.read(sessionId)) {
-        this.deps.host.postMessage({ type: "terminalData", sessionId, data });
+        this.deps.host.postMessage({ type: "terminalData", sessionId, data, replay: true });
       }
     }
   }

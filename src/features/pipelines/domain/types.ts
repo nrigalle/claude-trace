@@ -142,11 +142,53 @@ export interface MapBlock {
   readonly outputVar: string | null;
 }
 
+export interface PoolBlock {
+  readonly id: BlockId;
+  readonly kind: "pool";
+  readonly name: string;
+  readonly listVar: string;
+  readonly itemVar: string;
+  readonly concurrency: number;
+  readonly prompt: string;
+  readonly model: ModelChoice;
+  readonly effort: EffortLevel;
+  readonly outputVar: string | null;
+}
+
+export const POOL_MIN_CONCURRENCY = 1;
+export const POOL_MAX_CONCURRENCY = 20;
+
+export const clampConcurrency = (n: number): number => {
+  const rounded = Math.round(n);
+  if (!Number.isFinite(rounded)) return POOL_MIN_CONCURRENCY;
+  return Math.max(POOL_MIN_CONCURRENCY, Math.min(POOL_MAX_CONCURRENCY, rounded));
+};
+
 export interface ApprovalBlock {
   readonly id: BlockId;
   readonly kind: "approval";
   readonly name: string;
   readonly message: string;
+}
+
+export type InputColumnType = "text" | "url" | "enum";
+
+export interface InputColumn {
+  readonly key: string;
+  readonly label: string;
+  readonly type: InputColumnType;
+  readonly options: readonly string[];
+  readonly required: boolean;
+  readonly help: string | null;
+}
+
+export interface InputBlock {
+  readonly id: BlockId;
+  readonly kind: "input";
+  readonly name: string;
+  readonly message: string;
+  readonly columns: readonly InputColumn[];
+  readonly outputVar: string | null;
 }
 
 export type Block =
@@ -162,7 +204,9 @@ export type Block =
   | LlmBlock
   | EvaluatorBlock
   | MapBlock
-  | ApprovalBlock;
+  | PoolBlock
+  | ApprovalBlock
+  | InputBlock;
 export type BlockKind = Block["kind"];
 
 export const isDeterministicBlock = (
@@ -212,7 +256,8 @@ export type BlockStatus =
   | "done"
   | "skipped"
   | "stuck"
-  | "failed";
+  | "failed"
+  | "interrupted";
 
 export interface BlockSessionRecord {
   readonly sessionId: string;
@@ -247,6 +292,7 @@ export interface BlockRun {
   readonly sessions: readonly BlockSessionRecord[];
   readonly parallel: ParallelRunState | null;
   readonly output: string | null;
+  readonly logTail?: string | null;
   readonly stuckReason: string | null;
   readonly failureReason: string | null;
   readonly startedAtMs: number | null;
@@ -284,6 +330,7 @@ export type RunStatus =
 export interface RunState {
   readonly runId: RunId;
   readonly pipelineId: PipelineId;
+  readonly name: string;
   readonly pipelineSnapshot: Pipeline;
   readonly startedAtMs: number;
   readonly endedAtMs: number | null;

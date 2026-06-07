@@ -15,6 +15,7 @@ import type {
   TimelineEvent,
 } from "../../../shared/infra/assistant/claudeChatEngine";
 import { ChatAssistantBase } from "../../../shared/infra/assistant/chatAssistantBase";
+import { copyPastePromptProtocol, roleAnchor, type AssistantRole } from "../../../shared/assistant/readOnlyAssistant";
 import type {
   AssistantContext,
   AssistantMode,
@@ -66,6 +67,11 @@ const ASSISTANT_CWD_ROOT = path.join(TRACE_DATA_DIR, "library-assistant");
 const ASSISTANT_SIGNALS_DIR = path.join(TRACE_DATA_DIR, "library-assistant", "signals");
 const ASSISTANT_HOOKS_DIR = path.join(TRACE_DATA_DIR, "library-assistant", "hooks");
 
+const LIBRARY_ROLE: AssistantRole = {
+  label: "Claude Trace skill & agent author",
+  deliverable: "the complete body markdown as your final text block, which the UI saves",
+};
+
 export class LibraryAssistant extends ChatAssistantBase {
   constructor(config: LibraryAssistantConfig = {}) {
     super({
@@ -77,6 +83,8 @@ export class LibraryAssistant extends ChatAssistantBase {
       signalsDir: ASSISTANT_SIGNALS_DIR,
       hooksDir: ASSISTANT_HOOKS_DIR,
       hooks: config.hooks,
+      readOnly: true,
+      turnReminder: roleAnchor(LIBRARY_ROLE),
     });
   }
 
@@ -162,7 +170,8 @@ export const systemPromptFor = (ctx: AssistantContext, mode: AssistantMode, cata
     "2026 Claude Code format reference:",
     formatRules,
     "",
-    "You have full tools available and they run without approval prompts. Use them when they genuinely help draft this content (e.g. WebSearch to confirm current best practices, or Read/Grep on a repo the user points you at). This panel streams like a terminal but has no interactive picker, so ask any clarifying question as plain text and end your turn rather than using a multiple-choice question tool or plan mode.",
+    "Your tools are read-only — use them when they genuinely help draft this content (e.g. WebSearch to confirm current best practices, or Read/Grep on a repo the user points you at). This panel streams like a terminal but has no interactive picker, so ask any clarifying question as plain text and end your turn rather than using a multiple-choice question tool or plan mode.",
+    copyPastePromptProtocol(LIBRARY_ROLE),
     "",
     "Response rules:",
     modeRules,

@@ -32,6 +32,7 @@ const PIPELINES_MESSAGE_TYPE_TABLE: Record<PipelinesHostToWebview["type"], true>
   pipelinesList: true,
   pipelineDetail: true,
   runUpdate: true,
+  sessionTranscript: true,
   validationFailed: true,
   notice: true,
   pipelineAssistantReply: true,

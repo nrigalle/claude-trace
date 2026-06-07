@@ -20,6 +20,10 @@ export class ChatAssistantBase {
     this.engine.cancel(conversationId);
   }
 
+  isBusy(conversationId: string): boolean {
+    return this.engine.isBusy(conversationId);
+  }
+
   adopt(conversationId: string, sessionId: string, sessionCwd: string): void {
     this.engine.adopt(conversationId, sessionId, sessionCwd);
   }

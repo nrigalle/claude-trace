@@ -162,8 +162,6 @@ const inputBox = (status) =>
   `${C.dim}${rule("╰", "─", "╯")}${C.reset}\r\n` +
   `  ${C.dim}⏵⏵ accept edits on${C.reset}  ${C.dim}·${C.reset}  ${C.dim}${status}${C.reset}`;
 
-// Mimics the real Claude Code TUI: ⏺ tool bullets, ⎿ result connectors,
-// an assistant turn, then the rounded input box and status line.
 const claudeScreen = (cwd, model, lines) =>
   `\x1b[2J\x1b[H` +
   `${C.dim}  ${cwd}${C.reset}\r\n\r\n` +

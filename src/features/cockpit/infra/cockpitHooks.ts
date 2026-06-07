@@ -1,4 +1,4 @@
-const shQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
+export const shQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 
 const markerCommand = (signalsDir: string, sessionId: string, kind: string): string => {
   const dir = signalsDir.replace(/\\/g, "/");

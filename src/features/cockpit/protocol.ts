@@ -35,7 +35,7 @@ export interface CockpitLayout {
 
 export type CockpitHostToWebview =
   | { readonly type: "cockpitState"; readonly state: CockpitState }
-  | { readonly type: "terminalData"; readonly sessionId: string; readonly data: string }
+  | { readonly type: "terminalData"; readonly sessionId: string; readonly data: string; readonly replay?: boolean }
   | { readonly type: "terminalExit"; readonly sessionId: string; readonly exitCode: number }
   | { readonly type: "terminalAttention"; readonly sessionId: string; readonly reason: "stop" | "notify" }
   | { readonly type: "terminalActive"; readonly sessionId: string }

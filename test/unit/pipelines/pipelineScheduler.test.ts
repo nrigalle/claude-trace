@@ -6,6 +6,7 @@ import {
   applyBlockStopped,
   applyDecision,
   applyInterrupted,
+  applyResumeInterrupted,
   initialRunState,
   nextPendingBlock,
 } from "../../../src/features/pipelines/domain/scheduler";
@@ -184,13 +185,54 @@ describe("failure paths", () => {
     expect(s.endedAtMs).toBe(99);
   });
 
-  it("applyInterrupted marks the run as interrupted without altering individual blocks", () => {
+  it("applyBlockCrashed closes every open session on the failed block", () => {
+    let s = initialRunState(threeStep(), toRunId("r1"), 0);
+    s = applyBlockSpawned(s, toBlockId("a"), "session-a", "p1", 0);
+    s = applyBlockSpawned(s, toBlockId("a"), "session-b", "p2", 1);
+    s = applyBlockCrashed(s, toBlockId("a"), "process exited 137", 99);
+    expect(s.blocks[0]!.sessions.map((session) => session.endedAtMs)).toEqual([99, 99]);
+  });
+
+  it("applyInterrupted marks EVERY not-done block interrupted (in-flight and never-started), closing open sessions", () => {
     let s = initialRunState(threeStep(), toRunId("r1"), 0);
     s = applyBlockSpawned(s, toBlockId("a"), "session-a", "p", 0);
     s = applyInterrupted(s, 500);
     expect(s.status).toBe("interrupted");
     expect(s.endedAtMs).toBe(500);
-    expect(s.blocks[0]!.status).toBe("running");
+    expect(s.blocks[0]!.status).toBe("interrupted");
+    expect(s.blocks[0]!.endedAtMs).toBe(500);
+    expect(s.blocks[0]!.sessions[0]!.endedAtMs).toBe(500);
+    expect(s.blocks[1]!.status).toBe("interrupted");
+    expect(s.blocks[1]!.endedAtMs).toBeNull();
+    expect(s.blocks[2]!.status).toBe("interrupted");
+    expect(s.blocks[2]!.endedAtMs).toBeNull();
+  });
+
+  it("applyInterrupted leaves already-finished blocks untouched", () => {
+    let s = initialRunState(threeStep(), toRunId("r1"), 0);
+    s = applyBlockSpawned(s, toBlockId("a"), "session-a", "p", 0);
+    s = applyBlockStopped(s, toBlockId("a"), 0);
+    s = applyDecision(s, toBlockId("a"), { kind: "success", summary: "ok" }, 20);
+    s = applyInterrupted(s, 500);
+    expect(s.blocks[0]!.status).toBe("done");
+    expect(s.blocks[0]!.endedAtMs).toBe(20);
+  });
+
+  it("applyResumeInterrupted re-runs interrupted blocks (pending) and sets the run back to running, leaving done blocks alone", () => {
+    let s = initialRunState(threeStep(), toRunId("r1"), 0);
+    s = applyBlockSpawned(s, toBlockId("a"), "session-a", "p", 0);
+    s = applyBlockStopped(s, toBlockId("a"), 0);
+    s = applyDecision(s, toBlockId("a"), { kind: "success", summary: "ok" }, 20);
+    s = applyBlockSpawned(s, toBlockId("b"), "session-b", "p", 30);
+    s = applyInterrupted(s, 500);
+    expect(s.blocks[1]!.status).toBe("interrupted");
+    const r = applyResumeInterrupted(s);
+    expect(r.status).toBe("running");
+    expect(r.endedAtMs).toBeNull();
+    expect(r.blocks[0]!.status).toBe("done");
+    expect(r.blocks[1]!.status).toBe("pending");
+    expect(r.blocks[2]!.status).toBe("pending");
+    expect(nextPendingBlock(r)).toBe(toBlockId("b"));
   });
 });
 

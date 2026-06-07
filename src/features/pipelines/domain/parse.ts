@@ -1,4 +1,5 @@
 import {
+  clampConcurrency,
   toBlockId,
   toPipelineId,
   toRunId,
@@ -15,11 +16,15 @@ import {
   type HttpBlock,
   type HttpHeader,
   type HttpMethod,
+  type InputBlock,
+  type InputColumn,
+  type InputColumnType,
   type Interpreter,
   type LlmBlock,
   type LoopBlock,
   type MapBlock,
   type ParallelBlock,
+  type PoolBlock,
   type ReduceBlock,
   type ReduceMode,
   type ScriptBlock,
@@ -56,9 +61,11 @@ const BLOCK_STATUS_VALUES: readonly BlockStatus[] = [
   "skipped",
   "stuck",
   "failed",
+  "interrupted",
 ];
 
 const INTERPRETER_VALUES: readonly Interpreter[] = ["bash", "sh", "python", "node"];
+const INPUT_COLUMN_TYPE_VALUES: readonly InputColumnType[] = ["text", "url", "enum"];
 const HTTP_METHOD_VALUES: readonly HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 const FILE_OP_VALUES: readonly FileOperation[] = ["write", "read"];
 const REDUCE_MODE_VALUES: readonly ReduceMode[] = ["concat", "llm"];
@@ -196,12 +203,41 @@ const serializeBlock = (b: Block): unknown => {
         effort: b.effort,
         outputVar: b.outputVar,
       };
+    case "pool":
+      return {
+        id: b.id,
+        kind: "pool",
+        name: b.name,
+        listVar: b.listVar,
+        itemVar: b.itemVar,
+        concurrency: b.concurrency,
+        prompt: b.prompt,
+        model: b.model,
+        effort: b.effort,
+        outputVar: b.outputVar,
+      };
     case "approval":
       return {
         id: b.id,
         kind: "approval",
         name: b.name,
         message: b.message,
+      };
+    case "input":
+      return {
+        id: b.id,
+        kind: "input",
+        name: b.name,
+        message: b.message,
+        columns: b.columns.map((c) => ({
+          key: c.key,
+          label: c.label,
+          type: c.type,
+          options: c.options,
+          required: c.required,
+          help: c.help,
+        })),
+        outputVar: b.outputVar,
       };
     default:
       return assertNever(b);
@@ -327,8 +363,12 @@ const parseBlock = (raw: unknown): Block | null => {
       return parseEvaluator(raw);
     case "map":
       return parseMap(raw);
+    case "pool":
+      return parsePool(raw);
     case "approval":
       return parseApproval(raw);
+    case "input":
+      return parseInput(raw);
     default:
       return null;
   }
@@ -340,6 +380,36 @@ const parseApproval = (raw: Record<string, unknown>): ApprovalBlock | null => {
   const message = asString(raw["message"]);
   if (id === null || name === null || message === null) return null;
   return { id: toBlockId(id), kind: "approval", name, message };
+};
+
+const parseInput = (raw: Record<string, unknown>): InputBlock | null => {
+  const id = asString(raw["id"]);
+  const name = asString(raw["name"]);
+  const message = asString(raw["message"]);
+  const outputVar = asNullableVarName(raw["outputVar"]);
+  const columnsRaw = raw["columns"];
+  if (id === null || name === null || message === null || outputVar === undefined) return null;
+  if (!Array.isArray(columnsRaw)) return null;
+  const columns: InputColumn[] = [];
+  for (const c of columnsRaw) {
+    if (!isObj(c)) return null;
+    const key = asString(c["key"]);
+    const label = asString(c["label"]);
+    const type = asEnum(c["type"], INPUT_COLUMN_TYPE_VALUES);
+    if (key === null || label === null || type === null) return null;
+    const optionsRaw = c["options"];
+    const options: string[] = [];
+    if (Array.isArray(optionsRaw)) {
+      for (const o of optionsRaw) {
+        const s = asString(o);
+        if (s !== null) options.push(s);
+      }
+    }
+    const required = c["required"] === true;
+    const help = c["help"] === null || c["help"] === undefined ? null : asString(c["help"]);
+    columns.push({ key, label, type, options, required, help });
+  }
+  return { id: toBlockId(id), kind: "input", name, message, columns, outputVar };
 };
 
 const parseLlm = (raw: Record<string, unknown>): LlmBlock | null => {
@@ -376,6 +446,32 @@ const parseMap = (raw: Record<string, unknown>): MapBlock | null => {
   if (id === null || name === null || listVar === null || itemVar === null || prompt === null) return null;
   if (model === null || effort === null || outputVar === undefined) return null;
   return { id: toBlockId(id), kind: "map", name, listVar, itemVar, prompt, model, effort, outputVar };
+};
+
+const parsePool = (raw: Record<string, unknown>): PoolBlock | null => {
+  const id = asString(raw["id"]);
+  const name = asString(raw["name"]);
+  const listVar = asString(raw["listVar"]);
+  const itemVar = asString(raw["itemVar"]);
+  const concurrency = asNumber(raw["concurrency"]);
+  const prompt = asString(raw["prompt"]);
+  const model = asEnum(raw["model"], MODEL_VALUES);
+  const effort = asEnum(raw["effort"], EFFORT_VALUES);
+  const outputVar = asNullableVarName(raw["outputVar"]);
+  if (id === null || name === null || listVar === null || itemVar === null || prompt === null) return null;
+  if (concurrency === null || model === null || effort === null || outputVar === undefined) return null;
+  return {
+    id: toBlockId(id),
+    kind: "pool",
+    name,
+    listVar,
+    itemVar,
+    concurrency: clampConcurrency(concurrency),
+    prompt,
+    model,
+    effort,
+    outputVar,
+  };
 };
 
 const parseCondition = (raw: Record<string, unknown>): ConditionBlock | null => {
@@ -529,6 +625,7 @@ export const serializeRunState = (r: RunState): string =>
       schemaVersion: RUN_SCHEMA_VERSION,
       runId: r.runId,
       pipelineId: r.pipelineId,
+      name: r.name,
       pipelineSnapshot: JSON.parse(serializePipeline(r.pipelineSnapshot)),
       startedAtMs: r.startedAtMs,
       endedAtMs: r.endedAtMs,
@@ -551,6 +648,7 @@ const serializeBlockRun = (b: BlockRun): unknown => ({
     mergerStuckReason: b.parallel.mergerStuckReason,
   },
   output: b.output,
+  ...(b.logTail ? { logTail: b.logTail } : {}),
   stuckReason: b.stuckReason,
   failureReason: b.failureReason,
   startedAtMs: b.startedAtMs,
@@ -584,6 +682,7 @@ export const parseRunState = (raw: unknown): RunState | null => {
   return {
     runId: toRunId(runId),
     pipelineId: toPipelineId(pipelineId),
+    name: asString(raw["name"]) ?? "",
     pipelineSnapshot: pipeline,
     startedAtMs,
     endedAtMs,
@@ -629,12 +728,14 @@ const parseBlockRun = (raw: unknown): BlockRun | null => {
   }
   const outputRaw = raw["output"];
   const output = outputRaw === null || outputRaw === undefined ? null : asString(outputRaw);
+  const logTail = typeof raw["logTail"] === "string" ? raw["logTail"] : undefined;
   return {
     blockId: toBlockId(blockId),
     status,
     sessions,
     parallel,
     output,
+    ...(logTail !== undefined ? { logTail } : {}),
     stuckReason,
     failureReason,
     startedAtMs,

@@ -21,6 +21,7 @@ export const initialRunState = (
 ): RunState => ({
   runId,
   pipelineId: pipeline.id,
+  name: "",
   pipelineSnapshot: pipeline,
   startedAtMs: nowMs,
   endedAtMs: null,
@@ -138,6 +139,22 @@ export const applyWorkerOutput = (
     };
   });
 
+export const applyBlockSessionFinished = (
+  state: RunState,
+  blockId: BlockId,
+  sessionId: string,
+  output: string,
+  nowMs: number,
+): RunState =>
+  mapBlock(state, blockId, (b) => ({
+    ...b,
+    sessions: b.sessions.map((s) =>
+      s.sessionId === sessionId
+        ? { ...s, workerOutput: output, summary: output, endedAtMs: nowMs }
+        : s,
+    ),
+  }));
+
 export const applyParallelWorkerOutput = (
   state: RunState,
   blockId: BlockId,
@@ -211,15 +228,10 @@ export const applyBlockCrashed = (
   nowMs: number,
 ): RunState => {
   const next = mapBlock(state, blockId, (b) => {
-    const lastIdx = b.sessions.length - 1;
-    const sessions =
-      lastIdx >= 0
-        ? [...b.sessions.slice(0, lastIdx), { ...b.sessions[lastIdx]!, endedAtMs: nowMs }]
-        : b.sessions;
     return {
       ...b,
       status: "failed",
-      sessions,
+      sessions: closeOpenSessions(b.sessions, nowMs),
       failureReason: reason,
       endedAtMs: nowMs,
     };
@@ -227,10 +239,52 @@ export const applyBlockCrashed = (
   return { ...next, status: "failed", endedAtMs: nowMs };
 };
 
+const TERMINAL_BLOCK_STATUS: ReadonlySet<BlockStatus> = new Set(["done", "skipped", "failed", "interrupted"]);
+const isTerminalBlockStatus = (s: BlockStatus): boolean => TERMINAL_BLOCK_STATUS.has(s);
+
+const closeOpenSessions = (
+  sessions: readonly BlockSessionRecord[],
+  nowMs: number,
+): BlockSessionRecord[] =>
+  sessions.map((s) => (s.endedAtMs === null ? { ...s, endedAtMs: nowMs } : s));
+
+const interruptParallel = (parallel: ParallelRunState, nowMs: number): ParallelRunState => ({
+  ...parallel,
+  workerRuns: parallel.workerRuns.map((w) =>
+    isTerminalBlockStatus(w.status)
+      ? { ...w, sessions: closeOpenSessions(w.sessions, nowMs) }
+      : { ...w, status: "interrupted", endedAtMs: w.startedAtMs !== null ? (w.endedAtMs ?? nowMs) : w.endedAtMs, sessions: closeOpenSessions(w.sessions, nowMs) },
+  ),
+  mergerSessions: closeOpenSessions(parallel.mergerSessions, nowMs),
+  mergerStatus: isTerminalBlockStatus(parallel.mergerStatus) ? parallel.mergerStatus : "interrupted",
+});
+
+export const applyResumeInterrupted = (state: RunState): RunState => ({
+  ...state,
+  status: "running",
+  endedAtMs: null,
+  blocks: state.blocks.map((b) =>
+    b.status === "interrupted"
+      ? { ...b, status: "pending", startedAtMs: null, endedAtMs: null, stuckReason: null, failureReason: null }
+      : b,
+  ),
+});
+
 export const applyInterrupted = (state: RunState, nowMs: number): RunState => ({
   ...state,
   status: "interrupted",
   endedAtMs: nowMs,
+  blocks: state.blocks.map((b) =>
+    isTerminalBlockStatus(b.status)
+      ? { ...b, sessions: closeOpenSessions(b.sessions, nowMs), parallel: b.parallel === null ? null : interruptParallel(b.parallel, nowMs) }
+      : {
+          ...b,
+          status: "interrupted",
+          endedAtMs: b.startedAtMs !== null ? (b.endedAtMs ?? nowMs) : b.endedAtMs,
+          sessions: closeOpenSessions(b.sessions, nowMs),
+          parallel: b.parallel === null ? null : interruptParallel(b.parallel, nowMs),
+        },
+  ),
 });
 
 export const resetBlocksForLoopIteration = (
@@ -573,6 +627,8 @@ export const stuckParallelWorkers = (
   return out;
 };
 
+const LOG_TAIL_CAP = 16384;
+
 export const applyDeterministicStarted = (
   state: RunState,
   blockId: BlockId,
@@ -581,8 +637,19 @@ export const applyDeterministicStarted = (
   mapBlock(state, blockId, (b) => ({
     ...b,
     status: "running",
+    logTail: "",
     startedAtMs: b.startedAtMs ?? nowMs,
   }));
+
+export const applyDeterministicLog = (
+  state: RunState,
+  blockId: BlockId,
+  chunk: string,
+): RunState =>
+  mapBlock(state, blockId, (b) => {
+    const combined = (b.logTail ?? "") + chunk;
+    return { ...b, logTail: combined.length > LOG_TAIL_CAP ? combined.slice(combined.length - LOG_TAIL_CAP) : combined };
+  });
 
 export const applyDeterministicDone = (
   state: RunState,
@@ -671,6 +738,52 @@ export const firstApprovalAwaitingInput = (
     if (def && def.kind === "approval") return b.blockId;
   }
   return null;
+};
+
+export const applyInputPaused = (
+  state: RunState,
+  blockId: BlockId,
+  message: string,
+  nowMs: number,
+): RunState => {
+  const after = mapBlock(state, blockId, (b) => ({
+    ...b,
+    status: "stuck",
+    stuckReason: message,
+    startedAtMs: b.startedAtMs ?? nowMs,
+  }));
+  return { ...after, status: "paused-needs-input" };
+};
+
+export const firstInputAwaitingInput = (
+  state: RunState,
+): BlockId | null => {
+  for (const b of state.blocks) {
+    if (b.status !== "stuck") continue;
+    const def = state.pipelineSnapshot.blocks.find((d) => d.id === b.blockId);
+    if (def && def.kind === "input") return b.blockId;
+  }
+  return null;
+};
+
+export const applyInputSubmitted = (
+  state: RunState,
+  blockId: BlockId,
+  rows: readonly Record<string, string>[],
+  nowMs: number,
+): RunState => {
+  const value = rows.map((r) => JSON.stringify(r)).join("\n");
+  const after = mapBlock(state, blockId, (b) => ({
+    ...b,
+    status: "done",
+    stuckReason: null,
+    output: value,
+    endedAtMs: nowMs,
+  }));
+  const def = state.pipelineSnapshot.blocks.find((d) => d.id === blockId);
+  const outputVar = def && def.kind === "input" ? def.outputVar : null;
+  const withVar = outputVar !== null ? setVariable(after, outputVar, value) : after;
+  return finalizeRunIfComplete({ ...withVar, status: "running" }, nowMs);
 };
 
 export const applyBlocksSkipped = (

@@ -2,6 +2,7 @@ import type { SpawnHandle } from "./AutomationRunner";
 import { type SessionTarget } from "../protocol";
 import {
   applyBlockCrashed,
+  applyBlockSessionFinished,
   applyBlockSpawned,
   applyBlockStopped,
   applyDecision,
@@ -20,8 +21,10 @@ import {
   applyDeterministicStarted,
   applyDeterministicDone,
   applyDeterministicFailed,
+  applyDeterministicLog,
   applyBlocksSkipped,
   applyApprovalPaused,
+  applyInputPaused,
   conditionSkipRange,
   setVariable,
   blockOutputsOf,
@@ -29,10 +32,12 @@ import {
   resetBlocksForLoopIteration,
 } from "../domain/scheduler";
 import {
+  clampConcurrency,
   isDeterministicBlock,
   latestSessionId,
   type ApprovalBlock,
   type Block,
+  type InputBlock,
   type BlockId,
   type ConditionBlock,
   type EvaluatorBlock,
@@ -43,6 +48,7 @@ import {
   type MapBlock,
   type OrchestratorDecision,
   type ParallelBlock,
+  type PoolBlock,
   type ReduceBlock,
   type RunId,
   type RunState,
@@ -58,6 +64,7 @@ import type { PipelinesControllerDeps } from "./PipelinesController";
 
 const SELF_KEY = "_self";
 const MERGER_KEY = "_merger";
+const POOL_KEY = "_pool";
 const MAX_PARALLEL_WORKER_TURNS = 12;
 const MAX_MAP_ITEMS = 500;
 
@@ -231,6 +238,7 @@ const blockDispatch = (block: WorkerBlock | LoopBlock): BlockDispatch => {
 
 export class RunEngine {
   private active: ActiveRun | null = null;
+  private logBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly deps: PipelinesControllerDeps,
@@ -243,6 +251,12 @@ export class RunEngine {
 
   activeRunId(): RunId | null {
     return this.active?.runId ?? null;
+  }
+
+  renameActiveRun(name: string): RunState | null {
+    if (!this.active) return null;
+    this.active.state = { ...this.active.state, name };
+    return this.active.state;
   }
 
   async run(state: RunState): Promise<void> {
@@ -260,14 +274,31 @@ export class RunEngine {
     } finally {
       this.deps.runner.killRun(runId);
       this.active = null;
+      if (this.logBroadcastTimer !== null) {
+        clearTimeout(this.logBroadcastTimer);
+        this.logBroadcastTimer = null;
+      }
       this.onRunListChanged();
     }
+  }
+
+  private appendBlockLog(blockId: BlockId, chunk: string): void {
+    const active = this.active;
+    if (!active) return;
+    active.state = applyDeterministicLog(active.state, blockId, chunk);
+    if (this.logBroadcastTimer !== null) return;
+    this.logBroadcastTimer = setTimeout(() => {
+      this.logBroadcastTimer = null;
+      if (this.active) this.deps.host.postMessage({ type: "runUpdate", run: this.active.state });
+    }, 120);
   }
 
   kill(runId: RunId): void {
     if (!this.active || this.active.runId !== runId) return;
     this.active.abort.abort();
     this.deps.runner.killRun(runId);
+    this.active.state = applyInterrupted(this.active.state, this.deps.clock());
+    this.persistAndBroadcastRun();
   }
 
   reveal(runId: RunId, blockId: BlockId, target: SessionTarget, sessionId: string | null): void {
@@ -321,8 +352,12 @@ export class RunEngine {
           decisionKind = await this.runEvaluatorBlock(block);
         } else if (block.kind === "map") {
           decisionKind = await this.runMapBlock(block);
+        } else if (block.kind === "pool") {
+          decisionKind = await this.runPoolBlock(block);
         } else if (block.kind === "approval") {
           decisionKind = await this.runApprovalBlock(block);
+        } else if (block.kind === "input") {
+          decisionKind = await this.runInputBlock(block);
         } else if (isDeterministicBlock(block)) {
           decisionKind = await this.runDeterministicBlock(block);
         } else {
@@ -378,7 +413,7 @@ export class RunEngine {
     const active = this.active!;
     const blockRunBefore = active.state.blocks.find((b) => b.blockId === block.id)!;
     const dispatch = blockDispatch(block);
-    const interpolatedPrompt = interpolate(dispatch.prompt, this.interpolationCtx());
+    const interpolatedPrompt = interpolate(dispatch.prompt, this.interpolationCtx(), { bareVars: true });
     const chainedPrompt = composePromptWithUpstream(active.state, block.id, interpolatedPrompt);
     const mutators = this.linearMutators(block.id);
     const turnStartMs = this.deps.clock();
@@ -459,7 +494,7 @@ export class RunEngine {
 
   private async runLlmBlock(block: LlmBlock): Promise<"success"> {
     const active = this.active!;
-    const prompt = interpolate(block.prompt, this.interpolationCtx());
+    const prompt = interpolate(block.prompt, this.interpolationCtx(), { bareVars: true });
     const mutators = this.linearMutators(block.id);
     const { text } = await this.runSingleTurn(block.id, SELF_KEY, {
       cwd: this.runCwd(),
@@ -479,7 +514,7 @@ export class RunEngine {
 
   private async runEvaluatorBlock(block: EvaluatorBlock): Promise<"success"> {
     const active = this.active!;
-    const goal = interpolate(block.goal, this.interpolationCtx());
+    const goal = interpolate(block.goal, this.interpolationCtx(), { bareVars: true });
     const mutators = this.linearMutators(block.id);
     const { jsonlPath } = await this.runSingleTurn(block.id, SELF_KEY, {
       cwd: this.runCwd(),
@@ -524,7 +559,7 @@ export class RunEngine {
       if (active.abort.signal.aborted) throw new InterruptedError();
       const base = this.interpolationCtx();
       const ctx: InterpolationContext = { ...base, vars: { ...base.vars, [block.itemVar]: item } };
-      const prompt = interpolate(block.prompt, ctx);
+      const prompt = interpolate(block.prompt, ctx, { bareVars: true });
       const { text } = await this.runSingleTurn(block.id, SELF_KEY, {
         cwd: this.runCwd(),
         prompt,
@@ -545,10 +580,118 @@ export class RunEngine {
     return "success";
   }
 
+  private async runPoolBlock(block: PoolBlock): Promise<"success"> {
+    const active = this.active!;
+    active.state = applyDeterministicStarted(active.state, block.id, this.deps.clock());
+    this.persistAndBroadcastRun();
+
+    let outputs: string[];
+    try {
+      const items = (await this.resolvePoolItems(block)).slice(0, MAX_MAP_ITEMS);
+      outputs = new Array(items.length).fill("");
+      const concurrency = clampConcurrency(block.concurrency);
+
+      let nextIndex = 0;
+      const drainQueue = async (): Promise<void> => {
+        for (;;) {
+          if (active.abort.signal.aborted) throw new InterruptedError();
+          const index = nextIndex;
+          if (index >= items.length) return;
+          nextIndex += 1;
+          outputs[index] = await this.runPoolItem(block, index, items[index]!);
+        }
+      };
+
+      const workers = Math.min(concurrency, items.length);
+      await Promise.all(Array.from({ length: workers }, () => drainQueue()));
+      if (active.abort.signal.aborted) throw new InterruptedError();
+    } catch (err) {
+      this.releasePoolHandles(block.id);
+      if (err instanceof InterruptedError || active.abort.signal.aborted) throw new InterruptedError();
+      const reason = err instanceof Error ? err.message : String(err);
+      active.state = applyBlockCrashed(active.state, block.id, reason, this.deps.clock());
+      this.persistAndBroadcastRun();
+      throw new BlockFailedError(reason);
+    }
+
+    const combined = outputs.join("\n");
+    active.state = applyDeterministicDone(active.state, block.id, combined, this.deps.clock());
+    if (block.outputVar !== null) {
+      active.state = setVariable(active.state, block.outputVar, combined);
+    }
+    this.persistAndBroadcastRun();
+    return "success";
+  }
+
+  private async runPoolItem(block: PoolBlock, index: number, item: string): Promise<string> {
+    const active = this.active!;
+    const sub = `${POOL_KEY}#${index}`;
+    const base = this.interpolationCtx();
+    const ctx: InterpolationContext = { ...base, vars: { ...base.vars, [block.itemVar]: item } };
+    const prompt = interpolate(block.prompt, ctx, { bareVars: true });
+    const turnStartMs = this.deps.clock();
+
+    let handle: SpawnHandle;
+    try {
+      handle = await this.deps.runner.spawn({
+        runId: active.runId,
+        blockId: block.id,
+        cwd: this.runCwd(),
+        prompt,
+        model: block.model,
+        effort: block.effort,
+        resumeSessionId: null,
+        signal: active.abort.signal,
+      });
+    } catch (err) {
+      throw new BlockFailedError(err instanceof Error ? err.message : String(err));
+    }
+    active.handles.set(handleKey(block.id, sub), handle);
+    active.state = applyBlockSpawned(active.state, block.id, handle.sessionId, prompt, this.deps.clock());
+    this.persistAndBroadcastRun();
+
+    const turnEnd = await handle.waitForTurnEnd(turnStartMs, active.abort.signal);
+    if (turnEnd === "aborted") {
+      this.releaseHandle(block.id, sub);
+      throw new InterruptedError();
+    }
+    if (turnEnd === "terminal-closed") {
+      this.releaseHandle(block.id, sub);
+      throw new BlockFailedError("Terminal was closed before Claude finished responding.");
+    }
+
+    const text = handle.readLastAssistantText();
+    active.state = applyBlockSessionFinished(active.state, block.id, handle.sessionId, text, this.deps.clock());
+    this.persistAndBroadcastRun();
+    this.releaseHandle(block.id, sub);
+    return text;
+  }
+
+  private async resolvePoolItems(block: PoolBlock): Promise<string[]> {
+    const active = this.active!;
+    let listText: string;
+    if (block.listVar.includes("${")) {
+      listText = interpolate(block.listVar, this.interpolationCtx(), { bareVars: true });
+    } else if (block.listVar in active.state.variables) {
+      listText = active.state.variables[block.listVar] ?? "";
+    } else {
+      listText = await this.deps.deterministic.readFile({ cwd: this.runCwd(), path: block.listVar });
+    }
+    return listText.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  }
+
   private async runApprovalBlock(block: ApprovalBlock): Promise<never> {
     const active = this.active!;
-    const message = interpolate(block.message, this.interpolationCtx());
+    const message = interpolate(block.message, this.interpolationCtx(), { bareVars: true });
     active.state = applyApprovalPaused(active.state, block.id, message || "Waiting for approval to continue.", this.deps.clock());
+    this.persistAndBroadcastRun();
+    throw new PausedError();
+  }
+
+  private async runInputBlock(block: InputBlock): Promise<never> {
+    const active = this.active!;
+    const message = interpolate(block.message, this.interpolationCtx(), { bareVars: true });
+    active.state = applyInputPaused(active.state, block.id, message || "Fill in the table to continue.", this.deps.clock());
     this.persistAndBroadcastRun();
     throw new PausedError();
   }
@@ -592,7 +735,7 @@ export class RunEngine {
         .filter((l) => l.length > 0)
         .join(block.separator);
     } else {
-      const prompt = `${interpolate(block.mergerGoal, this.interpolationCtx())}\n\n<input>\n${input}\n</input>`;
+      const prompt = `${interpolate(block.mergerGoal, this.interpolationCtx(), { bareVars: true })}\n\n<input>\n${input}\n</input>`;
       const mutators = this.linearMutators(block.id);
       const turnStartMs = this.deps.clock();
       const handle = await this.spawnTracked(block.id, SELF_KEY, {
@@ -628,6 +771,7 @@ export class RunEngine {
           cwd: ctx.workspace,
           env: ctx.vars,
           signal,
+          onLog: (chunk) => this.appendBlockLog(block.id, chunk),
         });
         if (result.exitCode !== 0) {
           const detail = result.stderr.trim() || result.stdout.trim();
@@ -677,7 +821,7 @@ export class RunEngine {
       if (globalSignal.aborted) throw new InterruptedError();
       const restartEach = worker.restartEachIteration === true;
       const resumeId = restartEach ? null : latestSessionIdForParallelWorker(active.state, block.id, worker.id);
-      const interpolatedPrompt = interpolate(worker.prompt, this.interpolationCtx());
+      const interpolatedPrompt = interpolate(worker.prompt, this.interpolationCtx(), { bareVars: true });
       const chainedPrompt = composePromptWithUpstream(active.state, block.id, interpolatedPrompt);
       const mutators = this.parallelWorkerMutators(block.id, worker.id);
       const turnStartMs = this.deps.clock();
@@ -806,7 +950,6 @@ export class RunEngine {
           throw new BlockFailedError(reason);
         }
         active.handles.set(handleKey(parallelBlock.id, worker.id), handle);
-        handle.reveal();
         sinceMs = this.deps.clock();
       }
     } catch (err) {
@@ -891,7 +1034,6 @@ export class RunEngine {
         return { summary: decision.summary, decisionKind: decision.kind };
       }
 
-      handle.reveal();
       sinceMs = this.deps.clock();
     }
   }
@@ -933,6 +1075,17 @@ export class RunEngine {
     if (!handle) return;
     handle.dispose();
     this.active.handles.delete(key);
+  }
+
+  private releasePoolHandles(blockId: BlockId): void {
+    if (!this.active) return;
+    const prefix = handleKey(blockId, `${POOL_KEY}#`);
+    for (const key of Array.from(this.active.handles.keys())) {
+      if (!key.startsWith(prefix)) continue;
+      const handle = this.active.handles.get(key);
+      handle?.dispose();
+      this.active.handles.delete(key);
+    }
   }
 
   private runCwd(): string {

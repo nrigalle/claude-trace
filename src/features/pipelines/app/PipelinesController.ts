@@ -11,9 +11,14 @@ import type {
 } from "../protocol";
 import { assertNeverPipelines, type SessionTarget } from "../protocol";
 import { extractProposedPipeline } from "../domain/assistantProposal";
+import { readRunSessionTranscript } from "../infra/sessionTranscript";
 import {
   applyApprovalApproved,
+  applyInputSubmitted,
+  applyInterrupted,
+  applyResumeInterrupted,
   firstApprovalAwaitingInput,
+  firstInputAwaitingInput,
   initialRunState,
 } from "../domain/scheduler";
 import {
@@ -68,6 +73,17 @@ export class PipelinesController {
     this.engine = new RunEngine(deps, () => this.broadcastList());
     this.disposables.push(deps.host.onMessage((m) => this.onMessage(m)));
     this.disposables.push(deps.host.onDispose(() => this.dispose()));
+    this.reconcileOrphanedRuns();
+  }
+
+  private reconcileOrphanedRuns(): void {
+    const activeId = this.engine.activeRunId();
+    for (const summary of this.deps.runStore.list()) {
+      if (summary.status !== "running" || summary.runId === activeId) continue;
+      const state = this.deps.runStore.get(summary.runId);
+      if (!state || state.status !== "running") continue;
+      this.deps.runStore.save(applyInterrupted(state, this.deps.clock()));
+    }
   }
 
   dispose(): void {
@@ -94,7 +110,10 @@ export class PipelinesController {
       case "deleteRun": void this.handleDeleteRun(msg.runId); return;
       case "revealSession": this.handleReveal(msg.runId, msg.blockId, msg.target, msg.sessionId); return;
       case "loadRun": this.handleLoadRun(msg.runId); return;
+      case "renameRun": this.handleRenameRun(msg.runId, msg.name); return;
+      case "loadSessionTranscript": this.handleLoadSessionTranscript(msg.sessionId); return;
       case "resumeRun": void this.handleResumeRun(msg.runId); return;
+      case "submitInput": void this.handleSubmitInput(msg.runId, msg.blockId, msg.rows); return;
       case "pipelineAssistantAsk": void this.handleAssistantAsk(msg.pipeline, msg.conversationId, msg.message, msg.model, msg.effort); return;
       case "pipelineAssistantListConversations": this.handleAssistantListConversations(msg.pipelineId); return;
       case "pipelineAssistantLoadHistory": this.handleAssistantHistory(msg.pipelineId, msg.conversationId); return;
@@ -113,6 +132,7 @@ export class PipelinesController {
   }
 
   private broadcastList(): void {
+    this.reconcileOrphanedRuns();
     this.deps.host.postMessage({
       type: "pipelinesList",
       payload: {
@@ -226,9 +246,29 @@ export class PipelinesController {
   }
 
   private handleLoadRun(runId: RunId): void {
-    const state = this.deps.runStore.get(runId);
+    let state = this.deps.runStore.get(runId);
     if (!state) { this.notice("error", "Run not found."); return; }
+    if (state.status === "running" && this.engine.activeRunId() !== runId) {
+      state = applyInterrupted(state, this.deps.clock());
+      this.deps.runStore.save(state);
+    }
     this.deps.host.postMessage({ type: "runUpdate", run: state });
+  }
+
+  private handleLoadSessionTranscript(sessionId: string): void {
+    const text = readRunSessionTranscript(sessionId);
+    this.deps.host.postMessage({ type: "sessionTranscript", sessionId, text });
+  }
+
+  private handleRenameRun(runId: RunId, name: string): void {
+    const trimmed = name.trim().slice(0, 120);
+    const live = this.engine.activeRunId() === runId ? this.engine.renameActiveRun(trimmed) : null;
+    const state = live ?? this.deps.runStore.get(runId);
+    if (!state) return;
+    const renamed = { ...state, name: trimmed };
+    this.deps.runStore.save(renamed);
+    this.deps.host.postMessage({ type: "runUpdate", run: renamed });
+    this.broadcastList();
   }
 
   private async handleResumeRun(runId: RunId): Promise<void> {
@@ -237,13 +277,37 @@ export class PipelinesController {
       return;
     }
     const state = this.deps.runStore.get(runId);
-    if (!state || state.status !== "paused-needs-input") return;
+    if (!state) return;
+    if (state.status === "interrupted") {
+      await this.engine.run(applyResumeInterrupted(state));
+      return;
+    }
+    if (state.status !== "paused-needs-input") return;
     const approvalId = firstApprovalAwaitingInput(state);
     if (approvalId === null) {
       this.notice("warning", "This run is not waiting on an approval step.");
       return;
     }
     await this.engine.run(applyApprovalApproved(state, approvalId, this.deps.clock()));
+  }
+
+  private async handleSubmitInput(
+    runId: RunId,
+    blockId: BlockId,
+    rows: readonly Record<string, string>[],
+  ): Promise<void> {
+    if (this.engine.isRunning()) {
+      this.notice("warning", "A pipeline is already running. Wait for it to finish first.");
+      return;
+    }
+    const state = this.deps.runStore.get(runId);
+    if (!state || state.status !== "paused-needs-input") return;
+    const inputId = firstInputAwaitingInput(state);
+    if (inputId === null || inputId !== blockId) {
+      this.notice("warning", "This run is not waiting on this input step.");
+      return;
+    }
+    await this.engine.run(applyInputSubmitted(state, inputId, rows, this.deps.clock()));
   }
 
   private adoptIfSaved(pipelineId: PipelineId, conversationId: string): void {
@@ -284,13 +348,23 @@ export class PipelinesController {
         workspaceCwd: this.deps.workspaceCwd?.() ?? null,
         otherPipelines: this.deps.pipelineStore.list().filter((p) => p.id !== pipelineId),
       };
+      let sessionPersisted = false;
       const options = {
         model,
         effort,
-        onProgress: (events: readonly TimelineEvent[]) =>
-          this.deps.host.postMessage({ type: "pipelineAssistantProgress", pipelineId, conversationId, events }),
+        onProgress: (events: readonly TimelineEvent[]) => {
+          if (!sessionPersisted) {
+            sessionPersisted = true;
+            this.persistConversation(pipelineId, conversationId, message);
+            this.handleAssistantListConversations(pipelineId);
+          }
+          this.deps.host.postMessage({ type: "pipelineAssistantProgress", pipelineId, conversationId, events });
+        },
       };
       let result = await assistant.ask(conversationId, context, message, options);
+      if (isNonAnswerReply(result.text)) {
+        result = await assistant.ask(conversationId, context, message, options);
+      }
       if (!result.proposal.hadJson && looksLikeForbiddenArtifact(result.text)) {
         result = await assistant.ask(conversationId, context, CORRECTION_PROMPT, options);
       }
@@ -350,6 +424,12 @@ export class PipelinesController {
       return { ...t, proposedPipeline: proposal.pipeline, proposalErrors: proposal.errors };
     });
     this.deps.host.postMessage({ type: "pipelineAssistantHistory", pipelineId, conversationId, turns });
+    this.deps.host.postMessage({
+      type: "pipelineAssistantBusy",
+      pipelineId,
+      conversationId,
+      busy: assistant.isBusy(conversationId),
+    });
   }
 
   private notice(level: "info" | "warning" | "error", message: string): void {
@@ -365,6 +445,11 @@ const CORRECTION_PROMPT =
 
 const looksLikeForbiddenArtifact = (text: string): boolean =>
   /```\s*ya?ml|workflow_dispatch|github\s*actions|\bjobs:\s|runs-on:|\.ya?ml\b/i.test(text);
+
+const isNonAnswerReply = (text: string): boolean => {
+  const t = text.trim().toLowerCase().replace(/[.!\s]+$/, "");
+  return t === "" || t === "no response requested" || t === "continue from where you left off";
+};
 
 const conversationTitle = (firstMessage: string): string => {
   const oneLine = firstMessage.replace(/\s+/g, " ").trim();

@@ -17,6 +17,7 @@ export interface ToolbarHost {
   handleDelete(): void;
   killRun(runId: RunId): void;
   resumeRun(runId: RunId): void;
+  renameRun(runId: RunId, name: string): void;
   navigateToPipeline(draft: Pipeline, view: PipelineView): void;
   onAssistant(): void;
 }
@@ -174,10 +175,29 @@ export class PipelineToolbar {
         })
       : null;
 
+    const resumeAction = run.status === "interrupted"
+      ? h("button", {
+          className: "pl-btn pl-btn-run",
+          attrs: { type: "button", title: "Resume this run from where it stopped" },
+          innerHTML: `<span class="pl-btn-icon">${ICON_PLAY}</span><span>Resume</span>`,
+          on: { click: () => this.host.resumeRun(run.runId) },
+        })
+      : null;
+
     const statusPill = h("span", {
       className: `pl-status-pill pl-status-${run.status}`,
       textContent: run.status,
     });
+
+    const nameInput = h("input", {
+      className: "pl-name-input pl-run-name-input",
+      attrs: { type: "text", placeholder: run.pipelineSnapshot.name, title: "Name this run so it's easy to find later" },
+      on: {
+        change: (e) => this.host.renameRun(run.runId, (e.currentTarget as HTMLInputElement).value),
+        keydown: (e) => { if ((e as KeyboardEvent).key === "Enter") (e.currentTarget as HTMLInputElement).blur(); },
+      },
+    }) as HTMLInputElement;
+    nameInput.value = run.name;
 
     const heading = h(
       "div",
@@ -192,13 +212,14 @@ export class PipelineToolbar {
           h(
             "div",
             { className: "pl-header-name-row" },
-            h("div", { className: "pl-name-static", textContent: run.pipelineSnapshot.name }),
+            nameInput,
             statusPill,
           ),
-          h("div", { className: "pl-header-subtitle", textContent: subtitleText }),
+          h("div", { className: "pl-header-subtitle", textContent: `${run.pipelineSnapshot.name} · ${subtitleText}` }),
         ),
       ),
       continueAction,
+      resumeAction,
       primaryAction,
     );
 

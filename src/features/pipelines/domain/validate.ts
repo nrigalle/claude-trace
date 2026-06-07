@@ -6,11 +6,13 @@ import type {
   EvaluatorBlock,
   FileBlock,
   HttpBlock,
+  InputBlock,
   LlmBlock,
   LoopBlock,
   MapBlock,
   ParallelBlock,
   Pipeline,
+  PoolBlock,
   ReduceBlock,
   ScriptBlock,
   WaitBlock,
@@ -42,6 +44,13 @@ export type ValidationCode =
   | "evaluator-empty-goal"
   | "map-empty-list"
   | "map-invalid-item-var"
+  | "pool-empty-list"
+  | "pool-invalid-item-var"
+  | "pool-invalid-concurrency"
+  | "input-no-columns"
+  | "input-column-empty-key"
+  | "input-duplicate-column-key"
+  | "input-enum-needs-options"
   | "loop-target-missing"
   | "loop-target-not-earlier"
   | "condition-target-missing"
@@ -139,8 +148,12 @@ const validateBlock = (b: Block): readonly ValidationError[] => {
       return validateEvaluator(b);
     case "map":
       return validateMap(b);
+    case "pool":
+      return validatePool(b);
     case "approval":
       return validateApproval(b);
+    case "input":
+      return validateInput(b);
     default:
       return assertNever(b);
   }
@@ -151,6 +164,30 @@ const validateApproval = (b: ApprovalBlock): readonly ValidationError[] => {
   if (b.name.trim().length === 0) {
     errors.push({ code: "block-empty-name", message: "Approval block name is required.", blockId: b.id });
   }
+  return errors;
+};
+
+const validateInput = (b: InputBlock): readonly ValidationError[] => {
+  const errors: ValidationError[] = [];
+  if (b.name.trim().length === 0) {
+    errors.push({ code: "block-empty-name", message: "Input block name is required.", blockId: b.id });
+  }
+  if (b.columns.length === 0) {
+    errors.push({ code: "input-no-columns", message: "Input block needs at least one column.", blockId: b.id });
+  }
+  const seenKeys = new Set<string>();
+  for (const c of b.columns) {
+    if (c.key.trim().length === 0) {
+      errors.push({ code: "input-column-empty-key", message: "Every input column needs a key.", blockId: b.id });
+    } else if (seenKeys.has(c.key)) {
+      errors.push({ code: "input-duplicate-column-key", message: `Duplicate input column key "${c.key}".`, blockId: b.id });
+    }
+    seenKeys.add(c.key);
+    if (c.type === "enum" && c.options.length === 0) {
+      errors.push({ code: "input-enum-needs-options", message: `Dropdown column "${c.label}" needs at least one option.`, blockId: b.id });
+    }
+  }
+  validateOutputVar(b.outputVar, b.id, errors);
   return errors;
 };
 
@@ -190,6 +227,27 @@ const validateMap = (b: MapBlock): readonly ValidationError[] => {
   }
   if (b.prompt.trim().length === 0) {
     errors.push({ code: "block-empty-prompt", message: "Map needs a prompt to run per item.", blockId: b.id });
+  }
+  validateOutputVar(b.outputVar, b.id, errors);
+  return errors;
+};
+
+const validatePool = (b: PoolBlock): readonly ValidationError[] => {
+  const errors: ValidationError[] = [];
+  if (b.name.trim().length === 0) {
+    errors.push({ code: "block-empty-name", message: "Worker pool name is required.", blockId: b.id });
+  }
+  if (b.listVar.trim().length === 0) {
+    errors.push({ code: "pool-empty-list", message: "Worker pool needs a list of items to drain.", blockId: b.id });
+  }
+  if (!isValidVarName(b.itemVar)) {
+    errors.push({ code: "pool-invalid-item-var", message: "Worker pool item variable must be a valid identifier.", blockId: b.id });
+  }
+  if (!Number.isInteger(b.concurrency) || b.concurrency < 1 || b.concurrency > 20) {
+    errors.push({ code: "pool-invalid-concurrency", message: "Worker pool concurrency must be a whole number between 1 and 20.", blockId: b.id });
+  }
+  if (b.prompt.trim().length === 0) {
+    errors.push({ code: "block-empty-prompt", message: "Worker pool needs a prompt to run per item.", blockId: b.id });
   }
   validateOutputVar(b.outputVar, b.id, errors);
   return errors;

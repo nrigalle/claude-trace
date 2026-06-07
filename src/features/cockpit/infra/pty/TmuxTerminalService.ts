@@ -7,6 +7,7 @@ import type { TerminalSpawnSpec } from "../../app/CockpitController";
 import { TerminalServiceBase } from "./TerminalServiceBase";
 
 const SOCKET = "claude-trace";
+const ignoreBestEffortFailure = (_err: unknown): void => {};
 
 const TMUX_CONF = [
   "set -g status off",
@@ -131,6 +132,23 @@ export class TmuxTerminalService extends TerminalServiceBase {
     );
     this.sourceConf(conf);
     this.track(spec.sessionId, proc, alreadyRunning && spec.forceInitialInput !== true ? undefined : spec.initialInput);
+    if (spec.cols >= 2 && spec.rows >= 2) {
+      try {
+        this.tmux(["resize-window", "-t", name, "-x", String(spec.cols), "-y", String(spec.rows)]);
+      } catch (err: unknown) {
+        ignoreBestEffortFailure(err);
+      }
+    }
+  }
+
+  override resize(sessionId: string, cols: number, rows: number): void {
+    super.resize(sessionId, cols, rows);
+    if (cols < 2 || rows < 2) return;
+    try {
+      this.tmux(["resize-window", "-t", tmuxSessionName(sessionId), "-x", String(cols), "-y", String(rows)]);
+    } catch (err: unknown) {
+      ignoreBestEffortFailure(err);
+    }
   }
 
   override captureHistory(sessionId: string): string | null {

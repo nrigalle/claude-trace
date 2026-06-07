@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { execFileSync } from "child_process";
 import * as vscode from "vscode";
 
 import type {
@@ -23,6 +24,24 @@ import { quoteShellArg, type ShellQuote } from "../../../shared/permissionModes"
 
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 const JSONL_POLL_INTERVAL_MS = 500;
+const ignoreBestEffortFailure = (_err: unknown): void => {};
+
+const killProcessTree = (pid: number): void => {
+  if (process.platform === "win32") {
+    try { execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" }); }
+    catch (err: unknown) { ignoreBestEffortFailure(err); }
+    return;
+  }
+  let children: number[] = [];
+  try {
+    const out = execFileSync("pgrep", ["-P", String(pid)], { encoding: "utf8" });
+    children = out.split("\n").map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n) && n > 0);
+  } catch (err: unknown) {
+    ignoreBestEffortFailure(err);
+  }
+  for (const child of children) killProcessTree(child);
+  try { process.kill(pid, "SIGKILL"); } catch (err: unknown) { ignoreBestEffortFailure(err); }
+};
 
 const shellQuoteStyle = (): ShellQuote =>
   process.platform === "win32" ? "powershell" : "posix";
@@ -155,6 +174,7 @@ interface SpawnState {
   readonly terminal: vscode.Terminal;
   jsonlPath: string;
   closed: boolean;
+  shellPid?: number;
 }
 
 export interface RealAutomationRunnerOptions {
@@ -189,7 +209,6 @@ export class RealAutomationRunner implements AutomationRunner {
     const projectsDir = path.join(this.claudeProjectsDir, encodeCwdForProjects(effectiveCwd));
     await fs.promises.mkdir(projectsDir, { recursive: true });
     const existingFiles = await safeListJsonl(projectsDir);
-    const likelyFirstRunInCwd = existingFiles.size === 0;
 
     const args = ["--dangerously-skip-permissions", "--effort", opts.effort];
     if (opts.model !== "default") args.push("--model", opts.model);
@@ -199,14 +218,12 @@ export class RealAutomationRunner implements AutomationRunner {
     const terminal = vscode.window.createTerminal({
       name: `Claude Trace · ${opts.blockId}`,
       cwd: effectiveCwd,
+      hideFromUser: true,
     });
     const state: SpawnState = { terminal, jsonlPath: "", closed: false };
     this.spawnStates.set(terminal, state);
+    void terminal.processId?.then((p) => { if (p) state.shellPid = p; }, () => undefined);
     this.trackTerminal(opts.runId, terminal);
-
-    if (likelyFirstRunInCwd) {
-      terminal.show(true);
-    }
 
     terminal.sendText(`${this.claudeCommand} ${args.join(" ")}`);
 
@@ -225,9 +242,9 @@ export class RealAutomationRunner implements AutomationRunner {
       jsonlPath: state.jsonlPath,
       waitForTurnEnd: (sinceMs, signal) =>
         this.waitForTurnEnd(state, sinceMs, signal),
-      reveal: () => { try { terminal.show(false); } catch {} },
+      reveal: () => { try { terminal.show(false); } catch (err: unknown) { ignoreBestEffortFailure(err); } },
       dispose: () => {
-        try { terminal.dispose(); } catch {}
+        this.disposeTerminal(terminal);
         this.untrackTerminal(opts.runId, terminal);
       },
       readLastAssistantText: () => readLastAssistantText(state.jsonlPath),
@@ -267,11 +284,17 @@ export class RealAutomationRunner implements AutomationRunner {
     }
   }
 
+  private disposeTerminal(terminal: vscode.Terminal): void {
+    const pid = this.spawnStates.get(terminal)?.shellPid;
+    if (pid) killProcessTree(pid);
+    try { terminal.dispose(); } catch (err: unknown) { ignoreBestEffortFailure(err); }
+  }
+
   killRun(runId: RunId): void {
     const terminals = this.runTerminals.get(runId);
     if (!terminals) return;
     for (const terminal of terminals) {
-      try { terminal.dispose(); } catch {}
+      this.disposeTerminal(terminal);
     }
     this.runTerminals.delete(runId);
   }
@@ -282,7 +305,7 @@ export class RealAutomationRunner implements AutomationRunner {
     this.terminalCloseSub.dispose();
     for (const terminals of this.runTerminals.values()) {
       for (const terminal of terminals) {
-        try { terminal.dispose(); } catch {}
+        this.disposeTerminal(terminal);
       }
     }
     this.runTerminals.clear();

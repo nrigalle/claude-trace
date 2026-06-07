@@ -1,5 +1,3 @@
-/* Claude Trace dashboard styles — split across ./styles/*.css */
-
 @import url("./styles/tokens.css");
 @import url("./styles/layout.css");
 @import url("./styles/detail.css");

@@ -8,6 +8,7 @@ import {
   ICON_EVALUATOR,
   ICON_FILE,
   ICON_HTTP,
+  ICON_INPUT,
   ICON_LLM,
   ICON_LOOP,
   ICON_MAP,
@@ -76,8 +77,12 @@ export const blockNodeMeta = (block: Block): BlockNodeMeta => {
       return { icon: ICON_EVALUATOR, cssKind: "evaluator", kindLabel: "Evaluator", sublabel: "Evaluator · gate" };
     case "map":
       return { icon: ICON_MAP, cssKind: "map", kindLabel: "Map", sublabel: `Map · \${vars.${block.listVar}}` };
+    case "pool":
+      return { icon: ICON_PARALLEL, cssKind: "pool", kindLabel: "Worker Pool", sublabel: `Pool · ${block.concurrency} at a time` };
     case "approval":
       return { icon: ICON_APPROVAL, cssKind: "approval", kindLabel: "Approval", sublabel: "Approval · human gate" };
+    case "input":
+      return { icon: ICON_INPUT, cssKind: "input", kindLabel: "Input", sublabel: `Input · ${block.columns.length} column${block.columns.length === 1 ? "" : "s"}` };
     default:
       return assertNever(block);
   }
@@ -205,12 +210,36 @@ export const createBlock = (kind: BlockKind): Block => {
         effort: "medium",
         outputVar: null,
       };
+    case "pool":
+      return {
+        id: toBlockId(makeId("pool")),
+        kind: "pool",
+        name: "Worker pool",
+        listVar: "",
+        itemVar: "item",
+        concurrency: 4,
+        prompt: "Process this item: ${vars.item}",
+        model: DEFAULT_MODEL_CHOICE,
+        effort: "medium",
+        outputVar: null,
+      };
     case "approval":
       return {
         id: toBlockId(makeId("approval")),
         kind: "approval",
         name: "Approval",
         message: "Review the results so far, then continue.",
+      };
+    case "input":
+      return {
+        id: toBlockId(makeId("input")),
+        kind: "input",
+        name: "Input table",
+        message: "Fill in the table to start the run.",
+        columns: [
+          { key: "item", label: "Item", type: "text", options: [], required: true, help: null },
+        ],
+        outputVar: "rows",
       };
     default:
       return assertNever(kind);

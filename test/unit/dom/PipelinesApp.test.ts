@@ -36,6 +36,7 @@ const runSummary = (opts: { runId: string; pipelineId: string; status?: RunSumma
   runId: toRunId(opts.runId),
   pipelineId: toPipelineId(opts.pipelineId),
   pipelineName: "p",
+  name: "",
   startedAtMs: 0,
   endedAtMs: null,
   status: opts.status ?? "running",
@@ -70,6 +71,7 @@ const runState = (
 ): RunState => ({
   runId: toRunId(runId),
   pipelineId: pipelineSnapshot.id,
+  name: "",
   pipelineSnapshot,
   startedAtMs: 0,
   endedAtMs: null,
@@ -213,15 +215,34 @@ describe("PipelinesApp — run detail in-place mutation", () => {
     expect(stackAfter).not.toBe(stack);
   });
 
-  it("end-node state flips to completed when the run completes (mutated in place, same stack)", () => {
+  it("end-node state flips to completed when the run completes without rebuilding the stack", () => {
     const { app, p, stack } = setupRunningRun();
-    const completed = runState("r1", p, [blockRun("w1", "done", 1), blockRun("w2", "done", 1)], "completed");
+    const doneA = blockRun("w1", "done", 1);
+    const doneB = { ...blockRun("w2", "done", 1), output: "final output" };
+    const completed = runState("r1", p, [doneA, doneB], "completed");
     app.receive({ type: "runUpdate", run: completed });
 
     const stackAfter = app.element().querySelector<HTMLElement>(".pl-canvas-stack")!;
     expect(stackAfter).toBe(stack);
     const endNode = stackAfter.querySelector<HTMLElement>(`.pl-static-node[data-pos="end"] .pl-node-bubble`);
     expect(endNode?.getAttribute("data-run-state")).toBe("completed");
+    expect(app.element().querySelector(".pl-run-results")?.textContent).toContain("final output");
+  });
+
+  it("leaving run view clears the run-render cache before the next same-run render", () => {
+    const { app, p } = setupRunningRun();
+    app.receive({ type: "pipelineDetail", pipeline: p });
+
+    const editorStack = app.element().querySelector<HTMLElement>(".pl-canvas-stack")!;
+    expect(editorStack.querySelector(".pl-node-remove")).not.toBeNull();
+
+    const completed = runState("r1", p, [blockRun("w1", "done", 1), blockRun("w2", "done", 1)], "completed");
+    (app as unknown as { renderRunDetail(run: RunState): void }).renderRunDetail(completed);
+
+    const runStack = app.element().querySelector<HTMLElement>(".pl-canvas-stack")!;
+    expect(runStack).not.toBe(editorStack);
+    expect(runStack.querySelector(".pl-node-remove")).toBeNull();
+    expect(runStack.querySelector<HTMLElement>(`.pl-static-node[data-pos="end"] .pl-node-bubble`)?.getAttribute("data-run-state")).toBe("completed");
   });
 });
 

@@ -2,6 +2,7 @@ import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
 import type { TerminalSession } from "../../../src/features/cockpit/protocol";
 import { h } from "../ui/h.js";
 
@@ -80,9 +81,23 @@ export const createCockpitTerminal = (
   return { term, fit, termHost };
 };
 
+export const enableWebglRenderer = (term: Terminal): void => {
+  try {
+    const addon = new WebglAddon();
+    addon.onContextLoss(() => addon.dispose());
+    term.loadAddon(addon);
+  } catch (err: unknown) {
+    ignoreOptionalRendererFailure(err);
+  }
+};
+
+const ignoreOptionalRendererFailure = (_err: unknown): void => {};
+
 const decodeBase64 = (payload: string): string | null => {
   try {
-    return atob(payload);
+    const binary = atob(payload);
+    const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
   } catch {
     return null;
   }
@@ -139,6 +154,31 @@ const wireKeyboard = (term: Terminal, input: (data: string) => void): void => {
     }
     if (e.metaKey && !e.ctrlKey && !e.altKey && key === "backspace") {
       input("\x15");
+      e.preventDefault();
+      return false;
+    }
+    if (e.altKey && !e.metaKey && !e.ctrlKey && key === "arrowleft") {
+      input("\x1bb");
+      e.preventDefault();
+      return false;
+    }
+    if (e.altKey && !e.metaKey && !e.ctrlKey && key === "arrowright") {
+      input("\x1bf");
+      e.preventDefault();
+      return false;
+    }
+    if (e.altKey && !e.metaKey && !e.ctrlKey && key === "backspace") {
+      input("\x1b\x7f");
+      e.preventDefault();
+      return false;
+    }
+    if (e.metaKey && !e.ctrlKey && !e.altKey && key === "arrowleft") {
+      input("\x01");
+      e.preventDefault();
+      return false;
+    }
+    if (e.metaKey && !e.ctrlKey && !e.altKey && key === "arrowright") {
+      input("\x05");
       e.preventDefault();
       return false;
     }

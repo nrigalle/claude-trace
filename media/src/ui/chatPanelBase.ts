@@ -2,6 +2,7 @@ import type { TimelineEvent, ReplayTurn } from "../../../src/shared/assistant/ti
 import { clear, h } from "./h.js";
 import { buildDropdown } from "./dropdown.js";
 import { decorateTextarea } from "./textarea.js";
+import { icon } from "./icons.js";
 import {
   MODEL_OPTIONS,
   EFFORT_OPTIONS,
@@ -440,6 +441,7 @@ export abstract class ChatPanelBase<TTurn extends BaseTurn> {
     const wrap = h("div", { className: turn.role === "user" ? "lib-asst-turn user" : "lib-asst-turn assistant" });
     if (turn.role === "user") {
       wrap.appendChild(h("div", { className: "lib-asst-turn-text" }, ...renderTextLines(turn.text)));
+      if (turn.text.length > 0) wrap.appendChild(this.renderCopyButton(turn.text));
       return wrap;
     }
     if (turn.events && turn.events.length > 0) {
@@ -449,7 +451,29 @@ export abstract class ChatPanelBase<TTurn extends BaseTurn> {
     }
     const extras = this.renderReplyExtras(turn, conv);
     if (extras) wrap.appendChild(extras);
+    if (turn.text.length > 0) wrap.appendChild(this.renderCopyButton(turn.text));
     return wrap;
+  }
+
+  private renderCopyButton(text: string): HTMLButtonElement {
+    const btn = h("button", {
+      className: "lib-asst-copy",
+      attrs: { type: "button", title: "Copy message", "aria-label": "Copy message" },
+      on: {
+        click: (e: Event) => {
+          e.stopPropagation();
+          void navigator.clipboard?.writeText(text).then(
+            () => {
+              btn.classList.add("copied");
+              window.setTimeout(() => btn.classList.remove("copied"), 1400);
+            },
+            () => btn.setAttribute("title", "Copy failed"),
+          );
+        },
+      },
+    }) as HTMLButtonElement;
+    btn.appendChild(icon("clipboard", 13));
+    return btn;
   }
 
   private renderInflight(conv: ChatConversation<TTurn>): HTMLElement {
@@ -534,8 +558,14 @@ export abstract class ChatPanelBase<TTurn extends BaseTurn> {
     const key = this.currentKey();
     if (!g || !key) return;
     const conv = this.conversations.get(key);
-    if (conv) conv.stopped = true;
+    if (conv) {
+      conv.stopped = true;
+      conv.busy = false;
+      conv.pendingEvents = [];
+    }
     this.sendCancel(g, key);
+    this.rebuildHistory();
+    this.updateSendBtn();
   }
 
   private wireResize(handle: HTMLElement): void {
@@ -546,9 +576,24 @@ export abstract class ChatPanelBase<TTurn extends BaseTurn> {
       handle.classList.add("dragging");
       const startX = e.clientX;
       const startWidth = this.root.getBoundingClientRect().width;
+      const MIN_PANEL = 300;
+      const MIN_MAIN = 320;
       const move = (ev: PointerEvent): void => {
         const delta = startX - ev.clientX;
-        this.root.style.width = `${Math.max(300, Math.min(900, startWidth + delta))}px`;
+        const parent = this.root.parentElement;
+        let containerW = parent ? parent.getBoundingClientRect().width : window.innerWidth;
+        if (containerW <= 0) containerW = window.innerWidth;
+        let fixedSiblings = 0;
+        if (parent) {
+          for (const child of Array.from(parent.children)) {
+            if (child === this.root) continue;
+            const el = child as HTMLElement;
+            if (getComputedStyle(el).flexGrow !== "0") continue;
+            fixedSiblings += el.getBoundingClientRect().width;
+          }
+        }
+        const maxW = Math.max(MIN_PANEL, containerW - fixedSiblings - MIN_MAIN);
+        this.root.style.width = `${Math.max(MIN_PANEL, Math.min(maxW, startWidth + delta))}px`;
       };
       const up = (ev: PointerEvent): void => {
         handle.releasePointerCapture(ev.pointerId);

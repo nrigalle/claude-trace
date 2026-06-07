@@ -69,8 +69,8 @@ export class RealDeterministicRunner implements DeterministicRunner {
       else req.signal.addEventListener("abort", onAbort, { once: true });
       const append = (cur: string, d: Buffer): string =>
         cur.length >= MAX_SCRIPT_OUTPUT_BYTES ? cur : (cur + d.toString()).slice(0, MAX_SCRIPT_OUTPUT_BYTES);
-      child.stdout.on("data", (d: Buffer) => { stdout = append(stdout, d); });
-      child.stderr.on("data", (d: Buffer) => { stderr = append(stderr, d); });
+      child.stdout.on("data", (d: Buffer) => { stdout = append(stdout, d); req.onLog?.(d.toString()); });
+      child.stderr.on("data", (d: Buffer) => { stderr = append(stderr, d); req.onLog?.(d.toString()); });
       const cleanup = (): void => {
         req.signal.removeEventListener("abort", onAbort);
         if (killTimer !== null) clearTimeout(killTimer);

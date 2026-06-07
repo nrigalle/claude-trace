@@ -8,9 +8,6 @@ import { PipelineAssistant } from "../../src/features/pipelines/infra/PipelineAs
 import { makeFileSignalHooks, type ChatPtySpawner } from "../../src/shared/infra/assistant/claudeChatEngine";
 import { toPipelineId, type Pipeline } from "../../src/features/pipelines/domain/types";
 
-// A mock `claude` binary: parses the args, writes a transcript jsonl for the
-// session, replies by matching a substring of the user message, then drops the
-// .stop signal that ends the turn. Same shape as the real CLI's transcript.
 const writeMockClaude = (filePath: string): void => {
   const script = `#!/usr/bin/env node
 const fs = require('fs');
@@ -220,7 +217,6 @@ describe("PipelineAssistant — end-to-end against a mock claude binary", () => 
       "do something",
       { onProgress: (events) => seen.push(events.length) },
     );
-    // progress is best-effort; the final result is authoritative either way
     expect(seen.every((n, idx) => idx === 0 || n >= seen[idx - 1]!)).toBe(true);
     assistant.dispose();
   });
@@ -271,6 +267,22 @@ describe("PipelineAssistant — end-to-end against a mock claude binary", () => 
     assistant.dispose();
   });
 
+  it("a resend on the SAME conversation while a turn is in flight cancels the first and runs the second (reload-then-resend recovery, no 'still finishing' error)", async () => {
+    process.env["MOCK_STEP_DELAY_MS"] = "400";
+    const assistant = makeAssistant();
+    const pipeline = emptyPipeline("p-resend");
+    setResponseMap({ default: "FIRST_TURN_BODY" });
+    const firstSettled = assistant.ask("c-resend", { pipeline, workspaceCwd: workspace }, "first").catch(() => {});
+    await new Promise((r) => setTimeout(r, 60));
+    expect((assistant as unknown as { isBusy(id: string): boolean }).isBusy("c-resend")).toBe(true);
+    setResponseMap({ default: "SECOND_TURN_BODY" });
+    const second = await assistant.ask("c-resend", { pipeline, workspaceCwd: workspace }, "second");
+    expect(second.text).toContain("SECOND_TURN_BODY");
+    expect(second.text).not.toContain("FIRST_TURN_BODY");
+    await firstSettled;
+    assistant.dispose();
+  });
+
   it("two conversations on the SAME pipeline stay independent (separate history)", async () => {
     setResponseMap({ default: "ok" });
     const assistant = makeAssistant();
@@ -283,23 +295,48 @@ describe("PipelineAssistant — end-to-end against a mock claude binary", () => 
   });
 });
 
-describe("the assistant runs with all tools available, like a terminal session", () => {
-  it("passes --dangerously-skip-permissions so tools execute without approval prompts (and never the hanging --permission-mode confirm)", async () => {
+describe("the assistant runs read-only — it cannot touch the user's repo", () => {
+  it("keeps --dangerously-skip-permissions (no hanging --permission-mode confirm) and re-injects the read-only role on every resume turn", async () => {
     setResponseMap({ default: "ok" });
     const assistant = makeAssistant();
     await assistant.ask("c-args", { pipeline: emptyPipeline("p-args"), workspaceCwd: workspace }, "hi");
     const args = assistant.buildArgsForTesting("c-args", "next turn");
     expect(args).not.toBeNull();
-    expect(args).toContain("--dangerously-skip-permissions");
-    expect(args).not.toContain("--permission-mode");
+    expect(args!).toContain("--dangerously-skip-permissions");
+    expect(args!).not.toContain("--permission-mode");
+    const idx = args!.indexOf("--append-system-prompt");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args![idx + 1]).toMatch(/read-only/i);
     assistant.dispose();
   });
 
-  it("does not write any tool allow/deny restrictions into the session settings", () => {
+  it("read-only hooks deny file/shell tools with structured PreToolUse JSON and re-inject the role via UserPromptSubmit", () => {
+    const hooks = makeFileSignalHooks(signalsDir, hooksDir, { readOnly: true, turnReminder: "You are READ-ONLY." });
+    const file = hooks.installHooks("sess-ro");
+    expect(file).not.toBeNull();
+    const settings = JSON.parse(fs.readFileSync(file!, "utf8")) as {
+      hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
+    };
+    const deny = settings.hooks["PreToolUse"]!.find((e) => (e.matcher ?? "").includes("Write"))!;
+    expect(deny.matcher).toContain("Edit");
+    expect(deny.matcher).toContain("Bash");
+    expect(deny.hooks[0]!.command).toContain("permissionDecision");
+    expect(deny.hooks[0]!.command).toContain("deny");
+    expect(deny.hooks[0]!.command).not.toContain("exit 2");
+    const reminder = settings.hooks["UserPromptSubmit"]!.find((e) => e.hooks[0]!.command.includes("reminder.json"));
+    expect(reminder).toBeDefined();
+    expect(fs.existsSync(path.join(hooksDir, "sess-ro.reminder.json"))).toBe(true);
+  });
+
+  it("without the read-only option (e.g. the cockpit terminal), writes NO deny hook and NO permission restrictions", () => {
     const hooks = makeFileSignalHooks(signalsDir, hooksDir);
     const file = hooks.installHooks("sess-open");
     expect(file).not.toBeNull();
-    const settings = JSON.parse(fs.readFileSync(file!, "utf8")) as Record<string, unknown>;
+    const settings = JSON.parse(fs.readFileSync(file!, "utf8")) as {
+      permissions?: unknown;
+      hooks: Record<string, Array<{ matcher?: string }>>;
+    };
     expect(settings.permissions).toBeUndefined();
+    expect(settings.hooks["PreToolUse"]!.every((e) => e.matcher === undefined)).toBe(true);
   });
 });

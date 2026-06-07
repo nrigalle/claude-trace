@@ -357,7 +357,7 @@ describe("CockpitController terminal IO", () => {
     host.send({ type: "cockpitReady" });
     const messages = host.posted.filter((m) => m.type === "terminalData");
     expect(messages).toEqual([
-      { type: "terminalData", sessionId: "uuid-1", data: "first\r\nsecond\r\n" },
+      { type: "terminalData", sessionId: "uuid-1", data: "first\r\nsecond\r\n", replay: true },
     ]);
     const stateIndex = host.posted.findIndex((m) => m.type === "cockpitState");
     const replayIndex = host.posted.findIndex((m) => m.type === "terminalData");
@@ -379,7 +379,7 @@ describe("CockpitController terminal IO", () => {
     host = new FakeHost();
     makeController();
     host.send({ type: "cockpitReady" });
-    expect(host.posted).toContainEqual({ type: "terminalData", sessionId: "uuid-1", data: "before reload\r\n" });
+    expect(host.posted).toContainEqual({ type: "terminalData", sessionId: "uuid-1", data: "before reload\r\n", replay: true });
   });
 
   it("prefers backend text capture on reload so tmux-backed Codex sessions do not replay raw control-code logs", () => {
@@ -391,7 +391,7 @@ describe("CockpitController terminal IO", () => {
     host.send({ type: "cockpitReady" });
     const messages = host.posted.filter((m) => m.type === "terminalData");
     expect(messages).toEqual([
-      { type: "terminalData", sessionId: "uuid-1", data: "earlier codex text\r\nlatest codex text\r\n" },
+      { type: "terminalData", sessionId: "uuid-1", data: "earlier codex text\r\nlatest codex text\r\n", replay: true },
     ]);
   });
 
@@ -532,9 +532,9 @@ describe("CockpitController tabs — adding a tab clones the window's config int
   });
 
   it("keeps incrementing (no double suffix) after the base tab is closed", () => {
-    host.send({ type: "cockpitAddTab", windowId: "uuid-1" }); // Rev 1 · 2
-    host.send({ type: "cockpitAddTab", windowId: "uuid-1" }); // Rev 1 · 3
-    host.send({ type: "terminalClose", sessionId: "uuid-1" }); // close base "Rev 1"
+    host.send({ type: "cockpitAddTab", windowId: "uuid-1" });
+    host.send({ type: "cockpitAddTab", windowId: "uuid-1" });
+    host.send({ type: "terminalClose", sessionId: "uuid-1" });
     host.send({ type: "cockpitAddTab", windowId: "uuid-1" });
     const names = host.lastState().state.terminals.map((t) => t.name);
     expect(names).toContain("Rev 1 · 4");

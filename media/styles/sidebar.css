@@ -1,4 +1,4 @@
-/* Sidebar Header */
+
 
 .sidebar-header {
   padding: 16px 18px;
@@ -81,7 +81,7 @@
   letter-spacing: -0.01em;
 }
 
-/* Start session button */
+
 
 .start-session-btn {
   display: flex;
@@ -116,7 +116,7 @@
   height: 14px;
 }
 
-/* Search */
+
 
 .search-box {
   padding: 8px 12px;
@@ -185,7 +185,7 @@
   border-color: var(--ct-focus);
 }
 
-/* Session List */
+
 
 .session-list {
   flex: 1;

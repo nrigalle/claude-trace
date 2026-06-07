@@ -29,7 +29,6 @@ const run = async () => {
     args: ["--no-sandbox", "--use-gl=angle", "--use-angle=swiftshader", "--force-color-profile=srgb", "--hide-scrollbars"],
   });
 
-  // 1. Multi-session terminal cockpit (the home view)
   {
     const page = await newPage(browser, { width: 1600, height: 1000 });
     await feed(page, [D.update]);
@@ -54,7 +53,6 @@ const run = async () => {
     console.log("✓ shot-cockpit.png");
   }
 
-  // 2. Cost + observability dashboard (session detail)
   {
     const page = await newPage(browser, { width: 1600, height: 1000 });
     await feed(page, [D.update]);
@@ -66,7 +64,6 @@ const run = async () => {
     await page.screenshot({ path: path.join(outDir, "shot-dashboard.png") });
     console.log("✓ shot-dashboard.png");
 
-    // 3. Customize panel open over the detail
     const clicked = await page.evaluate(() => {
       const b = document.querySelector(".detail-customize-btn");
       if (b) { b.click(); return true; }
@@ -82,7 +79,6 @@ const run = async () => {
     await page.close();
   }
 
-  // 4. Workflows / pipelines orchestrator
   {
     const page = await newPage(browser, { width: 1600, height: 1000 });
     await feed(page, [D.update]);

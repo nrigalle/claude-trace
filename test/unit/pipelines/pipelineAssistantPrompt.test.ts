@@ -52,4 +52,44 @@ describe("workflow assistant system prompt", () => {
     expect(prompt).toContain("GitHub Actions");
     expect(prompt.toLowerCase()).toContain("reference");
   });
+
+  it("documents the worker pool block kind with its concurrency knob so the assistant can propose it", () => {
+    const prompt = systemPromptFor([]);
+    expect(prompt).toContain("pool:");
+    expect(prompt).toContain("concurrency");
+    expect(prompt.toLowerCase()).toContain("tool-enabled");
+  });
+
+  it("keeps variable guidance aligned with prompt-only bare variable compatibility", () => {
+    const prompt = systemPromptFor([]);
+    expect(prompt).toContain("Always write generated workflow prompts with the ${vars.NAME} form");
+    expect(prompt).toContain("Runtime tolerates bare ${NAME} only inside prompt fields");
+    expect(prompt).toContain("script/http/file fields stay strict");
+  });
+
+  it("documents the input table block so the assistant proposes it instead of inventing one", () => {
+    const prompt = systemPromptFor([]);
+    expect(prompt).toContain("input:");
+    expect(prompt).toContain("columns");
+    expect(prompt).toContain("outputVar");
+    expect(prompt.toLowerCase()).toContain("enum");
+    expect(prompt.toLowerCase()).toContain("table");
+  });
+
+  it("pins the discriminator to kind (not type) and ships a literal JSON exemplar to stop schema drift", () => {
+    const prompt = systemPromptFor([]);
+    expect(prompt).toContain('"kind"');
+    expect(prompt.toLowerCase()).toContain('never \"type\"');
+    expect(prompt).toMatch(/worker, llm, parallel, loop, map, pool/);
+    expect(prompt).toContain("```json");
+    expect(prompt).toContain('"kind": "input"');
+  });
+
+  it("is read-only and routes repo changes to a paste-ready prompt for a separate session, never editing the repo itself", () => {
+    const prompt = systemPromptFor([]);
+    expect(prompt.toLowerCase()).toContain("read-only");
+    expect(prompt).toContain("cannot edit files or run commands");
+    expect(prompt).toMatch(/separate Claude Code session/i);
+    expect(prompt).toContain("```text");
+  });
 });

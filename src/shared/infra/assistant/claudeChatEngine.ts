@@ -2,7 +2,13 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import * as pty from "node-pty";
-import { buildCockpitHookSettings } from "../../../features/cockpit/infra/cockpitHooks";
+import {
+  buildCockpitHookSettings,
+  shQuote,
+  type CockpitHookSettings,
+  type HookEntry,
+} from "../../../features/cockpit/infra/cockpitHooks";
+import { READ_ONLY_DENY_MATCHER, READ_ONLY_DENY_REASON } from "../../assistant/readOnlyAssistant";
 import {
   concatTextEvents,
   extractConversationTurns,
@@ -48,6 +54,7 @@ export interface ChatHooks {
   readonly installHooks: (sessionId: string) => string | null;
   readonly removeHooks: (sessionId: string) => void;
   readonly subscribeStop: (sessionId: string, listener: () => void) => { dispose(): void };
+  readonly subscribeNotify?: (sessionId: string, listener: () => void) => { dispose(): void };
 }
 
 export interface ClaudeChatConfig {
@@ -59,6 +66,9 @@ export interface ClaudeChatConfig {
   readonly signalsDir: string;
   readonly hooksDir: string;
   readonly hooks?: Partial<ChatHooks>;
+  readonly readOnly?: boolean;
+  readonly turnReminder?: string;
+  readonly interruptPreviousTurn?: boolean;
 }
 
 export interface ChatTurnOptions {
@@ -94,8 +104,9 @@ const FINAL_POLL_MS = 100;
 const FINAL_STABLE_MS = 300;
 const FINAL_NO_CONTENT_MAX_MS = 6000;
 const FINAL_MAX_WAIT_MS = 30000;
+const BUSY_RELEASE_TIMEOUT_MS = 3000;
 
-export type StopReason = "stop" | "exit" | "cancel";
+export type StopReason = "stop" | "exit" | "cancel" | "notify";
 
 export const encodeForClaudeProjects = encodeCwdForProjects;
 
@@ -116,16 +127,24 @@ export class ClaudeChatEngine {
     this.ptySpawner = config.ptySpawner ?? NODE_PTY_SPAWNER;
     this.cwdRoot = config.cwdRoot;
     this.transcriptRoot = config.transcriptRoot ?? PROJECTS_DIR;
-    const defaults = makeFileSignalHooks(config.signalsDir, config.hooksDir);
+    const defaults = makeFileSignalHooks(config.signalsDir, config.hooksDir, {
+      readOnly: config.readOnly,
+      turnReminder: config.turnReminder,
+    });
     this.hooks = {
       installHooks: config.hooks?.installHooks ?? defaults.installHooks,
       removeHooks: config.hooks?.removeHooks ?? defaults.removeHooks,
       subscribeStop: config.hooks?.subscribeStop ?? defaults.subscribeStop,
+      subscribeNotify: config.hooks?.subscribeNotify ?? defaults.subscribeNotify,
     };
   }
 
   has(key: string): boolean {
     return this.sessions.has(key);
+  }
+
+  isBusy(key: string): boolean {
+    return this.sessions.get(key)?.busy === true;
   }
 
   sessionMap(): Map<string, SessionState> {
@@ -184,7 +203,13 @@ export class ClaudeChatEngine {
     options: ChatTurnOptions = {},
   ): Promise<ChatTurnResult> {
     const state = this.ensure(key, systemPrompt, cwd);
-    if (state.busy) throw new Error("Assistant is still finishing the previous turn.");
+    if (state.busy) {
+      if (!this.config.interruptPreviousTurn) {
+        throw new Error("Assistant is still finishing the previous turn.");
+      }
+      this.cancel(key);
+      await this.waitForRelease(state);
+    }
     state.busy = true;
     state.cancelled = false;
     let poller: ReturnType<typeof setInterval> | null = null;
@@ -236,6 +261,12 @@ export class ClaudeChatEngine {
         state.transcriptOffset = currentFileSize(state.transcriptPath);
         throw new Error("Cancelled.");
       }
+      if (reason === "notify") {
+        state.transcriptOffset = currentFileSize(state.transcriptPath);
+        throw new Error(
+          "The assistant paused on a permission prompt it can't answer here (it runs without an interactive approver). The turn was stopped — simplify the request or try again.",
+        );
+      }
       const events = await readFinalEvents(state.transcriptPath, startOffset);
       state.transcriptOffset = currentFileSize(state.transcriptPath);
       const text = concatTextEvents(events);
@@ -248,6 +279,20 @@ export class ClaudeChatEngine {
       if (submitTimer !== null) clearTimeout(submitTimer);
       if (quietTimer !== null) clearTimeout(quietTimer);
       if (child) tryKillPty(child);
+      if (state.currentPty === child) {
+        state.currentPty = null;
+        state.busy = false;
+      }
+    }
+  }
+
+  private async waitForRelease(state: SessionState): Promise<void> {
+    const deadline = Date.now() + BUSY_RELEASE_TIMEOUT_MS;
+    while (state.busy && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    if (state.busy) {
+      if (state.currentPty) tryKillPty(state.currentPty);
       state.currentPty = null;
       state.busy = false;
     }
@@ -301,7 +346,12 @@ export class ClaudeChatEngine {
 
   private buildArgs(state: SessionState, message: string, model?: ModelChoice, effort?: EffortChoice): string[] {
     const base = state.hasFirstTurn
-      ? ["--resume", state.sessionId, "--settings", state.hooksFile, "--dangerously-skip-permissions"]
+      ? [
+          "--resume", state.sessionId,
+          "--settings", state.hooksFile,
+          "--dangerously-skip-permissions",
+          ...(this.config.turnReminder ? ["--append-system-prompt", this.config.turnReminder] : []),
+        ]
       : [
           "--session-id", state.sessionId,
           "--settings", state.hooksFile,
@@ -327,6 +377,7 @@ export class ClaudeChatEngine {
   private waitForStop(state: SessionState, exited: Promise<void>): Promise<StopReason> {
     return new Promise((resolve) => {
       let subscription: { dispose(): void } | null = null;
+      let notifySubscription: { dispose(): void } | null = null;
       let checkInterval: ReturnType<typeof setInterval> | null = null;
       let finished = false;
       const spawnTime = Date.now();
@@ -334,10 +385,13 @@ export class ClaudeChatEngine {
         if (finished) return;
         finished = true;
         if (subscription) subscription.dispose();
+        if (notifySubscription) notifySubscription.dispose();
         if (checkInterval !== null) clearInterval(checkInterval);
         resolve(reason);
       };
       subscription = this.hooks.subscribeStop(state.sessionId, () => finish("stop"));
+      if (finished) return;
+      notifySubscription = this.hooks.subscribeNotify?.(state.sessionId, () => finish("notify")) ?? null;
       if (finished) return;
       checkInterval = setInterval(() => {
         if (state.cancelled) finish("cancel");
@@ -437,15 +491,99 @@ const readTranscript = (filePath: string): string => {
   try { return fs.readFileSync(filePath, "utf8"); } catch { return ""; }
 };
 
+export interface FileSignalHookOptions {
+  readonly readOnly?: boolean;
+  readonly turnReminder?: string;
+}
+
+const readOnlyDenyEntry = (): HookEntry => {
+  const payload = JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: READ_ONLY_DENY_REASON,
+    },
+  });
+  return {
+    matcher: READ_ONLY_DENY_MATCHER,
+    hooks: [{ type: "command", command: `printf '%s' ${shQuote(payload)}` }],
+  };
+};
+
+const reminderInjectEntry = (reminderFile: string): HookEntry => ({
+  hooks: [{ type: "command", command: `cat ${shQuote(reminderFile)}` }],
+});
+
+const augmentSettings = (
+  base: CockpitHookSettings,
+  readOnly: boolean,
+  reminderFile: string | null,
+): CockpitHookSettings => {
+  const hooks: Record<string, readonly HookEntry[]> = { ...base.hooks };
+  if (readOnly) hooks["PreToolUse"] = [...base.hooks["PreToolUse"]!, readOnlyDenyEntry()];
+  if (reminderFile !== null) hooks["UserPromptSubmit"] = [...base.hooks["UserPromptSubmit"]!, reminderInjectEntry(reminderFile)];
+  return { hooks };
+};
+
+const watchSignalFile = (
+  signalsDir: string,
+  file: string,
+  listener: () => void,
+): { dispose(): void } => {
+  fs.mkdirSync(signalsDir, { recursive: true });
+  removeFile(file);
+  let fired = false;
+  const fire = (): void => {
+    if (fired) return;
+    fired = true;
+    removeFile(file);
+    listener();
+  };
+  const check = (): void => {
+    if (fs.existsSync(file)) fire();
+  };
+  let watcher: fs.FSWatcher | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  try {
+    watcher = fs.watch(signalsDir, (_event, filename) => {
+      if (filename === path.basename(file)) check();
+    });
+    watcher.on("error", () => {
+      closeWatcher(watcher);
+      watcher = null;
+      pollTimer = setInterval(check, 500);
+    });
+  } catch (err: unknown) {
+    ignoreBestEffortFailure(err);
+    pollTimer = setInterval(check, 500);
+  }
+  check();
+  return {
+    dispose: () => {
+      closeWatcher(watcher);
+      if (pollTimer !== null) clearInterval(pollTimer);
+    },
+  };
+};
+
 export const makeFileSignalHooks = (
   signalsDir: string,
   hooksDir: string,
+  opts: FileSignalHookOptions = {},
 ): ChatHooks => ({
   installHooks: (sessionId: string): string | null => {
     try {
       fs.mkdirSync(hooksDir, { recursive: true });
       fs.mkdirSync(signalsDir, { recursive: true });
-      const settings = buildCockpitHookSettings(sessionId, signalsDir);
+      let reminderFile: string | null = null;
+      if (opts.turnReminder) {
+        reminderFile = path.join(hooksDir, `${sessionId}.reminder.json`);
+        const content = JSON.stringify({
+          hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: opts.turnReminder },
+        });
+        fs.writeFileSync(reminderFile, content, "utf8");
+      }
+      const settings = augmentSettings(buildCockpitHookSettings(sessionId, signalsDir), opts.readOnly ?? false, reminderFile);
       const file = path.join(hooksDir, `${sessionId}.json`);
       fs.writeFileSync(file, JSON.stringify(settings), "utf8");
       return file;
@@ -456,6 +594,7 @@ export const makeFileSignalHooks = (
   removeHooks: (sessionId: string): void => {
     for (const f of [
       path.join(hooksDir, `${sessionId}.json`),
+      path.join(hooksDir, `${sessionId}.reminder.json`),
       path.join(signalsDir, `${sessionId}.stop`),
       path.join(signalsDir, `${sessionId}.notify`),
       path.join(signalsDir, `${sessionId}.active`),
@@ -463,40 +602,8 @@ export const makeFileSignalHooks = (
       removeFile(f);
     }
   },
-  subscribeStop: (sessionId: string, listener: () => void): { dispose(): void } => {
-    fs.mkdirSync(signalsDir, { recursive: true });
-    const stopFile = path.join(signalsDir, `${sessionId}.stop`);
-    removeFile(stopFile);
-    let fired = false;
-    const fire = (): void => {
-      if (fired) return;
-      fired = true;
-      removeFile(stopFile);
-      listener();
-    };
-    const check = (): void => {
-      if (fs.existsSync(stopFile)) fire();
-    };
-    let watcher: fs.FSWatcher | null = null;
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
-    try {
-      watcher = fs.watch(signalsDir, (_event, filename) => {
-        if (filename === path.basename(stopFile)) check();
-      });
-      watcher.on("error", () => {
-        closeWatcher(watcher);
-        watcher = null;
-        pollTimer = setInterval(check, 500);
-      });
-    } catch {
-      pollTimer = setInterval(check, 500);
-    }
-    check();
-    return {
-      dispose: () => {
-        closeWatcher(watcher);
-        if (pollTimer !== null) clearInterval(pollTimer);
-      },
-    };
-  },
+  subscribeStop: (sessionId: string, listener: () => void): { dispose(): void } =>
+    watchSignalFile(signalsDir, path.join(signalsDir, `${sessionId}.stop`), listener),
+  subscribeNotify: (sessionId: string, listener: () => void): { dispose(): void } =>
+    watchSignalFile(signalsDir, path.join(signalsDir, `${sessionId}.notify`), listener),
 });

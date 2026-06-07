@@ -12,7 +12,7 @@ import { ICONS } from "../ui/icons.js";
 import { clear, h } from "../ui/h.js";
 import { renderLayoutNode } from "./cockpitLayoutView.js";
 import { CockpitLauncher } from "./cockpitLauncher.js";
-import { createCockpitTerminal, type CockpitTerminalView } from "./terminalCore.js";
+import { createCockpitTerminal, enableWebglRenderer, type CockpitTerminalView } from "./terminalCore.js";
 import { ALL_FOLDER, compactPath, formatStartTime, newId } from "./cockpitUtils.js";
 
 const RESET_INPUT_MODES = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?2004l";
@@ -27,6 +27,7 @@ interface TerminalView extends CockpitTerminalView {
   gotData: boolean;
   lastCols: number;
   lastRows: number;
+  replaying: boolean;
 }
 
 interface WindowTile {
@@ -52,7 +53,7 @@ export class TerminalCockpit {
   private readonly launcher: CockpitLauncher;
   private readonly views = new Map<string, TerminalView>();
   private readonly tiles = new Map<string, WindowTile>();
-  private readonly pendingData = new Map<string, string[]>();
+  private readonly pendingData = new Map<string, { data: string; replay: boolean }[]>();
 
   private state: CockpitState = { profiles: [], spaces: [], terminals: [] };
   private loaded = false;
@@ -93,6 +94,8 @@ export class TerminalCockpit {
     );
     this.resizeObserver = new ResizeObserver(() => this.scheduleFit());
     this.resizeObserver.observe(this.gridEl);
+    window.addEventListener("resize", () => this.fitImmediate());
+    void document.fonts?.ready?.then(() => this.fitImmediate());
     this.renderFolders();
     this.renderGrid();
   }
@@ -123,13 +126,14 @@ export class TerminalCockpit {
         return;
       case "terminalData": {
         const view = this.views.get(msg.sessionId);
+        const replay = msg.replay === true;
         if (!view) {
           const buf = this.pendingData.get(msg.sessionId);
-          if (buf) buf.push(msg.data);
-          else this.pendingData.set(msg.sessionId, [msg.data]);
+          if (buf) buf.push({ data: msg.data, replay });
+          else this.pendingData.set(msg.sessionId, [{ data: msg.data, replay }]);
           return;
         }
-        this.writeTerminalData(msg.sessionId, view, msg.data);
+        this.writeTerminalData(msg.sessionId, view, msg.data, replay);
         return;
       }
       case "terminalExit": {
@@ -202,6 +206,7 @@ export class TerminalCockpit {
     }
     for (const [wid, tile] of this.tiles) {
       if (!presentWindows.has(wid)) {
+        this.resizeObserver.unobserve(tile.termMount);
         tile.tile.remove();
         this.tiles.delete(wid);
       }
@@ -215,7 +220,10 @@ export class TerminalCockpit {
 
   private createTerminalView(session: TerminalSession): void {
     const terminal = createCockpitTerminal(session, {
-      input: (data) => this.deps.send({ type: "terminalInput", sessionId: session.sessionId, data }),
+      input: (data) => {
+        if (this.views.get(session.sessionId)?.replaying) return;
+        this.deps.send({ type: "terminalInput", sessionId: session.sessionId, data });
+      },
       bell: () => this.markAttention(session.sessionId, true, "bell"),
       focus: () => this.focusView(session.sessionId),
       dropImage: (fileName, dataBase64) =>
@@ -228,18 +236,24 @@ export class TerminalCockpit {
       gotData: false,
       lastCols: 0,
       lastRows: 0,
+      replaying: false,
     };
     this.views.set(session.sessionId, view);
     const buffered = this.pendingData.get(session.sessionId);
     if (buffered) {
       this.pendingData.delete(session.sessionId);
-      for (const data of buffered) this.writeTerminalData(session.sessionId, view, data);
+      for (const item of buffered) this.writeTerminalData(session.sessionId, view, item.data, item.replay);
     }
   }
 
-  private writeTerminalData(sessionId: string, view: TerminalView, data: string): void {
+  private writeTerminalData(sessionId: string, view: TerminalView, data: string, replay = false): void {
     const stick = this.atBottom(view.term);
-    view.term.write(data);
+    if (replay) {
+      view.replaying = true;
+      view.term.write(data, () => { view.replaying = false; });
+    } else {
+      view.term.write(data);
+    }
     const tile = this.tiles.get(view.windowId);
     if (!view.gotData && data.length > 0) {
       view.gotData = true;
@@ -273,6 +287,7 @@ export class TerminalCockpit {
     });
     const head = h("div", { className: "tc-tile-head", attrs: { title: "Drag to swap places, or drop on a workspace" } }, grip, tabStrip, pauseBtn, addTab);
     const termMount = h("div", { className: "tc-tile-termmount" });
+    this.resizeObserver.observe(termMount);
     const resumeOverlay = h(
       "div",
       { className: "tc-tile-resume hidden" },
@@ -785,6 +800,7 @@ export class TerminalCockpit {
     for (const view of this.views.values()) {
       if (!view.initialised && view.termHost.isConnected && !view.termHost.classList.contains("hidden")) {
         view.term.open(view.termHost);
+        enableWebglRenderer(view.term);
         view.initialised = true;
       }
     }

@@ -6,6 +6,7 @@ import type { SessionId, TraceEvent } from "../domain/types";
 import type { SessionRef } from "./paths";
 
 const MAX_TRANSCRIPT_BYTES = 20 * 1024 * 1024;
+const ignoreBestEffortFailure = (_err: unknown): void => {};
 
 interface CacheEntry {
   mtime: number;
@@ -160,7 +161,7 @@ const readPrefix = (filePath: string, maxBytes: number): string => {
     return buf.toString("utf-8", 0, read);
   } finally {
     if (fd !== -1) {
-      try { fs.closeSync(fd); } catch { /* ignore */ }
+      try { fs.closeSync(fd); } catch (err: unknown) { ignoreBestEffortFailure(err); }
     }
   }
 };

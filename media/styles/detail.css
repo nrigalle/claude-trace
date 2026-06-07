@@ -1,4 +1,4 @@
-/* Session Detail */
+
 
 .ct-block-hidden {
   display: none !important;
@@ -188,7 +188,7 @@
   white-space: nowrap;
 }
 
-/* Summary Cards */
+
 
 .summary-cards {
   display: grid;
@@ -245,7 +245,7 @@
   margin-top: 2px;
 }
 
-/* Charts Row */
+
 
 .charts-row {
   display: grid;
@@ -313,7 +313,7 @@ canvas {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
-/* Tool Distribution */
+
 
 .tool-dist {
   display: flex;
@@ -376,7 +376,7 @@ canvas {
   text-align: right;
 }
 
-/* File edits sections (memory + files-touched) */
+
 
 .file-edits-section {
   background: var(--ct-bg-1);

@@ -586,6 +586,10 @@ describe("AssistantPanel — resizable width", () => {
       value: () => ({ width: 380, height: 600, top: 0, left: 1000, right: 1380, bottom: 600, x: 1000, y: 0, toJSON: () => ({}) }),
       configurable: true,
     });
+    Object.defineProperty(document.body, "getBoundingClientRect", {
+      value: () => ({ width: 2000, height: 800, top: 0, left: 0, right: 2000, bottom: 800, x: 0, y: 0, toJSON: () => ({}) }),
+      configurable: true,
+    });
     const handle = root.querySelector(".lib-asst-resize") as HTMLElement;
     handle.setPointerCapture = () => {};
     handle.releasePointerCapture = () => {};
@@ -612,12 +616,16 @@ describe("AssistantPanel — resizable width", () => {
     expect(root.style.width).toBe("300px");
   });
 
-  it("dragging clamps the width to the maximum (900px)", () => {
+  it("dragging clamps the width to the available space (container minus a reserve for the canvas), never off-screen", () => {
     const { panel } = mount();
     panel.setOpen(true);
     const root = panel.element();
     Object.defineProperty(root, "getBoundingClientRect", {
       value: () => ({ width: 380, height: 600, top: 0, left: 1000, right: 1380, bottom: 600, x: 1000, y: 0, toJSON: () => ({}) }),
+      configurable: true,
+    });
+    Object.defineProperty(document.body, "getBoundingClientRect", {
+      value: () => ({ width: 1200, height: 800, top: 0, left: 0, right: 1200, bottom: 800, x: 0, y: 0, toJSON: () => ({}) }),
       configurable: true,
     });
     const handle = root.querySelector(".lib-asst-resize") as HTMLElement;
@@ -626,7 +634,7 @@ describe("AssistantPanel — resizable width", () => {
     handle.dispatchEvent(new PointerEvent("pointerdown", { button: 0, clientX: 1000, pointerId: 1, bubbles: true }));
     window.dispatchEvent(new PointerEvent("pointermove", { clientX: -5000, pointerId: 1, bubbles: true }));
     window.dispatchEvent(new PointerEvent("pointerup", { clientX: -5000, pointerId: 1, bubbles: true }));
-    expect(root.style.width).toBe("900px");
+    expect(root.style.width).toBe("880px");
   });
 });
 

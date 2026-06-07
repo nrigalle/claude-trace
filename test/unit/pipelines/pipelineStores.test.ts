@@ -33,6 +33,7 @@ const makePipeline = (id: string, name: string, updatedAtMs: number): Pipeline =
 const makeRunState = (runId: string, pipelineId: string, startedAtMs: number): RunState => ({
   runId: toRunId(runId),
   pipelineId: toPipelineId(pipelineId),
+  name: "",
   pipelineSnapshot: makePipeline(pipelineId, "Snapshot", startedAtMs),
   startedAtMs,
   endedAtMs: null,

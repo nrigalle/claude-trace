@@ -82,9 +82,10 @@ describe("systemPromptFor — what we tell Claude", () => {
     expect(prompt).toContain("permissionMode");
   });
 
-  it("tells the model it has full tools available and to ask questions as plain text (terminal-like)", () => {
+  it("tells the model its tools are read-only and to route repo changes to a separate session, asking as plain text (terminal-like)", () => {
     const prompt = systemPromptFor(ctx(), "writeBody");
-    expect(prompt).toContain("full tools available");
+    expect(prompt.toLowerCase()).toContain("read-only");
+    expect(prompt).toMatch(/separate Claude Code session/i);
     expect(prompt).toMatch(/plain text/i);
   });
 
@@ -504,7 +505,7 @@ describe("LibraryAssistant.buildArgs — positional-message argv (the fix for th
     expect(args).not.toContain("--resume");
   });
 
-  it("subsequent turn uses --resume (NOT --session-id) and DROPS --append-system-prompt", () => {
+  it("subsequent turn uses --resume (NOT --session-id) and RE-INJECTS the role via --append-system-prompt so it never forgets it is read-only", () => {
     const assistant = makeAssistant();
     seedItem(assistant);
     const state = (assistant as unknown as { items: Map<string, { hasFirstTurn: boolean }> }).items.get("skill:test")!;
@@ -512,7 +513,9 @@ describe("LibraryAssistant.buildArgs — positional-message argv (the fix for th
     const args = assistant.buildArgsForTesting("skill:test", "second turn")!;
     expect(args).toContain("--resume");
     expect(args).not.toContain("--session-id");
-    expect(args).not.toContain("--append-system-prompt");
+    const idx = args.indexOf("--append-system-prompt");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toMatch(/read-only/i);
     expect(args[args.length - 1]).toBe("second turn");
   });
 

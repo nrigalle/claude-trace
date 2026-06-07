@@ -1,4 +1,4 @@
-/* Empty State */
+
 
 .main-content.empty {
   display: flex;
@@ -49,7 +49,7 @@
   line-height: 1.5;
 }
 
-/* Skeletons (initial-load placeholders) */
+
 
 @keyframes skeleton-shimmer {
   0%   { background-position: 200% 0; }

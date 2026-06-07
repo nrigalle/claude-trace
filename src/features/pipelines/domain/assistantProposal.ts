@@ -17,10 +17,6 @@ export interface ProposalBase {
 
 const FENCE = /```(?:json|jsonc)?\s*\r?\n([\s\S]*?)```/g;
 
-// The workflow assistant proposes a complete pipeline as a fenced JSON block.
-// Extract the last such block, coerce it onto the current pipeline's identity,
-// and validate it. Returns the validated pipeline, or the validation errors so
-// the caller can tell the assistant to fix it.
 export const extractProposedPipeline = (text: string, base: ProposalBase): ProposedPipeline => {
   const candidate = lastJsonObject(text);
   if (candidate === null) return { pipeline: null, hadJson: false, errors: [] };
@@ -57,7 +53,6 @@ const lastJsonObject = (text: string): Record<string, unknown> | null => {
     if (obj && Array.isArray(obj["blocks"])) last = obj;
   }
   if (last) return last;
-  // Fall back to a raw object literal if the assistant forgot the fence.
   const braceStart = text.indexOf("{");
   const braceEnd = text.lastIndexOf("}");
   if (braceStart >= 0 && braceEnd > braceStart) {

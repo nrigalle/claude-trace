@@ -2,6 +2,7 @@ import type {
   BlockKind,
   FileOperation,
   HttpMethod,
+  InputColumnType,
   Interpreter,
   ReduceMode,
 } from "../../../src/features/pipelines/domain/types";
@@ -11,6 +12,7 @@ import {
   ICON_EVALUATOR,
   ICON_FILE,
   ICON_HTTP,
+  ICON_INPUT,
   ICON_LLM,
   ICON_LOOP,
   ICON_MAP,
@@ -44,6 +46,12 @@ export const HTTP_METHOD_OPTIONS: readonly { readonly id: HttpMethod; readonly l
 export const FILE_OP_OPTIONS: readonly { readonly id: FileOperation; readonly label: string }[] = [
   { id: "write", label: "Write file" },
   { id: "read", label: "Read file" },
+];
+
+export const INPUT_COLUMN_TYPE_OPTIONS: readonly { readonly id: InputColumnType; readonly label: string }[] = [
+  { id: "text", label: "Text" },
+  { id: "url", label: "URL" },
+  { id: "enum", label: "Dropdown" },
 ];
 
 export interface LibraryEntry {
@@ -127,9 +135,21 @@ export const LIBRARY: readonly LibraryEntry[] = [
     icon: ICON_MAP,
   },
   {
+    kind: "pool",
+    label: "Worker Pool",
+    description: "Drain a list with a fixed number of tool-enabled Claude sessions running at once. Each session grabs the next item when it is free.",
+    icon: ICON_PARALLEL,
+  },
+  {
     kind: "approval",
     label: "Approval",
     description: "Pause the run for a human to review. The pipeline continues only after you click Continue.",
     icon: ICON_APPROVAL,
+  },
+  {
+    kind: "input",
+    label: "Input table",
+    description: "Pause the run for the user to fill in a table. Each row becomes an item a later Map or Worker Pool can iterate over.",
+    icon: ICON_INPUT,
   },
 ];

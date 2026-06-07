@@ -34,6 +34,7 @@ const samplePipeline = (): Pipeline => ({
 const sampleRunState = (): RunState => ({
   runId: toRunId("r1"),
   pipelineId: toPipelineId("p1"),
+  name: "My first run",
   pipelineSnapshot: samplePipeline(),
   startedAtMs: 500,
   endedAtMs: 600,
@@ -212,6 +213,50 @@ describe("serializePipeline — Parallel + Loop", () => {
 });
 
 
+describe("serializePipeline — Worker Pool", () => {
+  const poolPipeline = (concurrency: number): Pipeline => ({
+    id: toPipelineId("p1"),
+    name: "Has pool",
+    createdAtMs: 100,
+    updatedAtMs: 200,
+    blocks: [
+      {
+        id: toBlockId("pool1"),
+        kind: "pool",
+        name: "Drain leads",
+        listVar: "leads",
+        itemVar: "item",
+        concurrency,
+        prompt: "Enrich ${vars.item}",
+        model: "claude-sonnet-4-6",
+        effort: "high",
+        outputVar: "enriched",
+      },
+    ],
+    triggers: [],
+  });
+
+  it("round-trips a pool block with all fields", () => {
+    const original = poolPipeline(6);
+    expect(parsePipeline(JSON.parse(serializePipeline(original)))).toEqual(original);
+  });
+
+  it("clamps concurrency into 1..20 on read", () => {
+    const tooHigh = JSON.parse(serializePipeline(poolPipeline(6))) as { blocks: { concurrency: number }[] };
+    tooHigh.blocks[0]!.concurrency = 999;
+    expect((parsePipeline(tooHigh)!.blocks[0] as { concurrency: number }).concurrency).toBe(20);
+    const tooLow = JSON.parse(serializePipeline(poolPipeline(6))) as { blocks: { concurrency: number }[] };
+    tooLow.blocks[0]!.concurrency = 0;
+    expect((parsePipeline(tooLow)!.blocks[0] as { concurrency: number }).concurrency).toBe(1);
+  });
+
+  it("rejects a pool block missing concurrency on read", () => {
+    const obj = JSON.parse(serializePipeline(poolPipeline(6))) as { blocks: Record<string, unknown>[] };
+    delete obj.blocks[0]!["concurrency"];
+    expect(parsePipeline(obj)).toBeNull();
+  });
+});
+
 describe("new deterministic block kinds round-trip", () => {
   const withBlock = (b: unknown): Pipeline =>
     ({
@@ -365,6 +410,50 @@ describe("approval block round-trip", () => {
   it("round-trips an approval block", () => {
     const p = { id: toPipelineId("p"), name: "P", createdAtMs: 1, updatedAtMs: 2, blocks: [{ id: toBlockId("a1"), kind: "approval", name: "Review", message: "ok?" }], triggers: [] } as unknown as Pipeline;
     expect(parsePipeline(JSON.parse(serializePipeline(p)))).toEqual(p);
+  });
+});
+
+describe("input block round-trip", () => {
+  const withBlock = (b: unknown): Pipeline =>
+    ({ id: toPipelineId("p"), name: "P", createdAtMs: 1, updatedAtMs: 2, blocks: [b], triggers: [] } as unknown as Pipeline);
+
+  it("round-trips an input block with text and enum columns", () => {
+    const p = withBlock({
+      id: toBlockId("in1"),
+      kind: "input",
+      name: "Collect leads",
+      message: "Fill one row per lead.",
+      columns: [
+        { key: "site", label: "Site", type: "url", options: [], required: true, help: null },
+        { key: "category", label: "Category", type: "enum", options: ["Massage", "Hair salon"], required: true, help: "Pick one" },
+      ],
+      outputVar: "rows",
+    });
+    expect(parsePipeline(JSON.parse(serializePipeline(p)))).toEqual(p);
+  });
+
+  it("rejects an input block missing its columns", () => {
+    const obj = JSON.parse(serializePipeline(withBlock({
+      id: toBlockId("in1"), kind: "input", name: "x", message: "m", columns: [{ key: "a", label: "A", type: "text", options: [], required: false, help: null }], outputVar: "rows",
+    })));
+    delete obj["blocks"][0]["columns"];
+    expect(parsePipeline(obj)).toBeNull();
+  });
+
+  it("rejects an input column with an unknown type", () => {
+    const obj = JSON.parse(serializePipeline(withBlock({
+      id: toBlockId("in1"), kind: "input", name: "x", message: "m", columns: [{ key: "a", label: "A", type: "text", options: [], required: false, help: null }], outputVar: null,
+    })));
+    obj["blocks"][0]["columns"][0]["type"] = "phone";
+    expect(parsePipeline(obj)).toBeNull();
+  });
+
+  it("rejects an input block missing its message", () => {
+    const obj = JSON.parse(serializePipeline(withBlock({
+      id: toBlockId("in1"), kind: "input", name: "x", message: "m", columns: [{ key: "a", label: "A", type: "text", options: [], required: false, help: null }], outputVar: null,
+    })));
+    delete obj["blocks"][0]["message"];
+    expect(parsePipeline(obj)).toBeNull();
   });
 });
 

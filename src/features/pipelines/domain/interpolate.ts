@@ -6,18 +6,23 @@ export interface InterpolationContext {
   readonly blockOutputs: Readonly<Record<string, string>>;
 }
 
-const resolveExpr = (expr: string, ctx: InterpolationContext): string | null => {
+const resolveExpr = (expr: string, ctx: InterpolationContext, bareVars: boolean): string | null => {
   if (expr === "workspace") return ctx.workspace;
   const varMatch = /^vars\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(expr);
   if (varMatch) return ctx.vars[varMatch[1]!] ?? "";
   const blockMatch = /^blocks\.(.+)\.output$/.exec(expr);
   if (blockMatch) return ctx.blockOutputs[blockMatch[1]!] ?? "";
+  if (bareVars && /^[A-Za-z_][A-Za-z0-9_]*$/.test(expr) && expr in ctx.vars) return ctx.vars[expr] ?? "";
   return null;
 };
 
-export const interpolate = (template: string, ctx: InterpolationContext): string =>
+export const interpolate = (
+  template: string,
+  ctx: InterpolationContext,
+  opts: { readonly bareVars?: boolean } = {},
+): string =>
   template.replace(/\$\{([^}]+)\}/g, (whole, expr: string) => {
-    const resolved = resolveExpr(expr.trim(), ctx);
+    const resolved = resolveExpr(expr.trim(), ctx, opts.bareVars === true);
     return resolved ?? whole;
   });
 

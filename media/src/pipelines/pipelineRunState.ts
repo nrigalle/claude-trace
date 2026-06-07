@@ -27,10 +27,44 @@ export interface RunBlockState {
   readonly loopMaxIterations?: number;
   readonly parallelDoneCount?: number;
   readonly parallelTotalCount?: number;
+  readonly poolDoneCount?: number;
+  readonly poolActiveCount?: number;
 }
 
 export const blockCountLabel = (n: number): string => `${n} block${n === 1 ? "" : "s"}`;
 export const runCountLabel = (n: number): string => `${n} run${n === 1 ? "" : "s"}`;
+
+export const runDisplayName = (name: string, pipelineName: string, startedAtMs: number): string => {
+  if (name.trim().length > 0) return name;
+  const d = new Date(startedAtMs);
+  const date = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return `${pipelineName} · ${date} · ${time}`;
+};
+
+export const formatRelativeTime = (ms: number, nowMs: number): string => {
+  const diff = Math.max(0, nowMs - ms);
+  const min = Math.round(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+};
+
+export type RunDateGroup = "Today" | "Yesterday" | "Previous 7 days" | "Earlier";
+
+export const runDateGroup = (ms: number, nowMs: number): RunDateGroup => {
+  const startOfToday = new Date(nowMs);
+  startOfToday.setHours(0, 0, 0, 0);
+  const startMs = startOfToday.getTime();
+  if (ms >= startMs) return "Today";
+  if (ms >= startMs - 86400000) return "Yesterday";
+  if (ms >= startMs - 7 * 86400000) return "Previous 7 days";
+  return "Earlier";
+};
 
 export const staticSublabel = (
   kind: "start" | "end",
@@ -71,6 +105,9 @@ export const buildRunBlockState = (
   const parallelDoneCount = blockRun.parallel
     ? blockRun.parallel.workerRuns.filter((w) => w.status === "done").length
     : undefined;
+  const isPool = definition.kind === "pool";
+  const poolDoneCount = isPool ? blockRun.sessions.filter((s) => s.endedAtMs !== null).length : undefined;
+  const poolActiveCount = isPool ? blockRun.sessions.filter((s) => s.endedAtMs === null).length : undefined;
   return {
     runId,
     status: blockRun.status,
@@ -87,6 +124,8 @@ export const buildRunBlockState = (
     loopMaxIterations: definition.kind === "loop" ? definition.maxIterations : undefined,
     parallelDoneCount,
     parallelTotalCount,
+    poolDoneCount,
+    poolActiveCount,
   };
 };
 

@@ -2,12 +2,14 @@ import { h } from "../ui/h.js";
 import type {
   Block,
   BlockSessionRecord,
+  InputBlock,
+  InputColumn,
   RunId,
   RunState,
 } from "../../../src/features/pipelines/domain/types";
 import type { PipelinesWebviewToHost, SessionTarget } from "../../../src/features/pipelines/protocol";
-import { ICON_PLAY, ICON_SLIDERS, ICON_TAG } from "./pipelineIcons.js";
-import { inspectorSection } from "./inspectorFields.js";
+import { ICON_INPUT, ICON_PLAY, ICON_SCRIPT, ICON_SLIDERS, ICON_TAG } from "./pipelineIcons.js";
+import { inspectorSection, selectFromOptions } from "./inspectorFields.js";
 import { blockNodeMeta } from "./pipelineBlockMeta.js";
 
 export interface RunDetailHost {
@@ -20,7 +22,12 @@ export interface RunDetailHost {
 }
 
 export class RunDetailPanel {
+  private readonly transcripts = new Map<string, string>();
   constructor(private readonly host: RunDetailHost) {}
+
+  cacheTranscript(sessionId: string, text: string): void {
+    this.transcripts.set(sessionId, text.length > 0 ? text : "(No readable session content.)");
+  }
 
   private renderSessionButtons(
     runId: RunId,
@@ -168,18 +175,27 @@ export class RunDetailPanel {
       ),
     );
 
+    if (definition.kind === "input" && blockRun.status === "stuck") {
+      form.appendChild(this.renderInputForm(run.runId, definition));
+    }
+
+    const logsSection = this.renderLogsSection(blockRun);
+    if (logsSection) form.appendChild(logsSection);
+
     const sessionsCount = blockRun.sessions.length;
     if (sessionsCount === 0) {
-      form.appendChild(
-        inspectorSection(
-          ICON_SLIDERS,
-          "Sessions",
-          h("div", {
-            className: "pl-field-hint",
-            textContent: "This block hasn't been executed yet.",
-          }),
-        ),
-      );
+      if (!logsSection && blockRun.status === "pending") {
+        form.appendChild(
+          inspectorSection(
+            ICON_SLIDERS,
+            "Sessions",
+            h("div", {
+              className: "pl-field-hint",
+              textContent: "This block hasn't been executed yet.",
+            }),
+          ),
+        );
+      }
     } else {
       const sessionsBody = h("div", { style: { display: "flex", flexDirection: "column", gap: "12px" } });
       blockRun.sessions.forEach((session) => {
@@ -193,6 +209,120 @@ export class RunDetailPanel {
     }
 
     this.host.panelBody.appendChild(form);
+  }
+
+  private renderInputForm(runId: RunId, definition: InputBlock): HTMLElement {
+    const columns = definition.columns;
+    const blankRow = (): Record<string, string> => {
+      const row: Record<string, string> = {};
+      for (const c of columns) row[c.key] = c.type === "enum" ? (c.options[0] ?? "") : "";
+      return row;
+    };
+    const rows: Record<string, string>[] = [blankRow()];
+
+    const tableBody = h("div", { className: "pl-input-rows" });
+    const cell = (rowIndex: number, column: InputColumn): HTMLElement => {
+      if (column.type === "enum") {
+        return selectFromOptions(
+          column.options.map((o) => ({ id: o, label: o })),
+          rows[rowIndex]![column.key] ?? (column.options[0] ?? ""),
+          (v) => { rows[rowIndex]![column.key] = v; },
+        );
+      }
+      const input = h("input", {
+        className: "pl-field-input",
+        attrs: { type: column.type === "url" ? "url" : "text", placeholder: column.label },
+        on: { input: (e) => { rows[rowIndex]![column.key] = (e.currentTarget as HTMLInputElement).value; } },
+      });
+      input.value = rows[rowIndex]![column.key] ?? "";
+      return input;
+    };
+    const rebuild = (): void => {
+      tableBody.replaceChildren();
+      rows.forEach((_, rowIndex) => {
+        const rowEl = h("div", { className: "pl-input-row" });
+        for (const column of columns) {
+          rowEl.appendChild(
+            h("div", { className: "pl-input-cell" },
+              h("label", { className: "pl-field-label", textContent: column.label + (column.required ? " *" : "") }),
+              cell(rowIndex, column),
+            ),
+          );
+        }
+        rowEl.appendChild(
+          h("button", {
+            className: "pl-btn ghost",
+            attrs: { type: "button", title: "Remove row" },
+            textContent: "✕",
+            on: {
+              click: () => {
+                if (rows.length <= 1) return;
+                rows.splice(rowIndex, 1);
+                rebuild();
+              },
+            },
+          }),
+        );
+        tableBody.appendChild(rowEl);
+      });
+    };
+    rebuild();
+
+    const addBtn = h("button", {
+      className: "pl-btn ghost",
+      attrs: { type: "button" },
+      textContent: "+ Add row",
+      on: { click: () => { rows.push(blankRow()); rebuild(); } },
+    });
+
+    const submitBtn = h("button", {
+      className: "pl-btn primary",
+      attrs: { type: "button" },
+      textContent: "Submit & continue",
+      on: {
+        click: () => {
+          const missing = rows.some((row) =>
+            columns.some((c) => c.required && (row[c.key] ?? "").trim().length === 0),
+          );
+          if (missing) {
+            this.host.showNotice("warning", "Fill in every required field before continuing.");
+            return;
+          }
+          this.host.send({ type: "submitInput", runId, blockId: definition.id, rows });
+        },
+      },
+    });
+
+    const body = h(
+      "div",
+      { style: { display: "flex", flexDirection: "column", gap: "12px" } },
+      tableBody,
+      h("div", { style: { display: "flex", gap: "8px", alignItems: "center" } }, addBtn, submitBtn),
+    );
+    return inspectorSection(ICON_INPUT, "Fill in the table", body, { meta: `${columns.length} column${columns.length === 1 ? "" : "s"}` });
+  }
+
+  private renderLogsSection(blockRun: RunState["blocks"][number]): HTMLElement | null {
+    const live = typeof blockRun.logTail === "string" && blockRun.logTail.length > 0 ? blockRun.logTail : null;
+    const log = live ?? blockRun.output ?? "";
+    if (log.length === 0) return null;
+    const running = blockRun.status === "running";
+    const pre = h("pre", { className: "pl-run-log", textContent: log });
+    requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+    const body = h(
+      "div",
+      { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+      running
+        ? h(
+            "div",
+            { className: "pl-run-log-live" },
+            h("span", { className: "pl-spinner-dot" }),
+            h("span", { textContent: "Streaming live output…" }),
+          )
+        : null,
+      pre,
+    );
+    return inspectorSection(ICON_SCRIPT, running ? "Live output" : "Output", body, running ? { meta: "live" } : undefined);
   }
 
   private renderRunSessionCard(
@@ -317,6 +447,23 @@ export class RunDetailPanel {
           },
           textContent: session.promptSent,
         }),
+      ),
+    );
+
+    const cached = this.transcripts.get(session.sessionId);
+    card.appendChild(
+      h(
+        "div",
+        { className: "pl-field" },
+        h("label", { className: "pl-field-label", textContent: "Session content" }),
+        cached !== undefined
+          ? h("pre", { className: "pl-run-log", textContent: cached })
+          : h("button", {
+              className: "pl-btn",
+              attrs: { type: "button", title: "Read this session without resuming it" },
+              textContent: "Read session",
+              on: { click: () => this.host.send({ type: "loadSessionTranscript", sessionId: session.sessionId }) },
+            }),
       ),
     );
 

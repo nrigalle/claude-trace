@@ -38,6 +38,18 @@ describe("interpolate", () => {
     expect(interpolate("keep ${bogus} and ${vars.name}", ctx())).toBe("keep ${bogus} and alex");
   });
 
+  it("leaves a bare ${name} untouched by default (strict), protecting bash ${VAR} in scripts", () => {
+    expect(interpolate("echo ${name} ${HOME}", ctx())).toBe("echo ${name} ${HOME}");
+  });
+
+  it("with bareVars, resolves a bare ${name} from vars (so Claude prompts tolerate ${lead} not just ${vars.lead})", () => {
+    expect(interpolate("Lead: ${name}, ticket ${ticket}", ctx(), { bareVars: true })).toBe("Lead: alex, ticket API-42");
+  });
+
+  it("with bareVars, still leaves a bare ${name} untouched when it is not a known variable", () => {
+    expect(interpolate("keep ${HOME} and ${name}", ctx(), { bareVars: true })).toBe("keep ${HOME} and alex");
+  });
+
   it("resolves a block output that is the empty string (present but empty) rather than leaving the token", () => {
     expect(interpolate("[${blocks.build-2.output}]", ctx())).toBe("[]");
   });

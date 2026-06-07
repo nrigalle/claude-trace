@@ -6,6 +6,7 @@ export interface ScriptRequest {
   readonly cwd: string;
   readonly env: Readonly<Record<string, string>>;
   readonly signal: AbortSignal;
+  readonly onLog?: (chunk: string) => void;
 }
 
 export interface ScriptResult {

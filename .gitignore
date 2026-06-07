@@ -11,3 +11,13 @@ media/out/
 .vscode-test/
 coverage/
 dist-test-mock-claude
+.claude/
+.trace-manifest.json
+firstnames.jsonl
+ice/
+icebreakers.jsonl
+quality/
+quality_input.jsonl
+scraped.jsonl
+scrapes/
+shots/

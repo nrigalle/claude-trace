@@ -690,7 +690,7 @@
   position: relative;
   width: 380px;
   min-width: 300px;
-  max-width: 900px;
+  max-width: 80vw;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -774,8 +774,7 @@
   box-shadow: var(--ct-elev-1), var(--ct-rim-accent);
 }
 
-/* Model / Effort: a two-column grid with the label stacked above each control,
-   so both dropdowns are always the same width and perfectly aligned. */
+
 .lib-asst-pick-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -800,7 +799,7 @@
   letter-spacing: 0.05em;
   color: var(--ct-text-dim);
 }
-/* Shared control box for the dropdowns and the inline rename input. */
+
 .lib-asst-pick {
   -webkit-appearance: none;
   appearance: none;
@@ -820,7 +819,7 @@
     box-shadow 140ms var(--ct-ease-out);
 }
 .lib-asst-pick-row .lib-asst-pick { width: 100%; }
-/* Custom chevron only on the selects (not the rename text input). */
+
 select.lib-asst-pick {
   padding-right: 28px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%238b8b98' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -1047,6 +1046,38 @@ select.lib-asst-pick:focus-visible {
   flex-direction: column;
   gap: 8px;
   max-width: 100%;
+  position: relative;
+}
+.lib-asst-copy {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--ct-border);
+  border-radius: 6px;
+  background: var(--ct-bg, rgba(20, 20, 24, 0.92));
+  color: var(--ct-text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.lib-asst-turn:hover .lib-asst-copy,
+.lib-asst-copy:focus-visible {
+  opacity: 1;
+}
+.lib-asst-copy:hover {
+  color: var(--ct-text-primary);
+  border-color: var(--ct-text-secondary);
+}
+.lib-asst-copy.copied {
+  opacity: 1;
+  color: #7ad19b;
+  border-color: #7ad19b;
 }
 .lib-asst-turn.user {
   align-self: flex-end;
