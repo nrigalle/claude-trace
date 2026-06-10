@@ -312,3 +312,38 @@ describe("PipelinesApp — deterministic block rendering", () => {
     expect(bubbleAfter.getAttribute("data-status")).toBe("done");
   });
 });
+
+describe("PipelinesApp — run rename survives live updates (regression: typing clobbered by runUpdate)", () => {
+  it("defers runUpdate re-renders while the header name input is focused, then applies them after blur commits the rename", async () => {
+    const sent: { type: string }[] = [];
+    const p = pipeline("p1", "Demo", [worker("w1", "Step 1")]);
+    const app = new PipelinesApp({ send: (m) => sent.push(m as { type: string }) });
+    document.body.appendChild(app.element());
+    app.receive({
+      type: "pipelinesList",
+      payload: { pipelines: [p], runs: [runSummary({ runId: "r1", pipelineId: "p1" })] },
+    });
+    (app as unknown as PrivateSelect).handleSelectRun(toRunId("r1"));
+    app.receive({ type: "runUpdate", run: runState("r1", p, [blockRun("w1", "running", 1)]) });
+
+    const input = app.element().querySelector<HTMLInputElement>(".pl-run-name-input")!;
+    input.focus();
+    input.value = "Maquette Namo";
+    expect(document.activeElement).toBe(input);
+
+    app.receive({ type: "runUpdate", run: runState("r1", p, [blockRun("w1", "running", 2)]) });
+    const inputAfter = app.element().querySelector<HTMLInputElement>(".pl-run-name-input")!;
+    expect(inputAfter, "the input must NOT be rebuilt mid-typing").toBe(input);
+    expect(inputAfter.value).toBe("Maquette Namo");
+    expect(document.activeElement).toBe(input);
+
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.blur();
+    await new Promise((r) => setTimeout(r, 5));
+
+    expect(sent.some((m) => m.type === "renameRun"), "blur commits the rename").toBe(true);
+    const rebuilt = app.element().querySelector<HTMLInputElement>(".pl-run-name-input")!;
+    expect(rebuilt, "the deferred runUpdate re-render applies once editing ends").not.toBe(input);
+    document.body.removeChild(app.element());
+  });
+});

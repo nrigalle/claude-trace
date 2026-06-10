@@ -73,7 +73,7 @@ export type CockpitWebviewToHost =
   | { readonly type: "terminalInput"; readonly sessionId: string; readonly data: string }
   | { readonly type: "terminalResize"; readonly sessionId: string; readonly cols: number; readonly rows: number }
   | { readonly type: "terminalClose"; readonly sessionId: string }
-  | { readonly type: "cockpitResumeSession"; readonly sessionId: string }
+  | { readonly type: "cockpitResumeSession"; readonly sessionId: string; readonly permissionMode?: PermissionMode }
   | { readonly type: "cockpitPauseSession"; readonly sessionId: string }
   | { readonly type: "cockpitAddTab"; readonly windowId: string }
   | { readonly type: "cockpitMoveSession"; readonly sessionId: string; readonly spaceId: string | null }

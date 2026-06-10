@@ -1,5 +1,6 @@
 export type ModelChoice =
   | "default"
+  | "claude-fable-5[1m]"
   | "claude-opus-4-8"
   | "claude-opus-4-7"
   | "claude-sonnet-4-6"
@@ -18,6 +19,7 @@ export const DEFAULT_MODEL_CHOICE: ModelChoice = "claude-opus-4-8";
 
 export const MODEL_CHOICES: readonly ModelChoice[] = [
   "default",
+  "claude-fable-5[1m]",
   "claude-opus-4-8",
   "claude-opus-4-7",
   "claude-sonnet-4-6",
@@ -32,6 +34,12 @@ export const MODEL_OPTIONS: readonly ModelOption[] = [
     id: "claude-opus-4-8",
     label: "Opus 4.8",
     oneLine: "Default. 1M context, adaptive thinking, best for hard coding and agents. $5/$25 per MTok.",
+    effortLevels: OPUS_EFFORT_LEVELS,
+  },
+  {
+    id: "claude-fable-5[1m]",
+    label: "Fable 5 (1m)",
+    oneLine: "Frontier preview with a 1M context window. Deepest reasoning available today.",
     effortLevels: OPUS_EFFORT_LEVELS,
   },
   {

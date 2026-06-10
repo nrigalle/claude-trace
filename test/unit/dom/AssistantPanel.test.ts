@@ -725,3 +725,39 @@ describe("AssistantPanel — item switching isolation", () => {
     expect(activeMode.getAttribute("data-mode")).toBe("writeBody");
   });
 });
+
+describe("AssistantPanel — composer survives streaming (regression: draft wiped by progress rebuilds)", () => {
+  it("preserves the draft, focus and caret across assistantProgress/assistantBusy rebuilds", async () => {
+    const { panel, root } = mount();
+    panel.setOpen(true);
+    await sendUserMessage(root, "first question");
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
+
+    const input = root.querySelector(".lib-asst-input .ct-ta-input") as HTMLTextAreaElement;
+    input.focus();
+    input.value = "my next question typed mid-stream";
+    input.setSelectionRange(7, 7);
+
+    panel.receive({ type: "assistantProgress", itemKey: "skill:code-review", conversationId: cid(), events: [{ kind: "text", text: "thinking…" }] });
+
+    const after = root.querySelector(".lib-asst-input .ct-ta-input") as HTMLTextAreaElement;
+    expect(after.value, "draft must survive the progress rebuild").toBe("my next question typed mid-stream");
+    expect(document.activeElement, "focus must stay in the composer").toBe(after);
+    expect(after.selectionStart, "caret position must survive").toBe(7);
+  });
+
+  it("does not yank the history scroll to the bottom when the user scrolled up", async () => {
+    const { panel, root } = mount();
+    panel.setOpen(true);
+    await sendUserMessage(root, "first question");
+    panel.receive({ type: "assistantBusy", itemKey: "skill:code-review", conversationId: cid(), busy: true });
+
+    const history = root.querySelector(".lib-asst-history") as HTMLElement;
+    Object.defineProperty(history, "scrollHeight", { configurable: true, get: () => 1000 });
+    Object.defineProperty(history, "clientHeight", { configurable: true, get: () => 200 });
+    history.scrollTop = 100;
+
+    panel.receive({ type: "assistantProgress", itemKey: "skill:code-review", conversationId: cid(), events: [{ kind: "text", text: "more output" }] });
+    expect(history.scrollTop, "reading position must be preserved").toBe(100);
+  });
+});

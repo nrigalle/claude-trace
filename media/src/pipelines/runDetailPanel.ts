@@ -310,8 +310,12 @@ export class RunDetailPanel {
     const log = live ?? blockRun.output ?? "";
     if (log.length === 0) return null;
     const running = blockRun.status === "running";
+    const previous = this.host.panelBody.querySelector<HTMLElement>(".pl-run-log");
+    const wasAtBottom = previous === null ||
+      previous.scrollHeight - (previous.scrollTop + previous.clientHeight) < 24;
+    const previousScrollTop = previous?.scrollTop ?? 0;
     const pre = h("pre", { className: "pl-run-log", textContent: log });
-    requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+    requestAnimationFrame(() => { pre.scrollTop = wasAtBottom ? pre.scrollHeight : previousScrollTop; });
     const body = h(
       "div",
       { style: { display: "flex", flexDirection: "column", gap: "8px" } },

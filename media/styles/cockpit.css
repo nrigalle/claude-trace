@@ -757,6 +757,19 @@ body.tc-dragging-window * {
   background: rgba(16, 15, 20, 0.94);
 }
 
+.tc-resume-permission {
+  max-width: 280px;
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  font-family: var(--ct-font);
+  color: var(--ct-text-primary);
+  background: var(--ct-bg-1);
+  border: 1px solid var(--ct-border);
+  border-radius: 8px;
+}
+.tc-resume-permission:focus-visible { outline: 2px solid var(--ct-focus); outline-offset: 2px; }
+
 .tc-tile-resume.hidden {
   display: none;
 }

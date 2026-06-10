@@ -11,19 +11,10 @@ import type {
   PoolBlock,
   RunId,
   RunState,
-  ScheduleRecurrence,
   Trigger,
   WorkerBlock,
 } from "../../../src/features/pipelines/domain/types";
 import { toBlockId, clampConcurrency } from "../../../src/features/pipelines/domain/types";
-import {
-  INTERVAL_UNITS,
-  WEEKDAY_LABELS,
-  describeRecurrence,
-  formatMinute,
-  intervalToMs,
-  splitInterval,
-} from "../../../src/features/pipelines/domain/schedule.js";
 import { assertNeverPipelines } from "../../../src/features/pipelines/protocol";
 import type {
   PipelinesHostToWebview,
@@ -32,11 +23,8 @@ import type {
 } from "../../../src/features/pipelines/protocol";
 import {
   ICON_END,
-  ICON_HTTP,
-  ICON_PLAY,
   ICON_PLUS,
   ICON_START,
-  ICON_WAIT,
   ICON_ZAP,
 } from "./pipelineIcons.js";
 import {
@@ -46,16 +34,12 @@ import {
   buildRunBlockState,
   computeRunSignature,
   startEndState,
-  runDisplayName,
-  runDateGroup,
 } from "./pipelineRunState.js";
-import { createBlock, defaultWorker, makeId, orchStatusFor } from "./pipelineBlockMeta.js";
-import {
-  bareTextInput,
-  inspectorSection,
-} from "./inspectorFields.js";
+import { createBlock, defaultWorker, orchStatusFor } from "./pipelineBlockMeta.js";
 import { PipelineInspectors } from "./pipelineInspectors.js";
 import { RunDetailPanel } from "./runDetailPanel.js";
+import { renderTriggersBody } from "./triggersPanel.js";
+import { renderRunsListPage, renderRunResults } from "./runsListView.js";
 import { PipelineCanvas } from "./pipelineCanvas.js";
 import { PipelineSidebar } from "./pipelineSidebar.js";
 import { PipelineToolbar } from "./pipelineToolbar.js";
@@ -77,6 +61,9 @@ type PanelMode =
   | { kind: "inspector"; blockId: string }
   | { kind: "run-block-detail"; blockId: string }
   | { kind: "triggers" };
+
+const isEditableElement = (el: HTMLElement): boolean =>
+  el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT";
 
 const ZOOM_STEP = 0.1;
 const ZOOM_MIN = 0.5;
@@ -100,6 +87,7 @@ export class PipelinesApp {
   private autoOpenRunForPipeline: PipelineId | null = null;
   private runsSearchQuery = "";
   private runsStatusFilter = "all";
+  private readonly deferredWhileRenaming = new Map<string, PipelinesHostToWebview>();
   private zoom = 1;
   private loopDefineMode: string | null = null;
   private readonly activeParallelWorker = new Map<string, string>();
@@ -307,6 +295,28 @@ export class PipelinesApp {
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
       this.closePanel();
     });
+    this.root.addEventListener(
+      "focusout",
+      (e: FocusEvent) => {
+        const left = e.target as HTMLElement | null;
+        if (!left || !isEditableElement(left)) return;
+        setTimeout(() => this.flushDeferredWhileRenaming(), 0);
+      },
+      true,
+    );
+  }
+
+  private isEditingInApp(): boolean {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !isEditableElement(active) || !this.root.contains(active)) return false;
+    return !this.assistant.element().contains(active);
+  }
+
+  private flushDeferredWhileRenaming(): void {
+    if (this.isEditingInApp() || this.deferredWhileRenaming.size === 0) return;
+    const pending = [...this.deferredWhileRenaming.values()];
+    this.deferredWhileRenaming.clear();
+    for (const msg of pending) this.receive(msg);
   }
 
   element(): HTMLElement {
@@ -327,6 +337,10 @@ export class PipelinesApp {
   }
 
   receive(msg: PipelinesHostToWebview): void {
+    if (this.isEditingInApp() && (msg.type === "runUpdate" || msg.type === "pipelinesList")) {
+      this.deferredWhileRenaming.set(msg.type, msg);
+      return;
+    }
     switch (msg.type) {
       case "pipelinesList":
         this.pipelines = msg.payload.pipelines;
@@ -532,95 +546,15 @@ export class PipelinesApp {
   }
 
   private renderPipelineRunsList(pipelineId: PipelineId): void {
-    const allRuns = this.runs
-      .filter((r) => r.pipelineId === pipelineId)
-      .sort((a, b) => b.startedAtMs - a.startedAtMs);
-
-    const container = h("div", { className: "pl-runs-page" });
-
-    if (allRuns.length === 0) {
-      container.appendChild(
-        h(
-          "div",
-          { className: "pl-empty" },
-          h("div", { className: "pl-empty-title", textContent: "No runs yet" }),
-          h("div", {
-            className: "pl-empty-hint",
-            textContent: "Click \"Run workflow\" to start this pipeline. Past runs will appear here.",
-          }),
-        ),
-      );
-      this.canvasEl.appendChild(container);
-      return;
-    }
-
-    const listEl = h("div", { className: "pl-runs-list" });
-    const refresh = (): void => {
-      clear(listEl);
-      const q = this.runsSearchQuery.trim().toLowerCase();
-      const filtered = allRuns.filter(
-        (r) =>
-          (this.runsStatusFilter === "all" || r.status === this.runsStatusFilter) &&
-          (q === "" || runDisplayName(r.name, r.pipelineName, r.startedAtMs).toLowerCase().includes(q)),
-      );
-      if (filtered.length === 0) {
-        listEl.appendChild(h("div", { className: "pl-runs-empty-filter", textContent: "No runs match." }));
-        return;
-      }
-      const now = Date.now();
-      let currentGroup = "";
-      for (const r of filtered) {
-        const group = runDateGroup(r.startedAtMs, now);
-        if (group !== currentGroup) {
-          currentGroup = group;
-          listEl.appendChild(h("div", { className: "pl-runs-group-label", textContent: group }));
-        }
-        const selected = this.selection.kind === "run" && this.selection.runId === r.runId;
-        listEl.appendChild(this.sidebar.renderRunRow(r, selected));
-      }
-    };
-
-    const searchInput = h("input", {
-      className: "pl-runs-search",
-      attrs: { type: "search", placeholder: "Search runs by name…", spellcheck: "false" },
-      on: {
-        input: (e) => {
-          this.runsSearchQuery = (e.currentTarget as HTMLInputElement).value;
-          refresh();
-        },
-      },
-    }) as HTMLInputElement;
-    searchInput.value = this.runsSearchQuery;
-
-    const chipsRow = h("div", { className: "pl-runs-filters" });
-    const renderChips = (): void => {
-      clear(chipsRow);
-      const statuses = ["all", "running", "paused-needs-input", "completed", "failed", "interrupted"];
-      for (const s of statuses) {
-        const count = s === "all" ? allRuns.length : allRuns.filter((r) => r.status === s).length;
-        if (s !== "all" && count === 0) continue;
-        const label = s === "all" ? "All" : s === "paused-needs-input" ? "Paused" : s.charAt(0).toUpperCase() + s.slice(1);
-        chipsRow.appendChild(
-          h("button", {
-            className: `pl-runs-chip${this.runsStatusFilter === s ? " active" : ""}${s !== "all" ? ` pl-status-${s}` : ""}`,
-            attrs: { type: "button" },
-            on: {
-              click: () => {
-                this.runsStatusFilter = s;
-                renderChips();
-                refresh();
-              },
-            },
-          }, h("span", { textContent: label }), h("span", { className: "pl-runs-chip-count", textContent: String(count) })),
-        );
-      }
-    };
-
-    container.appendChild(h("div", { className: "pl-runs-header" }, searchInput, chipsRow));
-    container.appendChild(listEl);
-    renderChips();
-    refresh();
-    this.canvasEl.appendChild(container);
+    this.canvasEl.appendChild(renderRunsListPage({
+      runs: () => this.runs,
+      isRunSelected: (runId) => this.selection.kind === "run" && this.selection.runId === runId,
+      getSearch: () => this.runsSearchQuery,
+      setSearch: (v) => { this.runsSearchQuery = v; },
+      getStatusFilter: () => this.runsStatusFilter,
+      setStatusFilter: (v) => { this.runsStatusFilter = v; },
+      renderRunRow: (r, selected) => this.sidebar.renderRunRow(r, selected),
+    }, pipelineId));
   }
 
   private setPipelineView(view: PipelineView): void {
@@ -696,7 +630,7 @@ export class PipelinesApp {
 
   private updateRunResults(run: RunState): void {
     const existing = this.canvasEl.querySelector<HTMLElement>(".pl-run-results");
-    const next = this.renderRunResults(run);
+    const next = renderRunResults(run, () => this.showNotice("info", "Results copied to clipboard."));
     if (!next) {
       existing?.remove();
       return;
@@ -706,42 +640,6 @@ export class PipelinesApp {
       return;
     }
     this.canvasEl.insertBefore(next, this.canvasEl.firstChild);
-  }
-
-  private renderRunResults(run: RunState): HTMLElement | null {
-    if (run.status === "running" || run.status === "paused-needs-input") return null;
-    let found: { name: string; output: string } | null = null;
-    run.blocks.forEach((br, i) => {
-      const def = run.pipelineSnapshot.blocks[i];
-      if (def && br.output && br.output.trim().length > 0) {
-        found = { name: def.name || def.kind, output: br.output };
-      }
-    });
-    if (!found) return null;
-    const result: { name: string; output: string } = found;
-    const copyBtn = h("button", {
-      className: "pl-btn",
-      attrs: { type: "button", title: "Copy results" },
-      textContent: "Copy",
-      on: {
-        click: () => {
-          void navigator.clipboard?.writeText(result.output);
-          this.showNotice("info", "Results copied to clipboard.");
-        },
-      },
-    });
-    return h(
-      "div",
-      { className: "pl-run-results" },
-      h(
-        "div",
-        { className: "pl-run-results-head" },
-        h("span", { className: "pl-run-results-title", textContent: "Results" }),
-        h("span", { className: "pl-run-results-src", textContent: `from "${result.name}"` }),
-        copyBtn,
-      ),
-      h("pre", { className: "pl-run-results-body", textContent: result.output }),
-    );
   }
 
   private openLibraryAt(index: number): void {
@@ -911,136 +809,11 @@ export class PipelinesApp {
 
   private renderTriggersBody(): void {
     if (this.selection.kind !== "pipeline") return;
-    const triggers = this.selection.draft.triggers;
-    const body = h("div", { className: "pl-inspector-form" });
-
-    triggers.forEach((trigger, index) => {
-      const rows: HTMLElement[] = [];
-      const enabledCb = h("input", {
-        attrs: { type: "checkbox" },
-        on: {
-          change: (e) =>
-            this.updateTriggers((ts) =>
-              ts.map((t, i) => (i === index ? { ...t, enabled: (e.currentTarget as HTMLInputElement).checked } : t)),
-            ),
-        },
-      });
-      enabledCb.checked = trigger.enabled;
-      rows.push(h("label", { className: "pl-field", style: { flexDirection: "row", alignItems: "center", gap: "8px" } }, enabledCb, h("span", { textContent: "Enabled" })));
-
-      if (trigger.kind === "schedule") {
-        rows.push(...this.scheduleEditorRows(trigger.recurrence, index));
-      } else {
-        const input = bareTextInput(trigger.token, (v) =>
-          this.updateTriggers((ts) => ts.map((t, i) => (i === index && t.kind === "webhook" ? { ...t, token: v } : t))),
-        );
-        rows.push(h("div", { className: "pl-field" }, h("label", { className: "pl-field-label", textContent: "Secret token" }), input, h("div", { className: "pl-field-hint", textContent: "POST to /?token=<token> on the configured webhook port." })));
-      }
-
-      rows.push(
-        h("button", {
-          className: "pl-btn ghost danger",
-          attrs: { type: "button" },
-          textContent: "Remove trigger",
-          on: { click: () => this.updateTriggers((ts) => ts.filter((_, i) => i !== index)) },
-        }),
-      );
-
-      body.appendChild(
-        inspectorSection(
-          trigger.kind === "schedule" ? ICON_WAIT : ICON_HTTP,
-          trigger.kind === "schedule" ? "Schedule" : "Webhook",
-          h("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } }, ...rows),
-        ),
-      );
-    });
-
-    const addRow = h(
-      "div",
-      { style: { display: "flex", gap: "8px" } },
-      h("button", {
-        className: "pl-btn ghost",
-        attrs: { type: "button" },
-        textContent: "+ Schedule",
-        on: { click: () => this.updateTriggers((ts) => [...ts, { kind: "schedule", enabled: true, recurrence: { type: "weekly", weekdays: [1], atMinute: 540 } }]) },
-      }),
-      h("button", {
-        className: "pl-btn ghost",
-        attrs: { type: "button" },
-        textContent: "+ Webhook",
-        on: { click: () => this.updateTriggers((ts) => [...ts, { kind: "webhook", token: makeId("hook"), enabled: true }]) },
-      }),
-    );
-    body.appendChild(inspectorSection(ICON_PLAY, "Add a trigger", addRow));
-    this.panelBody.appendChild(body);
-  }
-
-  private setRecurrence(index: number, recurrence: ScheduleRecurrence): void {
-    this.updateTriggers((ts) => ts.map((t, i) => (i === index && t.kind === "schedule" ? { ...t, recurrence } : t)));
-  }
-
-  private scheduleEditorRows(recurrence: ScheduleRecurrence, index: number): HTMLElement[] {
-    const rows: HTMLElement[] = [];
-    const atMinute = recurrence.type === "interval" ? 540 : recurrence.atMinute;
-
-    const typeSel = h("select", { className: "pl-field-input" },
-      ...(["interval", "daily", "weekly", "monthly"] as const).map((tp) =>
-        h("option", { attrs: { value: tp, ...(recurrence.type === tp ? { selected: "selected" } : {}) }, textContent: `${tp[0]!.toUpperCase()}${tp.slice(1)}` }),
-      ),
-    ) as HTMLSelectElement;
-    typeSel.addEventListener("change", () => this.setRecurrence(index, defaultRecurrenceOfType(typeSel.value, atMinute)));
-    rows.push(h("div", { className: "pl-field" }, h("label", { className: "pl-field-label", textContent: "Repeat" }), typeSel));
-
-    if (recurrence.type === "interval") {
-      const { value, unit } = splitInterval(recurrence.everyMs);
-      const valInput = h("input", { className: "pl-field-input", attrs: { type: "number", min: "1", step: "1" } }) as HTMLInputElement;
-      valInput.value = String(value);
-      const unitSel = h("select", { className: "pl-field-input" },
-        ...INTERVAL_UNITS.map((u) => h("option", { attrs: { value: u.id, ...(u.id === unit ? { selected: "selected" } : {}) }, textContent: u.label })),
-      ) as HTMLSelectElement;
-      const apply = (): void => this.setRecurrence(index, { type: "interval", everyMs: intervalToMs(Number(valInput.value) || 1, unitSel.value) });
-      valInput.addEventListener("input", apply);
-      unitSel.addEventListener("change", apply);
-      rows.push(h("div", { className: "pl-field" }, h("label", { className: "pl-field-label", textContent: "Every" }), h("div", { style: { display: "flex", gap: "8px" } }, valInput, unitSel)));
-    } else {
-      if (recurrence.type === "weekly") {
-        const chips = h("div", { style: { display: "flex", gap: "4px", flexWrap: "wrap" } });
-        WEEKDAY_LABELS.forEach((label, d) => {
-          const on = recurrence.weekdays.includes(d);
-          chips.appendChild(h("button", {
-            className: `pl-btn ghost${on ? " primary" : ""}`,
-            attrs: { type: "button", "aria-pressed": on ? "true" : "false" },
-            textContent: label,
-            on: { click: () => {
-              const set = new Set(recurrence.weekdays);
-              if (set.has(d)) set.delete(d); else set.add(d);
-              const weekdays = [...set].sort((a, b) => a - b);
-              this.setRecurrence(index, { type: "weekly", weekdays: weekdays.length > 0 ? weekdays : [d], atMinute });
-            } },
-          }));
-        });
-        rows.push(h("div", { className: "pl-field" }, h("label", { className: "pl-field-label", textContent: "On days" }), chips));
-      }
-      if (recurrence.type === "monthly") {
-        const dayInput = h("input", { className: "pl-field-input", attrs: { type: "number", min: "1", max: "31", step: "1" } }) as HTMLInputElement;
-        dayInput.value = String(recurrence.day);
-        dayInput.addEventListener("input", () => {
-          const d = Math.min(31, Math.max(1, Math.round(Number(dayInput.value) || 1)));
-          this.setRecurrence(index, { type: "monthly", day: d, atMinute });
-        });
-        rows.push(h("div", { className: "pl-field" }, h("label", { className: "pl-field-label", textContent: "Day of month" }), dayInput));
-      }
-      const timeInput = h("input", { className: "pl-field-input", attrs: { type: "time" } }) as HTMLInputElement;
-      timeInput.value = formatMinute(atMinute);
-      timeInput.addEventListener("input", () => {
-        const m = timeToMinute(timeInput.value);
-        if (m !== null) this.setRecurrence(index, withAtMinute(recurrence, m));
-      });
-      rows.push(h("div", { className: "pl-field" }, h("label", { className: "pl-field-label", textContent: "At time" }), timeInput));
-    }
-
-    rows.push(h("div", { className: "pl-field-hint", textContent: `Runs ${describeRecurrence(recurrence)}, while the Claude Trace tab is open and the computer is awake.` }));
-    return rows;
+    const draft = this.selection.draft;
+    this.panelBody.appendChild(renderTriggersBody({
+      triggers: () => draft.triggers,
+      updateTriggers: (fn) => this.updateTriggers(fn),
+    }));
   }
 
   private updateBlock<T extends Block>(blockId: string, fn: (b: T) => T): void {
@@ -1206,30 +979,3 @@ export class PipelinesApp {
     setTimeout(() => { notice.remove(); }, 6000);
   }
 }
-
-const timeToMinute = (v: string): number | null => {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(v.trim());
-  if (!m) return null;
-  const hours = Number(m[1]);
-  const minutes = Number(m[2]);
-  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
-  return hours * 60 + minutes;
-};
-
-const withAtMinute = (r: ScheduleRecurrence, atMinute: number): ScheduleRecurrence => {
-  switch (r.type) {
-    case "interval": return r;
-    case "daily": return { type: "daily", atMinute };
-    case "weekly": return { type: "weekly", weekdays: r.weekdays, atMinute };
-    case "monthly": return { type: "monthly", day: r.day, atMinute };
-  }
-};
-
-const defaultRecurrenceOfType = (type: string, atMinute: number): ScheduleRecurrence => {
-  switch (type) {
-    case "daily": return { type: "daily", atMinute };
-    case "weekly": return { type: "weekly", weekdays: [1], atMinute };
-    case "monthly": return { type: "monthly", day: 1, atMinute };
-    default: return { type: "interval", everyMs: 3_600_000 };
-  }
-};

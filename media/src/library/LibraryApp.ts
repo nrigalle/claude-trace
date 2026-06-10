@@ -76,6 +76,7 @@ export class LibraryApp {
   private importBanner: HTMLElement | null = null;
   private hasReceivedFirstSnapshot = false;
   private autoScanFired = false;
+  private deferredSnapshot: Extract<LibraryHostToWebview, { type: "librarySnapshot" }> | null = null;
   private autoScanInProgress = false;
   private lastImportCandidateCount = 0;
   private readonly assistantPanel: AssistantPanel;
@@ -204,6 +205,25 @@ export class LibraryApp {
 
     this.root = h("div", { className: "lib-root" }, toolbar, main);
     renderEmptyHelp();
+    this.editorEl.addEventListener(
+      "focusout",
+      () => { setTimeout(() => this.flushDeferredSnapshot(), 0); },
+      true,
+    );
+  }
+
+  private isEditingInEditor(): boolean {
+    const active = document.activeElement;
+    return active instanceof HTMLElement &&
+      (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT") &&
+      this.editorEl.contains(active);
+  }
+
+  private flushDeferredSnapshot(): void {
+    if (this.isEditingInEditor() || this.deferredSnapshot === null) return;
+    const pending = this.deferredSnapshot;
+    this.deferredSnapshot = null;
+    this.receive(pending);
   }
 
   element(): HTMLElement {
@@ -211,6 +231,10 @@ export class LibraryApp {
   }
 
   receive(msg: LibraryHostToWebview): void {
+    if (msg.type === "librarySnapshot" && this.isEditingInEditor()) {
+      this.deferredSnapshot = msg;
+      return;
+    }
     switch (msg.type) {
       case "librarySnapshot": {
         const previousSelectionStillExists = this.selectionStillExists(msg.snapshot);

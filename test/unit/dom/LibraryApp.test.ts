@@ -728,3 +728,36 @@ describe("LibraryApp — multi-select bulk delete", () => {
     expect((bulkMsg as { names: string[] }).names.sort()).toEqual(["a1", "a2"]);
   });
 });
+
+describe("LibraryApp — editor survives background snapshots (regression: body draft wiped)", () => {
+  it("defers a librarySnapshot while typing in the body textarea, then applies it on blur", () => {
+    const { app, root } = mount();
+    app.receive({ type: "librarySnapshot", snapshot: baseSnapshot });
+
+    const row = [...root.querySelectorAll(".lib-row")].find(
+      (r) => r.querySelector(".lib-row-title")?.textContent === "code-review",
+    ) as HTMLElement;
+    (row.querySelector(".lib-row-main") as HTMLButtonElement).click();
+
+    const body = root.querySelector('[data-section="body"] .ct-ta-input') as HTMLTextAreaElement;
+    expect(body).toBeTruthy();
+    body.focus();
+    body.value = "long skill body being written right now";
+
+    app.receive({ type: "librarySnapshot", snapshot: baseSnapshot });
+
+    const bodyAfter = root.querySelector('[data-section="body"] .ct-ta-input') as HTMLTextAreaElement;
+    expect(bodyAfter, "the editor must NOT be rebuilt while the body has focus").toBe(body);
+    expect(bodyAfter.value).toBe("long skill body being written right now");
+    expect(document.activeElement).toBe(body);
+
+    body.blur();
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const rebuilt = root.querySelector('[data-section="body"] .ct-ta-input') as HTMLTextAreaElement;
+        expect(rebuilt, "the deferred snapshot re-renders the editor after blur").not.toBe(body);
+        resolve();
+      }, 5);
+    });
+  });
+});

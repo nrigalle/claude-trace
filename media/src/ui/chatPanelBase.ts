@@ -408,6 +408,9 @@ export abstract class ChatPanelBase<TTurn extends BaseTurn> {
   }
 
   private rebuildHistory(): void {
+    const wasAtBottom =
+      this.historyEl.scrollHeight - (this.historyEl.scrollTop + this.historyEl.clientHeight) < 24;
+    const previousScrollTop = this.historyEl.scrollTop;
     clear(this.historyEl);
     const g = this.currentGroupKey();
     if (!g) {
@@ -427,7 +430,7 @@ export abstract class ChatPanelBase<TTurn extends BaseTurn> {
     if (conv?.stopped && !conv.busy) {
       this.historyEl.appendChild(h("div", { className: "lib-asst-stopped", textContent: "Stopped." }));
     }
-    this.historyEl.scrollTop = this.historyEl.scrollHeight;
+    this.historyEl.scrollTop = wasAtBottom ? this.historyEl.scrollHeight : previousScrollTop;
   }
 
   private renderEmpty(title: string, body: string): HTMLElement {
@@ -488,6 +491,11 @@ export abstract class ChatPanelBase<TTurn extends BaseTurn> {
   }
 
   private rebuildInput(): void {
+    const previous = this.inputTextarea;
+    const draft = previous?.value ?? "";
+    const hadFocus = previous !== null && document.activeElement === previous;
+    const selStart = previous?.selectionStart ?? draft.length;
+    const selEnd = previous?.selectionEnd ?? draft.length;
     clear(this.inputContainer);
     const { element, textarea } = decorateTextarea({
       className: "lib-asst-input",
@@ -497,6 +505,11 @@ export abstract class ChatPanelBase<TTurn extends BaseTurn> {
       expandTitle: "Compose your message",
     });
     this.inputTextarea = textarea;
+    if (draft !== "") textarea.value = draft;
+    if (hadFocus) {
+      textarea.focus();
+      textarea.setSelectionRange(selStart, selEnd);
+    }
     textarea.addEventListener("keydown", (e: KeyboardEvent) => {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();

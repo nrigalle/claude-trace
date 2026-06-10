@@ -171,9 +171,10 @@ describe("MODEL_OPTIONS catalog", () => {
     expect(MODEL_OPTIONS[0]!.label).toBe("Opus 4.8");
   });
 
-  it("lists only 1M-context launch models", () => {
+  it("lists only 1M-context launch models, Fable 5 included", () => {
     expect(MODEL_OPTIONS.map((m) => m.id)).toEqual([
       "claude-opus-4-8",
+      "claude-fable-5[1m]",
       "claude-opus-4-7",
       "claude-sonnet-4-6",
     ]);

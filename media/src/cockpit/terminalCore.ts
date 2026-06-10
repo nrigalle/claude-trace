@@ -207,9 +207,6 @@ const wirePaste = (term: Terminal, host: HTMLElement): void => {
     (e: ClipboardEvent) => {
       e.preventDefault();
       e.stopImmediatePropagation();
-      // The event carries the exact pasted payload synchronously. Re-reading
-      // navigator.clipboard here is async and permission-gated, which made long
-      // pastes land empty or as a stale, different clipboard entry.
       const text = e.clipboardData?.getData("text/plain");
       if (text !== undefined && text !== "") {
         term.paste(text);

@@ -788,3 +788,20 @@ describe("CockpitController — resume on webview re-show", () => {
     expect(replayed.map((m) => m.data).join("")).toContain("before pause");
   });
 });
+
+describe("CockpitController resume — permission override", () => {
+  it("resumes with the picked permission mode, persists it, and keeps it for later resumes", () => {
+    store.saveProfile(defaultProfile(toProfileId("p1"), "Rev"));
+    host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
+    backend.emitExit("uuid-1", 0);
+
+    host.send({ type: "cockpitResumeSession", sessionId: "uuid-1", permissionMode: "plan" });
+    const resumed = backend.spawns.at(-1)!;
+    expect(resumed.initialInput).toContain("--resume uuid-1");
+    expect(resumed.initialInput).toContain("--permission-mode plan");
+
+    backend.emitExit("uuid-1", 0);
+    host.send({ type: "cockpitResumeSession", sessionId: "uuid-1" });
+    expect(backend.spawns.at(-1)!.initialInput, "the override sticks for the next resume").toContain("--permission-mode plan");
+  });
+});

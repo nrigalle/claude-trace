@@ -191,10 +191,16 @@ export class PipelineToolbar {
 
     const nameInput = h("input", {
       className: "pl-name-input pl-run-name-input",
-      attrs: { type: "text", placeholder: run.pipelineSnapshot.name, title: "Name this run so it's easy to find later" },
+      attrs: { type: "text", placeholder: run.pipelineSnapshot.name, title: "Click to rename this run" },
       on: {
+        focus: (e) => { (e.currentTarget as HTMLInputElement).select(); },
         change: (e) => this.host.renameRun(run.runId, (e.currentTarget as HTMLInputElement).value),
-        keydown: (e) => { if ((e as KeyboardEvent).key === "Enter") (e.currentTarget as HTMLInputElement).blur(); },
+        keydown: (e) => {
+          const ev = e as KeyboardEvent;
+          const input = e.currentTarget as HTMLInputElement;
+          if (ev.key === "Enter") input.blur();
+          if (ev.key === "Escape") { input.value = run.name; input.blur(); }
+        },
       },
     }) as HTMLInputElement;
     nameInput.value = run.name;

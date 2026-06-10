@@ -2,7 +2,7 @@ import { setIfChanged } from "../ui/dom.js";
 import { h } from "../ui/h.js";
 import type { Pipeline, PipelineId, RunId } from "../../../src/features/pipelines/domain/types";
 import type { RunSummary } from "../../../src/features/pipelines/protocol";
-import { ICON_TRASH } from "./pipelineIcons.js";
+import { ICON_EDIT, ICON_TRASH } from "./pipelineIcons.js";
 import { blockCountLabel, runCountLabel, formatRelativeTime, runDisplayName } from "./pipelineRunState.js";
 
 interface SidebarRowRefs {
@@ -118,9 +118,10 @@ export class PipelineSidebar {
 
     const nameInput = h("input", {
       className: "pl-run-name-edit",
-      attrs: { type: "text", placeholder: runDisplayName("", r.pipelineName, r.startedAtMs), title: "Rename this run" },
+      attrs: { type: "text", placeholder: runDisplayName("", r.pipelineName, r.startedAtMs), title: "Click to rename this run" },
       on: {
         click: (e: MouseEvent) => { e.stopPropagation(); },
+        focus: (e: FocusEvent) => { (e.currentTarget as HTMLInputElement).select(); },
         change: (e: Event) => this.host.renameRun(r.runId, (e.currentTarget as HTMLInputElement).value),
         keydown: (e: KeyboardEvent) => {
           if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
@@ -129,6 +130,20 @@ export class PipelineSidebar {
       },
     }) as HTMLInputElement;
     nameInput.value = r.name;
+
+    const renameBtn = h("button", {
+      className: "pl-run-rename-btn",
+      attrs: { type: "button", title: "Rename this run", "aria-label": "Rename this run" },
+      innerHTML: ICON_EDIT,
+      on: {
+        click: (e: MouseEvent) => {
+          e.stopPropagation();
+          e.preventDefault();
+          nameInput.focus();
+        },
+        mousedown: (e: MouseEvent) => { e.stopPropagation(); },
+      },
+    });
 
     const deleteBtn = h("button", {
       className: "pl-run-delete-btn",
@@ -161,6 +176,7 @@ export class PipelineSidebar {
           "div",
           { className: "pl-run-card-header" },
           nameInput,
+          renameBtn,
           h("span", { className: `pl-status-pill pl-status-${r.status}`, textContent: r.status }),
         ),
         h(

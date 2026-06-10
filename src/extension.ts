@@ -48,6 +48,9 @@ import { toProjectPath, type ProjectEntry } from "./features/library/domain/type
 import { isAutoMemoryFile } from "./features/dashboard/domain/memory";
 import { buildChatMarkdown, chatExportFilename } from "./features/dashboard/domain/chatExport";
 import { buildClaudeCommand } from "./shared/permissionModes";
+import { execFile } from "child_process";
+import { claudeCompatVerdict, TESTED_CLAUDE_MAJOR } from "./shared/claudeCompat";
+import { traceLog, logInfo, logWarn, disposeTraceLog } from "./shared/infra/traceLog";
 import { computeBeforeContent } from "./features/dashboard/domain/reverseApply";
 import { buildUnifiedDiff } from "./features/dashboard/domain/unifiedDiff";
 import { ensureProjectsDirExists, SessionFileReader } from "./features/dashboard/infra/SessionFileReader";
@@ -95,9 +98,38 @@ function ensureSpawnHelperExecutable(): void {
   }
 }
 
+function probeClaudeCompat(context: vscode.ExtensionContext): void {
+  context.subscriptions.push(
+    vscode.commands.registerCommand("claudeTrace.showLog", () => traceLog().show(true)),
+  );
+  execFile("claude", ["--version"], { timeout: 10_000 }, (err, stdout) => {
+    const verdict = claudeCompatVerdict(err ? null : stdout);
+    if (verdict.kind === "tested") {
+      logInfo("compat", `Claude Code ${verdict.version} detected (tested major ${TESTED_CLAUDE_MAJOR}).`);
+      return;
+    }
+    const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 94);
+    item.name = "Claude Trace compatibility";
+    item.command = "claudeTrace.showLog";
+    if (verdict.kind === "missing") {
+      logWarn("compat", "The `claude` CLI was not found on PATH. Sessions, workflows and assistants cannot start until Claude Code is installed.");
+      item.text = "$(warning) Claude Trace: claude CLI not found";
+      item.tooltip = "Claude Trace could not run `claude --version`. Install Claude Code or fix PATH, then reload. Click for details.";
+    } else {
+      logWarn("compat", `Claude Code ${verdict.version} is newer than the last tested major (${TESTED_CLAUDE_MAJOR}). Claude Trace relies on Claude Code behaviors that may have changed; features may degrade until an update ships.`);
+      item.text = `$(warning) Claude Trace: untested with Claude ${verdict.version}`;
+      item.tooltip = `Claude Trace was last validated against Claude Code ${TESTED_CLAUDE_MAJOR}.x. Click for details.`;
+    }
+    item.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+    item.show();
+    context.subscriptions.push(item);
+  });
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   ensureSpawnHelperExecutable();
   ensureProjectsDirExists(PROJECTS_DIR);
+  probeClaudeCompat(context);
 
   const nameStore = new SessionNameStore(context.globalState);
   const pinStore = new SessionPinStore(context.globalState);
@@ -539,4 +571,5 @@ export function deactivate(): void {
   currentCockpitController = null;
   if (currentLibraryController) currentLibraryController.dispose();
   currentLibraryController = null;
+  disposeTraceLog();
 }

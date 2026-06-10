@@ -320,6 +320,31 @@
   background: var(--ct-bg-0);
   border-color: var(--ct-claude);
 }
+.pl-run-rename-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: none;
+  border: none;
+  color: var(--ct-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: background 0.14s ease, color 0.14s ease, opacity 0.12s ease;
+}
+.pl-run-card:hover .pl-run-rename-btn,
+.pl-run-rename-btn:focus-visible { opacity: 1; }
+.pl-run-rename-btn svg { width: 13px; height: 13px; }
+.pl-run-rename-btn:hover { background: var(--ct-bg-2); color: var(--ct-text-primary); }
+.pl-run-rename-btn:focus-visible { outline: 2px solid var(--ct-focus); outline-offset: 2px; }
+.pl-run-card:hover .pl-run-name-edit:not(:focus) {
+  border-bottom: 1px dashed color-mix(in srgb, var(--ct-text-muted) 55%, transparent);
+  border-radius: 6px 6px 0 0;
+}
+
 .pl-run-card-meta {
   display: flex;
   align-items: center;

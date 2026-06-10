@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { COCKPIT_HOOKS_DIR, COCKPIT_SIGNALS_DIR } from "../../../shared/config";
 import { buildCockpitHookSettings } from "./cockpitHooks";
+import { logWarn } from "../../../shared/infra/traceLog";
 
 export type AttentionReason = "stop" | "notify" | "active";
 
@@ -16,7 +17,8 @@ export const writeSessionHooks = (sessionId: string): string | null => {
     const file = path.join(COCKPIT_HOOKS_DIR, `${sessionId}.json`);
     fs.writeFileSync(file, JSON.stringify(settings), "utf8");
     return file;
-  } catch {
+  } catch (err: unknown) {
+    logWarn("cockpit", `Could not write the hook settings for session ${sessionId}; the done/needs-you border and bell will not fire for it`, err);
     return null;
   }
 };
@@ -108,7 +110,8 @@ export const saveDroppedImage = (fileName: string, dataBase64: string): string |
     const file = path.join(dir, `${Date.now()}-${safe}`);
     fs.writeFileSync(file, Buffer.from(dataBase64, "base64"));
     return file;
-  } catch {
+  } catch (err: unknown) {
+    logWarn("cockpit", `Could not save the dropped image "${fileName}"`, err);
     return null;
   }
 };

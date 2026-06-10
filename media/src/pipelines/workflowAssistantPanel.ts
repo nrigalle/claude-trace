@@ -184,7 +184,7 @@ export class WorkflowAssistantPanel extends ChatPanelBase<WorkflowTurn> {
   }
 
   private applyTurn(turn: WorkflowTurn): void {
-    if (!turn.proposed) return;
+    if (!turn.proposed || turn.applied) return;
     turn.undoSnapshot = this.deps.onApply(turn.proposed);
     turn.applied = true;
     this.refreshView();

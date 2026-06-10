@@ -46,7 +46,6 @@ import {
   type LlmBlock,
   type LoopBlock,
   type MapBlock,
-  type OrchestratorDecision,
   type ParallelBlock,
   type PoolBlock,
   type ReduceBlock,
@@ -56,44 +55,34 @@ import {
   type WaitBlock,
   type WorkerBlock,
 } from "../domain/types";
-import type { ModelChoice } from "../../../shared/models";
-import type { EffortLevel } from "../domain/types";
 import { interpolate, evaluateCondition, type InterpolationContext } from "../domain/interpolate";
 import { assertNever } from "../../../shared/assertNever";
 import type { PipelinesControllerDeps } from "./PipelinesController";
 
-const SELF_KEY = "_self";
-const MERGER_KEY = "_merger";
-const POOL_KEY = "_pool";
-const MAX_PARALLEL_WORKER_TURNS = 12;
-const RUN_POST_MIN_INTERVAL_MS = 150;
-
-const runShapeSignature = (state: RunState): string => {
-  const parts: string[] = [state.status];
-  for (const b of state.blocks) {
-    parts.push(b.blockId, b.status, String(b.sessions.length), String(b.sessions.filter((s) => s.endedAtMs !== null).length));
-    if (b.parallel) {
-      parts.push(b.parallel.mergerStatus, String(b.parallel.mergerSessions.length));
-      for (const w of b.parallel.workerRuns) parts.push(w.status, String(w.sessions.length));
-    }
-  }
-  return parts.join("|");
-};
-const MAX_MAP_ITEMS = 500;
-
-type HandleKey = string;
-
-const handleKey = (blockId: BlockId, sub: string = SELF_KEY): HandleKey =>
-  `${blockId}::${sub}`;
-
-const sessionTargetToHandleSub = (target: SessionTarget): string => {
-  switch (target.kind) {
-    case "self": return SELF_KEY;
-    case "merger": return MERGER_KEY;
-    case "parallel-worker": return target.workerBlockId;
-    default: return assertNever(target);
-  }
-};
+import {
+  SELF_KEY,
+  MERGER_KEY,
+  POOL_KEY,
+  MAX_PARALLEL_WORKER_TURNS,
+  RUN_POST_MIN_INTERVAL_MS,
+  MAX_MAP_ITEMS,
+  runShapeSignature,
+  handleKey,
+  sessionTargetToHandleSub,
+  InterruptedError,
+  BlockFailedError,
+  PausedError,
+  composePromptWithUpstream,
+  latestSessionIdForParallelWorker,
+  buildMergerPrompt,
+  delay,
+  anySignal,
+  blocksInLoopRange,
+  blockDispatch,
+  type HandleKey,
+  type SessionMutators,
+  type SpawnRequest,
+} from "./runEngineSupport";
 
 interface ActiveRun {
   readonly runId: RunId;
@@ -101,153 +90,6 @@ interface ActiveRun {
   readonly handles: Map<HandleKey, SpawnHandle>;
   readonly abort: AbortController;
 }
-
-class InterruptedError extends Error {
-  constructor() { super("Run interrupted."); this.name = "InterruptedError"; }
-}
-
-class BlockFailedError extends Error {
-  constructor(readonly reason: string) { super(reason); this.name = "BlockFailedError"; }
-}
-
-class PausedError extends Error {
-  constructor() { super("Run paused for approval."); this.name = "PausedError"; }
-}
-
-interface SessionMutators {
-  readonly applySpawned: (state: RunState, sessionId: string, prompt: string, now: number) => RunState;
-  readonly applyStopped: (state: RunState, now: number) => RunState;
-  readonly applyDecision: (state: RunState, decision: OrchestratorDecision, now: number) => RunState;
-  readonly applyCrashed: (state: RunState, reason: string, now: number) => RunState;
-  readonly applyWorkerOutput: (state: RunState, output: string) => RunState;
-}
-
-interface SpawnRequest {
-  readonly cwd: string;
-  readonly prompt: string;
-  readonly model: ModelChoice;
-  readonly effort: EffortLevel;
-  readonly resumeSessionId: string | null;
-}
-
-const composePromptWithUpstream = (
-  state: RunState,
-  currentBlockId: BlockId,
-  prompt: string,
-): string => {
-  const upstream: { name: string; summary: string }[] = [];
-  for (const blockDef of state.pipelineSnapshot.blocks) {
-    if (blockDef.id === currentBlockId) break;
-    const blockRun = state.blocks.find((b) => b.blockId === blockDef.id);
-    if (!blockRun) continue;
-    const summary = collectBlockSummary(blockDef, blockRun);
-    if (summary !== null) upstream.push({ name: blockDef.name, summary });
-  }
-  if (upstream.length === 0) return prompt;
-  const upstreamLines = upstream.map((u) => `- ${u.name}: ${u.summary}`).join("\n");
-  return `<previous_steps>\n${upstreamLines}\n</previous_steps>\n\n<your_task>\n${prompt}\n</your_task>`;
-};
-
-const collectBlockSummary = (block: Block, blockRun: RunState["blocks"][number]): string | null => {
-  if (blockRun.output !== null) return blockRun.output;
-  const fromSession = (s: { workerOutput: string | null; summary: string | null }): string | null =>
-    s.workerOutput ?? s.summary ?? null;
-  if (block.kind === "parallel" && blockRun.parallel) {
-    const merger = blockRun.parallel.mergerSessions.at(-1);
-    if (merger) {
-      const mergerText = fromSession(merger);
-      if (mergerText !== null) return mergerText;
-    }
-    const workerTexts = blockRun.parallel.workerRuns
-      .map((w) => {
-        const last = w.sessions.at(-1);
-        return last ? fromSession(last) : null;
-      })
-      .filter((s): s is string => typeof s === "string");
-    return workerTexts.length > 0 ? workerTexts.join(" | ") : null;
-  }
-  const last = blockRun.sessions.at(-1);
-  return last ? fromSession(last) : null;
-};
-
-const latestSessionIdForParallelWorker = (
-  state: RunState,
-  blockId: BlockId,
-  workerBlockId: BlockId,
-): string | null => {
-  const blockRun = state.blocks.find((b) => b.blockId === blockId);
-  if (!blockRun || !blockRun.parallel) return null;
-  const wr = blockRun.parallel.workerRuns.find((w) => w.workerBlockId === workerBlockId);
-  return wr?.sessions.at(-1)?.sessionId ?? null;
-};
-
-const buildMergerPrompt = (
-  block: ParallelBlock,
-  summaries: ReadonlyMap<BlockId, string>,
-): string => {
-  const lines = [
-    `Merge the results of ${block.workers.length} parallel worker(s).`,
-    "",
-    "Worker outputs:",
-    ...block.workers.map((w) => `- ${w.name}: ${summaries.get(w.id) ?? "(no summary)"}`),
-    "",
-    `Merger goal: ${block.mergerGoal}`,
-  ];
-  return lines.join("\n");
-};
-
-const delay = (ms: number, signal: AbortSignal): Promise<void> =>
-  new Promise<void>((resolve) => {
-    if (signal.aborted) { resolve(); return; }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => { clearTimeout(timer); resolve(); };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-
-const anySignal = (signals: readonly AbortSignal[]): AbortSignal => {
-  const factory = (AbortSignal as unknown as { any?: (s: readonly AbortSignal[]) => AbortSignal }).any;
-  if (typeof factory === "function") return factory(signals);
-  const ctrl = new AbortController();
-  for (const s of signals) {
-    if (s.aborted) { ctrl.abort(); return ctrl.signal; }
-    s.addEventListener("abort", () => ctrl.abort(), { once: true });
-  }
-  return ctrl.signal;
-};
-
-const blocksInLoopRange = (
-  blocks: readonly Block[],
-  loopBlock: LoopBlock,
-): readonly BlockId[] => {
-  const targetIdx = blocks.findIndex((b) => b.id === loopBlock.loopBackToBlockId);
-  const loopIdx = blocks.findIndex((b) => b.id === loopBlock.id);
-  if (targetIdx < 0 || loopIdx <= targetIdx) return [];
-  return blocks.slice(targetIdx, loopIdx + 1).map((b) => b.id);
-};
-
-interface BlockDispatch {
-  readonly prompt: string;
-  readonly model: ModelChoice;
-  readonly effort: EffortLevel;
-}
-
-const blockDispatch = (block: WorkerBlock | LoopBlock): BlockDispatch => {
-  switch (block.kind) {
-    case "worker":
-      return { prompt: block.prompt, model: block.model, effort: block.effort };
-    case "loop":
-      return {
-        prompt: `Loop evaluator (max ${block.maxIterations} iterations).\n\nGoal: ${block.goal}\n\nReport SUCCESS if a new iteration is needed, or LOOP_DONE if the goal is met.`,
-        model: block.evaluatorModel,
-        effort: "medium",
-      };
-    default:
-      return assertNever(block);
-  }
-};
 
 export class RunEngine {
   private active: ActiveRun | null = null;
@@ -1117,11 +959,6 @@ export class RunEngine {
     this.postRunUpdate();
   }
 
-  // Coalesce webview posts: a full RunState snapshot can reach ~1MB on big pool runs and
-  // log/output churn fires many times per second, flooding the webview with multi-MB/s IPC.
-  // Every state-machine TRANSITION (run status, any block/worker status, a session starting
-  // or ending) still flushes instantly so bubbles react in real time; only same-shape churn
-  // (logTail chunks, output/variable growth) is batched to the trailing edge.
   private postRunUpdate(): void {
     const active = this.active;
     if (!active) return;

@@ -92,7 +92,7 @@ interface ManagedTerminal {
   readonly cwd: string | null;
   readonly model: ModelChoice;
   readonly effort: EffortChoice;
-  readonly permissionMode: PermissionMode;
+  permissionMode: PermissionMode;
   readonly startedAtMs: number;
   readonly kind: TerminalKind;
   exitCode: number | null;
@@ -221,7 +221,7 @@ export class CockpitController {
         this.broadcast();
         return;
       case "cockpitResumeSession":
-        this.handleResume(msg.sessionId);
+        this.handleResume(msg.sessionId, msg.permissionMode);
         return;
       case "cockpitPauseSession":
         this.paused.add(msg.sessionId);
@@ -328,7 +328,7 @@ export class CockpitController {
     config: {
       readonly model: ModelChoice;
       readonly effort: EffortChoice;
-      readonly permissionMode: PermissionMode;
+      permissionMode: PermissionMode;
       readonly cwd: string | null;
       readonly spaceId: string | null;
       readonly prompt: string | null;
@@ -440,8 +440,8 @@ export class CockpitController {
     this.broadcast();
   }
 
-  private handleResume(key: string): void {
-    if (this.spawnResume(key)) this.broadcast();
+  private handleResume(key: string, permissionMode?: PermissionMode): void {
+    if (this.spawnResume(key, permissionMode)) this.broadcast();
   }
 
   private handleAdopt(sessionId: string, name: string, cwd: string | null, spaceId: string | null): void {
@@ -472,11 +472,15 @@ export class CockpitController {
     this.broadcast();
   }
 
-  private spawnResume(key: string): boolean {
+  private spawnResume(key: string, permissionMode?: PermissionMode): boolean {
     const managed = this.managed.get(key);
     if (!managed) return false;
     if (this.deps.terminals.isAlive(key)) return false;
     managed.exitCode = null;
+    if (permissionMode !== undefined && permissionMode !== managed.permissionMode) {
+      managed.permissionMode = permissionMode;
+      this.persist(managed);
+    }
     const forceInitialInput = this.paused.has(key);
     let initialInput = "";
     if (managed.kind === "claude") {

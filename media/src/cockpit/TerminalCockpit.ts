@@ -14,6 +14,8 @@ import { renderLayoutNode } from "./cockpitLayoutView.js";
 import { CockpitLauncher } from "./cockpitLauncher.js";
 import { createCockpitTerminal, enableWebglRenderer, type CockpitTerminalView } from "./terminalCore.js";
 import { ALL_FOLDER, compactPath, formatStartTime, newId } from "./cockpitUtils.js";
+import { wireWindowDrag, type WindowDragHost } from "./windowDrag.js";
+import { buildResumeOverlay } from "./resumeOverlay.js";
 
 const RESET_INPUT_MODES = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?2004l";
 
@@ -68,6 +70,8 @@ export class TerminalCockpit {
   private readonly trees = new Map<string, LayoutNode | null>();
   private saveLayoutTimer: number | null = null;
   private fullscreen = false;
+  private pendingState: CockpitState | null = null;
+  private pendingGridRender = false;
   private readonly resizeObserver: ResizeObserver;
 
   constructor(private readonly deps: TerminalCockpitDeps) {
@@ -78,6 +82,7 @@ export class TerminalCockpit {
     this.launcher = new CockpitLauncher({
       send: (msg) => this.deps.send(msg),
       rerender: () => {
+        this.flushBlockedUi();
         this.renderFolders();
         this.renderLauncher();
       },
@@ -93,6 +98,11 @@ export class TerminalCockpit {
       this.gridEl,
     );
     this.resizeObserver = new ResizeObserver(() => this.scheduleFit());
+    this.folderBar.addEventListener(
+      "focusout",
+      () => { setTimeout(() => this.flushBlockedUi(), 0); },
+      true,
+    );
     this.resizeObserver.observe(this.gridEl);
     window.addEventListener("resize", () => this.fitImmediate());
     void document.fonts?.ready?.then(() => this.fitImmediate());
@@ -117,6 +127,10 @@ export class TerminalCockpit {
   receive(msg: CockpitHostToWebview): void {
     switch (msg.type) {
       case "cockpitState":
+        if (this.uiInteractionBlocked()) {
+          this.pendingState = msg.state;
+          return;
+        }
         this.state = msg.state;
         this.loaded = true;
         this.syncTerminals(msg.state.terminals);
@@ -139,7 +153,8 @@ export class TerminalCockpit {
       case "terminalExit": {
         const view = this.views.get(msg.sessionId);
         if (view) view.term.write(`${RESET_INPUT_MODES}\r\n\x1b[2m[process exited · code ${msg.exitCode}]\x1b[0m\r\n`);
-        this.renderGrid();
+        if (this.uiInteractionBlocked()) this.pendingGridRender = true;
+        else this.renderGrid();
         return;
       }
       case "terminalAttention":
@@ -288,35 +303,28 @@ export class TerminalCockpit {
     const head = h("div", { className: "tc-tile-head", attrs: { title: "Drag to swap places, or drop on a workspace" } }, grip, tabStrip, pauseBtn, addTab);
     const termMount = h("div", { className: "tc-tile-termmount" });
     this.resizeObserver.observe(termMount);
-    const resumeOverlay = h(
-      "div",
-      { className: "tc-tile-resume hidden" },
-      h("button", {
-        className: "tc-launch-btn",
-        attrs: { type: "button" },
-        innerHTML: `<span class="tc-btn-icon">${ICONS.play}</span><span>Resume</span>`,
-        on: {
-          click: () => {
-            const sessionId = this.activeSessionIdForWindow(windowId);
-            if (!sessionId) return;
-            const tile = this.tiles.get(windowId);
-            const view = this.views.get(sessionId);
-            if (view) {
-              view.term.write(RESET_INPUT_MODES);
-              view.gotData = false;
-              view.lastCols = 0;
-              view.lastRows = 0;
-            }
-            tile?.resumeOverlay.classList.add("hidden");
-            tile?.bootingOverlay.classList.remove("hidden");
-            tile?.tile.classList.remove("exited");
-            this.pendingFocus.add(sessionId);
-            this.deps.send({ type: "cockpitResumeSession", sessionId });
-          },
-        },
-      }),
-      h("div", { className: "tc-tile-resume-hint", textContent: "Paused or exited. Click Resume to continue. The transcript reloads from disk." }),
-    );
+    const resumeOverlay = buildResumeOverlay((button, permissionMode) => {
+      const sessionId = this.activeSessionIdForWindow(windowId);
+      if (!sessionId) return;
+      button.disabled = true;
+      const tile = this.tiles.get(windowId);
+      const view = this.views.get(sessionId);
+      if (view) {
+        view.term.write(RESET_INPUT_MODES);
+        view.gotData = false;
+        view.lastCols = 0;
+        view.lastRows = 0;
+      }
+      tile?.resumeOverlay.classList.add("hidden");
+      tile?.bootingOverlay.classList.remove("hidden");
+      tile?.tile.classList.remove("exited");
+      this.pendingFocus.add(sessionId);
+      this.deps.send(
+        permissionMode === null
+          ? { type: "cockpitResumeSession", sessionId }
+          : { type: "cockpitResumeSession", sessionId, permissionMode },
+      );
+    });
     const bootingOverlay = h(
       "div",
       { className: "tc-tile-booting", attrs: { role: "status", "aria-live": "polite" } },
@@ -335,7 +343,7 @@ export class TerminalCockpit {
       status,
     );
 
-    this.wireWindowDrag(head, tile, windowId);
+    wireWindowDrag(this.dragHost(), head, tile, windowId);
 
     this.tiles.set(windowId, { tile, tabStrip, metaBar, termMount, resumeOverlay, bootingOverlay, status, activeId: "", announced: "" });
   }
@@ -442,86 +450,40 @@ export class TerminalCockpit {
     this.focusView(tile.activeId);
   }
 
-  private wireWindowDrag(head: HTMLElement, tile: HTMLElement, windowId: string): void {
-    head.addEventListener("pointerdown", (e: PointerEvent) => {
-      if (e.button !== 0 || (e.target instanceof Element && e.target.closest(".tc-tab, .tc-tab-add, .tc-tab-pause"))) return;
-      const startX = e.clientX;
-      const startY = e.clientY;
-      let dragging = false;
-      const onMove = (ev: PointerEvent): void => {
-        if (!dragging) {
-          if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
-          dragging = true;
-          tile.classList.add("tc-tile-dragging");
-          document.body.classList.add("tc-dragging-window");
-        }
-        tile.style.transform = `translate(${ev.clientX - startX}px, ${ev.clientY - startY}px)`;
-        this.highlightDrop(ev, windowId);
-      };
-      const onUp = (ev: PointerEvent): void => {
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        tile.style.transform = "";
-        tile.classList.remove("tc-tile-dragging");
-        document.body.classList.remove("tc-dragging-window");
-        this.clearDropHint();
-        if (!dragging) return;
-        const folder = this.folderUnder(ev);
-        if (folder !== null) {
-          this.moveWindowToFolder(windowId, folder);
-          return;
-        }
-        const hit = this.windowUnder(ev, windowId);
-        if (hit) this.dockWindow(windowId, hit.id, hit.edge);
-      };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp);
-    });
+  private dragHost(): WindowDragHost {
+    return {
+      tileFor: (id) => this.tiles.get(id)?.tile,
+      tileElements: () => [...this.tiles.values()].map((t) => t.tile),
+      folderBar: this.folderBar,
+      moveToFolder: (windowId, folder) => this.moveWindowToFolder(windowId, folder),
+      dock: (dragged, target, edge) => this.dockWindow(dragged, target, edge),
+      dragEnded: () => this.flushBlockedUi(),
+    };
   }
 
-  private windowUnder(ev: PointerEvent, self: string): { id: string; edge: DropEdge } | null {
-    const el = document.elementFromPoint(ev.clientX, ev.clientY);
-    const tile = el instanceof Element ? (el.closest(".tc-tile[data-window-id]") as HTMLElement | null) : null;
-    const id = tile?.dataset["windowId"] ?? null;
-    if (!id || id === self) return null;
-    return { id, edge: this.edgeOf(tile!, ev) };
+  private uiInteractionBlocked(): boolean {
+    return (
+      this.launcher.isOpen() ||
+      this.creatingFolder ||
+      this.renamingFolder !== null ||
+      document.body.classList.contains("tc-dragging-window") ||
+      document.body.classList.contains("tc-tearing")
+    );
   }
 
-  private edgeOf(tile: HTMLElement, ev: PointerEvent): DropEdge {
-    const r = tile.getBoundingClientRect();
-    const nx = (ev.clientX - (r.left + r.width / 2)) / (r.width / 2);
-    const ny = (ev.clientY - (r.top + r.height / 2)) / (r.height / 2);
-    if (Math.abs(nx) >= Math.abs(ny)) return nx >= 0 ? "right" : "left";
-    return ny >= 0 ? "bottom" : "top";
-  }
-
-  private folderUnder(ev: PointerEvent): string | null {
-    const el = document.elementFromPoint(ev.clientX, ev.clientY);
-    const chip = el instanceof Element ? (el.closest(".tc-folder[data-folder]") as HTMLElement | null) : null;
-    return chip?.getAttribute("data-folder") ?? null;
-  }
-
-  private highlightDrop(ev: PointerEvent, self: string): void {
-    this.clearDropHint();
-    const hit = this.windowUnder(ev, self);
-    if (hit) {
-      const tile = this.tiles.get(hit.id)?.tile;
-      tile?.classList.add("tc-drop-target");
-      tile?.setAttribute("data-drop-edge", hit.edge);
+  private flushBlockedUi(): void {
+    if (this.uiInteractionBlocked()) return;
+    if (this.pendingState !== null) {
+      const state = this.pendingState;
+      this.pendingState = null;
+      this.pendingGridRender = false;
+      this.receive({ type: "cockpitState", state });
       return;
     }
-    const folder = this.folderUnder(ev);
-    if (folder !== null) {
-      for (const chip of this.folderBar.querySelectorAll(`[data-folder="${folder}"]`)) chip.classList.add("drop-target");
+    if (this.pendingGridRender) {
+      this.pendingGridRender = false;
+      this.renderGrid();
     }
-  }
-
-  private clearDropHint(): void {
-    for (const t of this.tiles.values()) {
-      t.tile.classList.remove("tc-drop-target");
-      t.tile.removeAttribute("data-drop-edge");
-    }
-    for (const chip of this.folderBar.querySelectorAll(".drop-target")) chip.classList.remove("drop-target");
   }
 
   private moveWindowToFolder(windowId: string, folder: string): void {
@@ -920,6 +882,7 @@ export class TerminalCockpit {
         } else if (outside(ev)) {
           this.deps.send({ type: "cockpitDetachTab", sessionId });
         }
+        this.flushBlockedUi();
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
