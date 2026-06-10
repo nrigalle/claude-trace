@@ -394,11 +394,12 @@ describe("TerminalCockpit — quick launch", () => {
 });
 
 describe("TerminalCockpit — attention border survives structural changes (regression: flicker on add-tab/remove)", () => {
-  it("a host terminalAttention lights the window border without sending a duplicate cockpitAttention back", () => {
+  it("a host terminalAttention lights the window border without sending anything back to the host", () => {
     cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "X")]) });
+    const sentBefore = sent.length;
     cockpit.receive({ type: "terminalAttention", sessionId: "a", reason: "stop" });
     expect(visibleTiles()[0]!.classList.contains("attention")).toBe(true);
-    expect(sent.some((m) => m.type === "cockpitAttention")).toBe(false);
+    expect(sent.length).toBe(sentBefore);
   });
 
   it("lights the folder dot (and the All dot) on a new attention signal, with no in-app toast", () => {

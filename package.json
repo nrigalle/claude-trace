@@ -1,7 +1,7 @@
 {
   "name": "claude-trace",
   "displayName": "Claude Trace: Cost, Sessions & Agent Workflows for Claude Code",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Cost dashboard, multi-session terminal cockpit, visual agent workflows, and a skills and agents library for Claude Code. Track spend, run many sessions at once, orchestrate agents on your subscription, and manage every skill and agent in one place. Nothing leaves your machine.",
   "publisher": "nrigalle",
   "license": "MIT",
@@ -73,11 +73,6 @@
         "title": "Open Dashboard",
         "category": "Claude Trace",
         "icon": "$(pulse)"
-      },
-      {
-        "command": "claudeTrace.setupDesktopNotifications",
-        "title": "Set Up Desktop Notifications (install alerter)",
-        "category": "Claude Trace"
       }
     ],
     "keybindings": [
@@ -94,13 +89,13 @@
           "type": "number",
           "default": 0,
           "minimum": 0,
-          "description": "Warn when a single Claude Code session exceeds this USD amount. Set to 0 to disable."
+          "description": "Track a per-session USD budget for Claude Code sessions. Set to 0 to disable."
         },
         "claudeTrace.budgetPerDay": {
           "type": "number",
           "default": 0,
           "minimum": 0,
-          "description": "Warn when today's combined Claude Code spend exceeds this USD amount. Status bar turns amber at 80% and red when over. Set to 0 to disable."
+          "description": "Track today's combined Claude Code spend against this USD amount in the status bar, which turns amber at 80% and red when over. Set to 0 to disable."
         },
         "claudeTrace.webhookPort": {
           "type": "number",
@@ -108,11 +103,6 @@
           "minimum": 0,
           "maximum": 65535,
           "description": "Local port (127.0.0.1) for the pipeline webhook trigger listener. POST to http://127.0.0.1:<port>/?token=<token> to start a matching pipeline. Set to 0 to disable."
-        },
-        "claudeTrace.desktopNotifications": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show a native OS notification (not just an in-editor toast) when a Claude session finishes its turn or needs your input, so you see it even when VS Code is not focused."
         }
       }
     }

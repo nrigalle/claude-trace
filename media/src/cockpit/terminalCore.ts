@@ -55,8 +55,11 @@ export const createCockpitTerminal = (
     lineHeight: 1.2,
     cursorBlink: false,
     theme: TERM_THEME,
-    scrollback: 15000,
-    scrollOnUserInput: false,
+    scrollback: 5000,
+    scrollOnUserInput: true,
+    scrollSensitivity: 3,
+    fastScrollSensitivity: 6,
+    fastScrollModifier: "alt",
     allowProposedApi: true,
     altClickMovesCursor: false,
     macOptionClickForcesSelection: true,
@@ -204,6 +207,14 @@ const wirePaste = (term: Terminal, host: HTMLElement): void => {
     (e: ClipboardEvent) => {
       e.preventDefault();
       e.stopImmediatePropagation();
+      // The event carries the exact pasted payload synchronously. Re-reading
+      // navigator.clipboard here is async and permission-gated, which made long
+      // pastes land empty or as a stale, different clipboard entry.
+      const text = e.clipboardData?.getData("text/plain");
+      if (text !== undefined && text !== "") {
+        term.paste(text);
+        return;
+      }
       void pasteFromClipboard(term);
     },
     true,

@@ -62,7 +62,6 @@ export interface CockpitActions {
   defaultCwd(): string | null;
   newSessionId(): string;
   transcriptExists(cwd: string | null, sessionId: string): boolean;
-  notifyAttention(name: string, sessionId: string): void;
   prepareHooks(sessionId: string): string | null;
   cleanupHooks(sessionId: string): void;
   watchAttention(listener: (sessionId: string, reason: "stop" | "notify" | "active") => void): { dispose(): void };
@@ -103,7 +102,6 @@ export class CockpitController {
   private readonly disposables: { dispose(): void }[] = [];
   private readonly managed = new Map<string, ManagedTerminal>();
   private readonly nextIndex = new Map<string, number>();
-  private readonly attentionActive = new Set<string>();
   private readonly paused = new Set<string>();
   private disposed = false;
 
@@ -217,7 +215,6 @@ export class CockpitController {
       case "terminalClose":
         this.deps.terminals.kill(msg.sessionId);
         this.deps.actions.cleanupHooks(msg.sessionId);
-        this.attentionActive.delete(msg.sessionId);
         this.managed.delete(msg.sessionId);
         this.deps.terminalHistoryStore.delete(msg.sessionId);
         this.deps.sessionStore.remove(msg.sessionId);
@@ -264,11 +261,6 @@ export class CockpitController {
       }
       case "cockpitAdoptSession":
         this.handleAdopt(msg.sessionId, msg.name, msg.cwd, msg.spaceId);
-        return;
-      case "cockpitAttention":
-        if (this.attentionActive.has(msg.sessionId)) return;
-        this.attentionActive.add(msg.sessionId);
-        this.deps.actions.notifyAttention(msg.name, msg.sessionId);
         return;
       case "cockpitDropImage": {
         const imgPath = this.deps.actions.saveDroppedImage(msg.fileName, msg.dataBase64);
@@ -514,13 +506,9 @@ export class CockpitController {
     const managed = this.managed.get(sessionId);
     if (!managed) return;
     this.deps.host.postMessage({ type: "terminalAttention", sessionId, reason });
-    if (this.attentionActive.has(sessionId)) return;
-    this.attentionActive.add(sessionId);
-    this.deps.actions.notifyAttention(managed.name, sessionId);
   }
 
   private onActive(sessionId: string): void {
-    this.attentionActive.delete(sessionId);
     this.deps.host.postMessage({ type: "terminalActive", sessionId });
   }
 

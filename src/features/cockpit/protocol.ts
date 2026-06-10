@@ -84,7 +84,6 @@ export type CockpitWebviewToHost =
       readonly cwd: string | null;
       readonly spaceId: string | null;
     }
-  | { readonly type: "cockpitAttention"; readonly sessionId: string; readonly name: string }
   | {
       readonly type: "cockpitDropImage";
       readonly sessionId: string;

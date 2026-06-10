@@ -143,7 +143,7 @@ export class TerminalCockpit {
         return;
       }
       case "terminalAttention":
-        this.markAttention(msg.sessionId, false, msg.reason);
+        this.markAttention(msg.sessionId, msg.reason);
         return;
       case "terminalActive":
         this.clearAttention(msg.sessionId);
@@ -224,7 +224,7 @@ export class TerminalCockpit {
         if (this.views.get(session.sessionId)?.replaying) return;
         this.deps.send({ type: "terminalInput", sessionId: session.sessionId, data });
       },
-      bell: () => this.markAttention(session.sessionId, true, "bell"),
+      bell: () => this.markAttention(session.sessionId, "bell"),
       focus: () => this.focusView(session.sessionId),
       dropImage: (fileName, dataBase64) =>
         this.deps.send({ type: "cockpitDropImage", sessionId: session.sessionId, fileName, dataBase64 }),
@@ -340,20 +340,15 @@ export class TerminalCockpit {
     this.tiles.set(windowId, { tile, tabStrip, metaBar, termMount, resumeOverlay, bootingOverlay, status, activeId: "", announced: "" });
   }
 
-  private markAttention(sessionId: string, notifyHost = true, reason: AttentionReason = "notify"): void {
+  private markAttention(sessionId: string, reason: AttentionReason = "notify"): void {
     const view = this.views.get(sessionId);
     if (!view) return;
-    const wasSet = this.attention.has(sessionId);
     this.attention.add(sessionId);
     this.attentionReasons.set(sessionId, reason);
     this.applyAttention(view.windowId);
     this.applyFolderAttention();
     this.applyAttentionSummary();
     this.updateWindowMeta(view.windowId);
-    if (notifyHost && !wasSet) {
-      const session = this.state.terminals.find((t) => t.sessionId === sessionId);
-      this.deps.send({ type: "cockpitAttention", sessionId, name: session?.name ?? "Claude session" });
-    }
   }
 
   private clearAttention(sessionId: string): void {

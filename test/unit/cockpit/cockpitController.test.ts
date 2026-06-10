@@ -104,8 +104,6 @@ let backend: FakeBackend;
 let names: Map<string, string>;
 let transcripts: Set<string>;
 let idSeq: number;
-let attentionNotices: string[];
-let attentionSessionIds: string[];
 let cleanedHooks: string[];
 let attentionListener: ((sessionId: string, reason: "stop" | "notify" | "active") => void) | null;
 let savedLayout: import("../../../src/features/cockpit/protocol").CockpitLayout;
@@ -124,7 +122,6 @@ const makeController = (): CockpitController =>
       defaultCwd: () => "/repo",
       newSessionId: () => `uuid-${++idSeq}`,
       transcriptExists: (_cwd, id) => transcripts.has(id),
-      notifyAttention: (name, sessionId) => { attentionNotices.push(name); attentionSessionIds.push(sessionId); },
       prepareHooks: (id) => `/hooks/${id}.json`,
       cleanupHooks: (id) => cleanedHooks.push(id),
       watchAttention: (listener) => {
@@ -149,8 +146,6 @@ beforeEach(() => {
   names = new Map();
   transcripts = new Set();
   idSeq = 0;
-  attentionNotices = [];
-  attentionSessionIds = [];
   cleanedHooks = [];
   attentionListener = null;
   savedLayout = { trees: {} };
@@ -222,74 +217,46 @@ describe("CockpitController hook-driven attention — deterministic done/needs-y
     host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
   });
 
-  it("a Stop signal notifies the user and tells the webview to light up that exact tile", () => {
+  it("a Stop signal tells the webview to light up that exact tile (no OS/editor notification fired)", () => {
     attentionListener!("uuid-1", "stop");
-    expect(attentionNotices).toContain("Rev 1");
-    expect(attentionSessionIds).toContain("uuid-1");
     expect(host.posted.some((m) => m.type === "terminalAttention" && m.sessionId === "uuid-1" && m.reason === "stop")).toBe(true);
   });
 
   it("ignores signals for sessions it no longer manages", () => {
     attentionListener!("ghost-session", "notify");
-    expect(attentionNotices).toHaveLength(0);
     expect(host.posted.some((m) => m.type === "terminalAttention")).toBe(false);
   });
 
-  it("notifies ONCE while idle even if Claude re-signals repeatedly (no notification spam)", () => {
-    attentionListener!("uuid-1", "stop");
-    attentionListener!("uuid-1", "notify");
-    attentionListener!("uuid-1", "stop");
-    expect(attentionNotices).toEqual(["Rev 1"]);
-  });
-
-  it("keeps lighting the tile on every signal even though it only notifies once", () => {
+  it("keeps lighting the tile on every signal", () => {
     attentionListener!("uuid-1", "stop");
     attentionListener!("uuid-1", "stop");
     const lit = host.posted.filter((m) => m.type === "terminalAttention" && m.sessionId === "uuid-1");
     expect(lit.length).toBe(2);
-    expect(attentionNotices).toHaveLength(1);
   });
 
-  it("typing in the terminal does NOT clear the waiting state or re-trigger notifications", () => {
-    attentionListener!("uuid-1", "stop");
-    host.send({ type: "terminalInput", sessionId: "uuid-1", data: "hi\r" });
-    attentionListener!("uuid-1", "stop");
-    expect(attentionNotices).toEqual(["Rev 1"]);
-  });
-
-  it("clears waiting state and tells the webview only when the agent becomes ACTIVE again (UserPromptSubmit)", () => {
+  it("tells the webview when the agent becomes ACTIVE again (UserPromptSubmit) so the border clears", () => {
     attentionListener!("uuid-1", "stop");
     attentionListener!("uuid-1", "active");
     expect(host.posted.some((m) => m.type === "terminalActive" && m.sessionId === "uuid-1")).toBe(true);
-    attentionListener!("uuid-1", "stop");
-    expect(attentionNotices).toEqual(["Rev 1", "Rev 1"]);
   });
 
   it("REALISTIC agentic loop: PreToolUse activity keeps clearing the border so it never lingers while the agent works", () => {
     attentionListener!("uuid-1", "active");
     attentionListener!("uuid-1", "active");
     attentionListener!("uuid-1", "active");
-    expect(attentionNotices).toHaveLength(0);
     attentionListener!("uuid-1", "stop");
     attentionListener!("uuid-1", "active");
     const activeMsgs = host.posted.filter((m) => m.type === "terminalActive").length;
     expect(activeMsgs).toBeGreaterThanOrEqual(4);
-    attentionListener!("uuid-1", "stop");
-    expect(attentionNotices).toEqual(["Rev 1", "Rev 1"]);
   });
 
-  it("REALISTIC multi-session: each window notifies independently and re-arms independently", () => {
+  it("REALISTIC multi-session: each window's tile lights independently", () => {
     store.saveProfile(defaultProfile(toProfileId("p2"), "Worker"));
     host.send({ type: "cockpitLaunch", profileId: toProfileId("p2"), count: 1, promptOverride: null });
     attentionListener!("uuid-1", "stop");
     attentionListener!("uuid-2", "stop");
-    expect(attentionNotices).toEqual(["Rev 1", "Worker 1"]);
-    attentionListener!("uuid-1", "stop");
-    attentionListener!("uuid-2", "stop");
-    expect(attentionNotices).toEqual(["Rev 1", "Worker 1"]);
-    attentionListener!("uuid-1", "active");
-    attentionListener!("uuid-1", "stop");
-    expect(attentionNotices).toEqual(["Rev 1", "Worker 1", "Rev 1"]);
+    const lit = host.posted.filter((m) => m.type === "terminalAttention");
+    expect(lit.map((m) => (m as { sessionId: string }).sessionId)).toEqual(["uuid-1", "uuid-2"]);
   });
 
   it("cleans up the session's hook files when the terminal is closed", () => {

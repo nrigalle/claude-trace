@@ -301,6 +301,12 @@ export class PipelinesApp {
     });
     this.renderEmpty();
     this.renderPanel();
+    document.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || this.panel.kind === "none") return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
+      this.closePanel();
+    });
   }
 
   element(): HTMLElement {

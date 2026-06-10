@@ -245,8 +245,14 @@ export class ClaudeChatEngine {
       });
 
       const stopPromise = this.waitForStop(state, exited);
+      // Only re-read and re-parse the transcript tail when the file actually grew;
+      // re-reading multi-MB tails every poll caused constant allocation churn.
+      let lastPolledSize = -1;
       poller = setInterval(() => {
         if (!options.onProgress) return;
+        const size = currentFileSize(state.transcriptPath);
+        if (size === lastPolledSize) return;
+        lastPolledSize = size;
         const events = readEventsFrom(state.transcriptPath, startOffset);
         if (events.length === 0) return;
         const snapshot = JSON.stringify(events);

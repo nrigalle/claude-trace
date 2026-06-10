@@ -48,8 +48,6 @@ import { toProjectPath, type ProjectEntry } from "./features/library/domain/type
 import { isAutoMemoryFile } from "./features/dashboard/domain/memory";
 import { buildChatMarkdown, chatExportFilename } from "./features/dashboard/domain/chatExport";
 import { buildClaudeCommand } from "./shared/permissionModes";
-import { desktopNotifyCommand } from "./shared/desktopNotification";
-import { spawn, type ChildProcess } from "child_process";
 import { computeBeforeContent } from "./features/dashboard/domain/reverseApply";
 import { buildUnifiedDiff } from "./features/dashboard/domain/unifiedDiff";
 import { ensureProjectsDirExists, SessionFileReader } from "./features/dashboard/infra/SessionFileReader";
@@ -76,63 +74,6 @@ let currentPipelinesController: PipelinesController | null = null;
 let currentCockpitController: CockpitController | null = null;
 let currentLibraryController: LibraryController | null = null;
 
-const findBinary = (candidates: readonly string[]): string | null => {
-  for (const bin of candidates) {
-    try {
-      if (fs.existsSync(bin)) return bin;
-    } catch {}
-  }
-  return null;
-};
-const findAlerter = (): string | null =>
-  findBinary(["/opt/homebrew/bin/alerter", "/usr/local/bin/alerter"]);
-const findTerminalNotifier = (): string | null =>
-  findBinary(["/opt/homebrew/bin/terminal-notifier", "/usr/local/bin/terminal-notifier"]);
-
-let alerterBin: string | null = null;
-let notifierBin: string | null = null;
-let notifierIcon: string | null = null;
-let notifierHintedThisSession = false;
-
-const notificationChildren = new Set<ChildProcess>();
-
-const fireDesktopNotification = (title: string, message: string, group?: string): void => {
-  const enabled = vscode.workspace.getConfiguration("claudeTrace").get<boolean>("desktopNotifications", true);
-  if (!enabled) return;
-  const cmd = desktopNotifyCommand(process.platform, title, message, {
-    alerterBin,
-    terminalNotifierBin: notifierBin,
-    iconPath: notifierIcon,
-    group,
-  });
-  if (!cmd) return;
-  try {
-    const child = spawn(cmd.command, [...cmd.args], { stdio: "ignore", detached: true });
-    notificationChildren.add(child);
-    child.on("exit", () => notificationChildren.delete(child));
-    child.unref();
-    child.on("error", () => {});
-  } catch {}
-  if (process.platform === "darwin" && !alerterBin && !notifierHintedThisSession) {
-    notifierHintedThisSession = true;
-    void vscode.window
-      .showInformationMessage(
-        "macOS silently blocks notifications from unsigned tools. Install alerter (signed + notarized) for Claude Trace notifications with the app icon that stay on screen until dismissed.",
-        "Install alerter",
-        "Don't ask again",
-      )
-      .then((choice) => {
-        if (choice === "Install alerter") {
-          void vscode.commands.executeCommand("claudeTrace.setupDesktopNotifications");
-        } else if (choice === "Don't ask again") {
-          void vscode.workspace
-            .getConfiguration("claudeTrace")
-            .update("desktopNotifications", false, vscode.ConfigurationTarget.Global);
-        }
-      });
-  }
-};
-
 function ensureSpawnHelperExecutable(): void {
   if (process.platform === "win32") return;
   const roots: string[] = [];
@@ -157,23 +98,6 @@ function ensureSpawnHelperExecutable(): void {
 export function activate(context: vscode.ExtensionContext): void {
   ensureSpawnHelperExecutable();
   ensureProjectsDirExists(PROJECTS_DIR);
-
-  const installNotifier = (): void => {
-    const term = vscode.window.createTerminal("Claude Trace · notifications");
-    term.show();
-    term.sendText(
-      "brew install vjeantet/tap/alerter && echo '\\n✅ Installed. The first notification will ask permission. Click Allow. Then reload VS Code (Cmd+Shift+P, Developer: Reload Window).'",
-    );
-  };
-  context.subscriptions.push(
-    vscode.commands.registerCommand("claudeTrace.setupDesktopNotifications", installNotifier),
-  );
-
-  if (process.platform === "darwin") {
-    alerterBin = findAlerter();
-    notifierBin = findTerminalNotifier();
-    notifierIcon = path.join(context.extensionPath, "media", "icon.png");
-  }
 
   const nameStore = new SessionNameStore(context.globalState);
   const pinStore = new SessionPinStore(context.globalState);
@@ -260,9 +184,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const reverse = computeBeforeContent(currentContent, summary.changes);
       if (!reverse.ok) {
-        void vscode.window.showWarningMessage(
-          "Claude Trace: this file has been modified since the session ended, so the side-by-side diff can't be reconstructed. Showing a summary of what the session changed instead.",
-        );
         const header = [
           "# Claude Trace: summary diff",
           "#",
@@ -339,7 +260,7 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (!target) return;
       await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(markdown));
-      void vscode.window.showInformationMessage(`Claude Trace: chat exported to ${target.fsPath}`);
+      void vscode.window.setStatusBarMessage(`Claude Trace: chat exported to ${target.fsPath}`, 3000);
     },
     copyConversation(id: SessionId): void {
       void copyConversationToClipboard(id);
@@ -371,9 +292,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const copyConversationToClipboard = async (sessionId: string): Promise<void> => {
     const detail = service.detail(toSessionId(sessionId));
     if (!detail) {
-      void vscode.window.showWarningMessage(
-        "Claude Trace: no conversation captured yet for this session.",
-      );
+      void vscode.window.setStatusBarMessage("Claude Trace: no conversation captured yet for this session.", 3000);
       return;
     }
     await vscode.env.clipboard.writeText(buildChatMarkdown(detail));
@@ -484,9 +403,6 @@ export function activate(context: vscode.ExtensionContext): void {
         fs.existsSync(
           path.join(PROJECTS_DIR, encodeCwdForProjects(cwd ?? os.homedir()), `${sessionId}.jsonl`),
         ),
-      notifyAttention: (name, sessionId) => {
-        fireDesktopNotification("Claude Trace", `${name} is ready for you`, `claude-trace-${sessionId}`);
-      },
       prepareHooks: (sessionId) => writeSessionHooks(sessionId),
       cleanupHooks: (sessionId) => removeSessionHooks(sessionId),
       watchAttention: (listener) => watchAttentionSignals(listener),
@@ -543,7 +459,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return fsPath ? toProjectPath(fsPath) : null;
       },
       showInfo: (message) => void vscode.window.setStatusBarMessage(`Claude Trace: ${message}`, 3000),
-      showWarning: (message) => void vscode.window.showWarningMessage(`Claude Trace: ${message}`),
+      showWarning: (message) => void vscode.window.setStatusBarMessage(`Claude Trace: ${message}`, 4000),
       showError: (message) => void vscode.window.showErrorMessage(`Claude Trace: ${message}`),
       workspaceProjects: () =>
         (vscode.workspace.workspaceFolders ?? []).map<ProjectEntry>((folder) => ({
@@ -623,8 +539,4 @@ export function deactivate(): void {
   currentCockpitController = null;
   if (currentLibraryController) currentLibraryController.dispose();
   currentLibraryController = null;
-  for (const child of notificationChildren) {
-    try { child.kill(); } catch {}
-  }
-  notificationChildren.clear();
 }

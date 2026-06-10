@@ -280,7 +280,8 @@ export class RunDetailPanel {
       attrs: { type: "button" },
       textContent: "Submit & continue",
       on: {
-        click: () => {
+        click: (e) => {
+          const btn = e.currentTarget as HTMLButtonElement;
           const missing = rows.some((row) =>
             columns.some((c) => c.required && (row[c.key] ?? "").trim().length === 0),
           );
@@ -288,6 +289,8 @@ export class RunDetailPanel {
             this.host.showNotice("warning", "Fill in every required field before continuing.");
             return;
           }
+          btn.disabled = true;
+          btn.textContent = "Submitting…";
           this.host.send({ type: "submitInput", runId, blockId: definition.id, rows });
         },
       },

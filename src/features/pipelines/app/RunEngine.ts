@@ -66,6 +66,19 @@ const SELF_KEY = "_self";
 const MERGER_KEY = "_merger";
 const POOL_KEY = "_pool";
 const MAX_PARALLEL_WORKER_TURNS = 12;
+const RUN_POST_MIN_INTERVAL_MS = 150;
+
+const runShapeSignature = (state: RunState): string => {
+  const parts: string[] = [state.status];
+  for (const b of state.blocks) {
+    parts.push(b.blockId, b.status, String(b.sessions.length), String(b.sessions.filter((s) => s.endedAtMs !== null).length));
+    if (b.parallel) {
+      parts.push(b.parallel.mergerStatus, String(b.parallel.mergerSessions.length));
+      for (const w of b.parallel.workerRuns) parts.push(w.status, String(w.sessions.length));
+    }
+  }
+  return parts.join("|");
+};
 const MAX_MAP_ITEMS = 500;
 
 type HandleKey = string;
@@ -239,6 +252,9 @@ const blockDispatch = (block: WorkerBlock | LoopBlock): BlockDispatch => {
 export class RunEngine {
   private active: ActiveRun | null = null;
   private logBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+  private runPostTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastRunPostMs = 0;
+  private lastPostedShape = "";
 
   constructor(
     private readonly deps: PipelinesControllerDeps,
@@ -278,6 +294,10 @@ export class RunEngine {
         clearTimeout(this.logBroadcastTimer);
         this.logBroadcastTimer = null;
       }
+      if (this.runPostTimer !== null) {
+        clearTimeout(this.runPostTimer);
+        this.runPostTimer = null;
+      }
       this.onRunListChanged();
     }
   }
@@ -286,11 +306,7 @@ export class RunEngine {
     const active = this.active;
     if (!active) return;
     active.state = applyDeterministicLog(active.state, blockId, chunk);
-    if (this.logBroadcastTimer !== null) return;
-    this.logBroadcastTimer = setTimeout(() => {
-      this.logBroadcastTimer = null;
-      if (this.active) this.deps.host.postMessage({ type: "runUpdate", run: this.active.state });
-    }, 120);
+    this.postRunUpdate();
   }
 
   kill(runId: RunId): void {
@@ -1098,6 +1114,38 @@ export class RunEngine {
   private persistAndBroadcastRun(): void {
     if (!this.active) return;
     this.deps.runStore.save(this.active.state);
+    this.postRunUpdate();
+  }
+
+  // Coalesce webview posts: a full RunState snapshot can reach ~1MB on big pool runs and
+  // log/output churn fires many times per second, flooding the webview with multi-MB/s IPC.
+  // Every state-machine TRANSITION (run status, any block/worker status, a session starting
+  // or ending) still flushes instantly so bubbles react in real time; only same-shape churn
+  // (logTail chunks, output/variable growth) is batched to the trailing edge.
+  private postRunUpdate(): void {
+    const active = this.active;
+    if (!active) return;
+    const shape = runShapeSignature(active.state);
+    const now = Date.now();
+    if (shape !== this.lastPostedShape || now - this.lastRunPostMs >= RUN_POST_MIN_INTERVAL_MS) {
+      this.flushRunPost();
+      return;
+    }
+    if (this.runPostTimer !== null) return;
+    this.runPostTimer = setTimeout(() => {
+      this.runPostTimer = null;
+      this.flushRunPost();
+    }, RUN_POST_MIN_INTERVAL_MS - (now - this.lastRunPostMs));
+  }
+
+  private flushRunPost(): void {
+    if (!this.active) return;
+    if (this.runPostTimer !== null) {
+      clearTimeout(this.runPostTimer);
+      this.runPostTimer = null;
+    }
+    this.lastRunPostMs = Date.now();
+    this.lastPostedShape = runShapeSignature(this.active.state);
     this.deps.host.postMessage({ type: "runUpdate", run: this.active.state });
   }
 }

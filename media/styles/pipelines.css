@@ -1266,25 +1266,6 @@
   border-color: color-mix(in srgb, #2dd4bf 45%, transparent);
 }
 
-.pl-pool-badge {
-  position: absolute;
-  top: -8px;
-  right: -10px;
-  min-width: 22px;
-  height: 20px;
-  padding: 0 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 10px;
-  background: rgba(45, 212, 191, 0.22);
-  color: #ccfbf1;
-  border: 1.5px solid #2dd4bf;
-  font-size: 10px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
 .pl-pool-hint {
   margin-top: 8px;
   max-width: 380px;
@@ -1461,7 +1442,20 @@ body.pl-resizing * {
 .pl-library-icon.kind-orchestrator { background: rgba(139, 92, 246, 0.16); color: #8b5cf6; }
 .pl-input-rows { display: flex; flex-direction: column; gap: 10px; }
 .pl-input-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
-.pl-input-cell { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 120px; }
+.pl-input-cell { display: flex; flex-direction: column; gap: 4px; flex: 1 1 100px; min-width: 0; }
+
+.pl-panel-close:focus-visible,
+.pl-btn.ghost:focus-visible,
+.pl-add-row:focus-visible,
+.pl-node-remove:focus-visible,
+.pl-insert-btn:focus-visible,
+.pl-parallel-add-branch:focus-visible,
+.pl-anchor-dot:focus-visible,
+.pl-runs-chip:focus-visible,
+.pl-run-name-edit:focus-visible {
+  outline: 2px solid var(--ct-focus);
+  outline-offset: 2px;
+}
 .pl-library-name {
   font-weight: 600; font-size: 13.5px; color: var(--ct-text-primary);
   display: flex; align-items: center; gap: 8px;

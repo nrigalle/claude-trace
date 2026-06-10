@@ -24,7 +24,6 @@ const COCKPIT_MESSAGE_TYPE_TABLE: Record<CockpitWebviewToHost["type"], true> = {
   cockpitAddTab: true,
   cockpitMoveSession: true,
   cockpitAdoptSession: true,
-  cockpitAttention: true,
   cockpitDropImage: true,
   cockpitSaveLayout: true,
 };

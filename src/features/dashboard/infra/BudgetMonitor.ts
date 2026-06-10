@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { dayKey, dayStartMs, nonNegativeNumber, sumCostSince } from "../domain/budgetMath";
-import type { SessionId, SessionSummary } from "../domain/types";
+import { dayStartMs, nonNegativeNumber, sumCostSince } from "../domain/budgetMath";
+import type { SessionSummary } from "../domain/types";
 
 const DEBOUNCE_MS = 250;
 
@@ -11,8 +11,6 @@ interface BudgetConfig {
 
 export class BudgetMonitor implements vscode.Disposable {
   private readonly statusBar: vscode.StatusBarItem;
-  private readonly warnedSessions = new Set<SessionId>();
-  private warnedDayKey: string | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly configListener: vscode.Disposable;
 
@@ -44,27 +42,6 @@ export class BudgetMonitor implements vscode.Disposable {
     const today = sumTodayCost(sessions);
 
     this.refreshStatusBar(today, cfg);
-
-    if (cfg.perSession > 0) {
-      for (const s of sessions) {
-        const cost = s.cost?.total_cost_usd ?? 0;
-        if (cost <= cfg.perSession) continue;
-        if (this.warnedSessions.has(s.session_id)) continue;
-        this.warnedSessions.add(s.session_id);
-        const label = s.title?.trim() || `Session ${s.session_id.slice(0, 8)}`;
-        void vscode.window.showWarningMessage(
-          `Claude Trace: "${label}" passed the $${cfg.perSession.toFixed(2)} per-session budget (now $${cost.toFixed(2)}).`,
-        );
-      }
-    }
-
-    const dayKey = currentDayKey();
-    if (cfg.perDay > 0 && today > cfg.perDay && this.warnedDayKey !== dayKey) {
-      this.warnedDayKey = dayKey;
-      void vscode.window.showWarningMessage(
-        `Claude Trace: today's Claude Code spend ($${today.toFixed(2)}) passed the $${cfg.perDay.toFixed(2)} daily budget.`,
-      );
-    }
   }
 
   dispose(): void {
@@ -109,7 +86,5 @@ const backgroundFor = (today: number, cfg: BudgetConfig): vscode.ThemeColor | un
 
 const sumTodayCost = (sessions: readonly SessionSummary[]): number =>
   sumCostSince(sessions, dayStartMs(new Date()));
-
-const currentDayKey = (): string => dayKey(new Date());
 
 const nonNegative = (v: unknown): number => nonNegativeNumber(v);

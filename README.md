@@ -93,9 +93,8 @@ The dollar figures are local estimates from the token counts in your transcripts
 
 | Setting | What it does |
 |---|---|
-| `claudeTrace.budgetPerSession` | Warn when a single session crosses this dollar amount. Off by default. |
-| `claudeTrace.budgetPerDay` | Warn when today's total crosses this dollar amount. Off by default. |
-| `claudeTrace.desktopNotifications` | Show a native OS notification when a session finishes a turn or needs you, even when VS Code is not focused. |
+| `claudeTrace.budgetPerSession` | Track a per session dollar budget. Off by default. |
+| `claudeTrace.budgetPerDay` | Track a daily dollar budget in the status bar, which changes color as you approach it. Off by default. |
 | `claudeTrace.webhookPort` | Local port for the workflow webhook trigger. Set to 0 to disable. |
 | `CLAUDE_TRACE_PROJECTS_DIR` (env var) | Read from this directory instead of `~/.claude/projects`. |
 
