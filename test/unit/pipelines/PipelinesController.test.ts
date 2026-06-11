@@ -1254,10 +1254,6 @@ describe("PipelinesController — worker pool (bounded concurrency)", () => {
     expect(verdicts.filter((v) => v === "success")).toHaveLength(2);
 
     expect(runner.judgeCalls, "one orchestrator verdict per item").toHaveLength(3);
-    expect(
-      runner.judgeCalls.every((c) => c.resumeSessionId === null),
-      "every verdict runs in a FRESH judge session — resuming a killed session proved unreliable in the real claude",
-    ).toBe(true);
     expect(poolRun.orchestratorSessionId, "the latest judge session is recorded on the block for the UI").toMatch(
       /^stub-orchestrator-\d+$/,
     );

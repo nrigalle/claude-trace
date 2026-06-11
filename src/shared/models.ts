@@ -37,7 +37,7 @@ export const MODEL_CHOICES: readonly ModelChoice[] = [
 const BASE_EFFORT_LEVELS: readonly EffortChoice[] = ["default", "low", "medium", "high", "max"];
 const OPUS_EFFORT_LEVELS: readonly EffortChoice[] = ["default", "low", "medium", "high", "xhigh", "max"];
 
-export const baseModelId = (model: ModelChoice): ModelChoice =>
+const baseModelId = (model: ModelChoice): ModelChoice =>
   model.endsWith("[1m]") ? (model.slice(0, -"[1m]".length) as ModelChoice) : model;
 
 export const MODEL_OPTIONS: readonly ModelOption[] = [
@@ -94,6 +94,19 @@ export const MODEL_OPTIONS: readonly ModelOption[] = [
 export function normalizeModelChoice(model: ModelChoice): ModelChoice {
   if (model === "default" || model === "claude-haiku-4-5") return DEFAULT_MODEL_CHOICE;
   return model;
+}
+
+export function modelChoiceFromId(raw: string | null | undefined): ModelChoice {
+  if (!raw) return DEFAULT_MODEL_CHOICE;
+  const wants1m = raw.includes("[1m]") || /(^|[^a-z])1m([^a-z]|$)/i.test(raw);
+  const cleaned = raw.replace("[1m]", "");
+  const bases = [...new Set(MODEL_CHOICES.filter((c) => c !== "default").map(baseModelId))];
+  const match = bases
+    .filter((b) => cleaned === b || cleaned.startsWith(b))
+    .sort((a, b) => b.length - a.length)[0];
+  if (!match) return DEFAULT_MODEL_CHOICE;
+  const oneM = `${match}[1m]` as ModelChoice;
+  return wants1m && MODEL_CHOICES.includes(oneM) ? oneM : (match as ModelChoice);
 }
 
 export interface EffortOption {

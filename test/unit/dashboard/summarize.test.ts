@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { summarize } from "../../../src/features/dashboard/domain/summarize";
+import {
+  createSummaryAccumulator,
+  finalizeSummary,
+  foldSummaryEvent,
+  summarize,
+} from "../../../src/features/dashboard/domain/summarize";
 import { extractContextTimeline, extractCostTimeline } from "../../../src/features/dashboard/domain/timelines";
 import { computeStats } from "../../../src/features/dashboard/domain/stats";
 import { computeToolStats } from "../../../src/features/dashboard/domain/toolStats";
@@ -115,6 +120,58 @@ describe("summarize", () => {
       ),
       { numRuns: 100 },
     );
+  });
+
+  it("incremental folding at any split point produces the exact same summary as a one-shot pass", () => {
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.record({
+            ts: fc.integer({ min: 0, max: 1_000_000 }),
+            tool: fc.option(fc.constantFrom("Bash", "Read", "Edit"), { nil: null }),
+            cwd: fc.option(fc.constantFrom("/a", "/b"), { nil: null }),
+            modelId: fc.option(fc.constantFrom("claude-opus-4-7", "claude-haiku-4-5"), { nil: null }),
+            costUsd: fc.option(fc.float({ min: 0, max: 10, noNaN: true }), { nil: null }),
+            text: fc.option(fc.string({ maxLength: 40 }), { nil: null }),
+          }),
+          { maxLength: 120 },
+        ),
+        fc.nat(),
+        (specs, splitSeed) => {
+          const evs = specs.map((spec) =>
+            makeEvent({
+              ts: spec.ts,
+              event: spec.tool ? "PostToolUse" : "AssistantText",
+              tool_name: spec.tool,
+              tool_result: spec.text,
+              cwd: spec.cwd,
+              model: spec.modelId ? { id: spec.modelId, display_name: spec.modelId } : null,
+              cost: spec.costUsd !== null ? { total_cost_usd: spec.costUsd } : null,
+            }),
+          );
+          const split = evs.length === 0 ? 0 : splitSeed % (evs.length + 1);
+          const acc = createSummaryAccumulator();
+          for (const e of evs.slice(0, split)) foldSummaryEvent(acc, e);
+          for (const e of evs.slice(split)) foldSummaryEvent(acc, e);
+          const incremental = finalizeSummary(toSessionId("s"), acc, 7, { title: "t", pinned: true });
+          const oneShot = summarize(toSessionId("s"), evs, 7, { title: "t", pinned: true });
+          expect(incremental).toEqual(oneShot);
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
+
+  it("finalizeSummary can be called repeatedly while folding continues (live session keeps streaming)", () => {
+    const acc = createSummaryAccumulator();
+    foldSummaryEvent(acc, makeEvent({ ts: 1, tool_name: "Bash" }));
+    const mid = finalizeSummary(toSessionId("s"), acc, 1);
+    foldSummaryEvent(acc, makeEvent({ ts: 5, tool_name: "Read" }));
+    const end = finalizeSummary(toSessionId("s"), acc, 5);
+    expect(mid.event_count).toBe(1);
+    expect(end.event_count).toBe(2);
+    expect(end.duration_ms).toBe(4);
+    expect(end.tools.sort()).toEqual(["Bash", "Read"]);
   });
 });
 

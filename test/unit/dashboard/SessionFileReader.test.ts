@@ -231,3 +231,93 @@ describe("SessionFileReader — multi-session isolation", () => {
     expect(b[0]!.tool_name).toBe("Read");
   });
 });
+
+describe("SessionFileReader — memory discipline (slim by default, materialize only for detail)", () => {
+  let reader: SessionFileReader;
+  beforeEach(() => { reader = new SessionFileReader(); });
+
+  const writeToolEdit = (ref: SessionRef, lines: string[]): void => {
+    fs.writeFileSync(ref.filePath, lines.map((l) => l + "\n").join(""));
+  };
+  const editLine = (file: string) =>
+    JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-05-01T10:00:00Z",
+      cwd: "/p",
+      sessionId: "s",
+      message: {
+        model: "claude-opus-4-7",
+        content: [{ type: "tool_use", id: "t", name: "Write", input: { file_path: file, content: "x".repeat(500) } }],
+        usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    });
+
+  it("readDelta returns all events with reset=true on first read, then only the appended ones", () => {
+    const id = newSessionId();
+    const ref = makeRef(id);
+    writeToolEdit(ref, [assistantLine("Bash")]);
+    const first = reader.readDelta(ref, reader.statSafe(ref)!);
+    expect(first.reset).toBe(true);
+    expect(first.events.length).toBeGreaterThan(0);
+
+    fs.appendFileSync(ref.filePath, assistantLine("Read") + "\n");
+    const second = reader.readDelta(ref, reader.statSafe(ref)!);
+    expect(second.reset).toBe(false);
+    expect(second.events.length).toBeLessThan(first.events.length + second.events.length);
+    expect(second.events.some((e) => e.tool_name === "Read")).toBe(true);
+    expect(second.events.some((e) => e.tool_name === "Bash")).toBe(false);
+  });
+
+  it("readDelta with mustReset replays the full history so a lost fold accumulator can rebuild", () => {
+    const id = newSessionId();
+    const ref = makeRef(id);
+    writeToolEdit(ref, [assistantLine("Bash")]);
+    reader.readDelta(ref, reader.statSafe(ref)!);
+    fs.appendFileSync(ref.filePath, assistantLine("Read") + "\n");
+    const replay = reader.readDelta(ref, reader.statSafe(ref)!, true);
+    expect(replay.reset).toBe(true);
+    expect(replay.events.some((e) => e.tool_name === "Bash")).toBe(true);
+    expect(replay.events.some((e) => e.tool_name === "Read")).toBe(true);
+  });
+
+  it("readDelta never retains file-edit contents in memory; read() materializes them for the detail view", () => {
+    const id = newSessionId();
+    const ref = makeRef(id);
+    writeToolEdit(ref, [editLine("/p/big.ts")]);
+    reader.readDelta(ref, reader.statSafe(ref)!);
+    expect(reader.getFileEdits(id)).toEqual([]);
+
+    reader.read(ref, reader.statSafe(ref)!);
+    expect(reader.getFileEdits(id).length).toBe(1);
+  });
+
+  it("caps fully-materialized sessions at 3, demoting the oldest back to slim (regression: 32 parsed transcripts pinned ~1GB of heap)", () => {
+    const ids: SessionId[] = [];
+    for (let i = 0; i < 5; i++) {
+      const id = newSessionId();
+      const ref = makeRef(id);
+      writeToolEdit(ref, [editLine(`/p/f${i}.ts`)]);
+      reader.read(ref, reader.statSafe(ref)!);
+      ids.push(id);
+    }
+    const retained = ids.filter((id) => reader.getFileEdits(id).length > 0);
+    expect(retained.length).toBe(3);
+    expect(retained).toEqual(ids.slice(2));
+  });
+
+  it("a session demoted to slim still serves correct incremental deltas afterwards", () => {
+    const id = newSessionId();
+    const ref = makeRef(id);
+    writeToolEdit(ref, [assistantLine("Bash")]);
+    reader.read(ref, reader.statSafe(ref)!);
+    for (let i = 0; i < 4; i++) {
+      const other = makeRef(newSessionId());
+      writeToolEdit(other, [assistantLine("Bash")]);
+      reader.read(other, reader.statSafe(other)!);
+    }
+    fs.appendFileSync(ref.filePath, assistantLine("Read") + "\n");
+    const delta = reader.readDelta(ref, reader.statSafe(ref)!);
+    expect(delta.reset).toBe(false);
+    expect(delta.events.some((e) => e.tool_name === "Read")).toBe(true);
+  });
+});

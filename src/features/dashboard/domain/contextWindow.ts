@@ -22,19 +22,32 @@ export const baselineContextSize = (model: string | null | undefined): number =>
   return STANDARD_200K;
 };
 
-export const effectiveContextSize = (events: readonly TraceEvent[]): number => {
-  let observedMax = 0;
-  let baseline = STANDARD_200K;
-  for (const e of events) {
-    const tokens = e.context_window?.total_input_tokens;
-    if (typeof tokens === "number" && tokens > observedMax) observedMax = tokens;
-    if (e.model?.id) {
-      const candidate = baselineContextSize(e.model.id);
-      if (candidate > baseline) baseline = candidate;
-    }
+export interface ContextSizeAccumulator {
+  observedMax: number;
+  baseline: number;
+}
+
+export const createContextSizeAccumulator = (): ContextSizeAccumulator => ({
+  observedMax: 0,
+  baseline: STANDARD_200K,
+});
+
+export const foldContextSize = (acc: ContextSizeAccumulator, e: TraceEvent): void => {
+  const tokens = e.context_window?.total_input_tokens;
+  if (typeof tokens === "number" && tokens > acc.observedMax) acc.observedMax = tokens;
+  if (e.model?.id) {
+    const candidate = baselineContextSize(e.model.id);
+    if (candidate > acc.baseline) acc.baseline = candidate;
   }
-  if (observedMax > baseline) return STANDARD_1M;
-  return baseline;
+};
+
+export const finalizeContextSize = (acc: ContextSizeAccumulator): number =>
+  acc.observedMax > acc.baseline ? STANDARD_1M : acc.baseline;
+
+export const effectiveContextSize = (events: readonly TraceEvent[]): number => {
+  const acc = createContextSizeAccumulator();
+  for (const e of events) foldContextSize(acc, e);
+  return finalizeContextSize(acc);
 };
 
 export const percentOfContext = (tokens: number, contextSize: number): number => {

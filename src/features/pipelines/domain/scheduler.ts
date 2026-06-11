@@ -65,13 +65,6 @@ export const nextPendingBlock = (state: RunState): BlockId | null => {
   return null;
 };
 
-export const stuckBlock = (state: RunState): BlockId | null => {
-  for (const b of state.blocks) {
-    if (b.status === "stuck") return b.blockId;
-  }
-  return null;
-};
-
 export const applyBlockSpawned = (
   state: RunState,
   blockId: BlockId,
@@ -96,34 +89,6 @@ export const applyBlockSpawned = (
       startedAtMs: b.startedAtMs ?? nowMs,
     };
   });
-
-export const applyBlockResumed = (
-  state: RunState,
-  blockId: BlockId,
-  promptSent: string,
-  nowMs: number,
-): RunState => {
-  const next = mapBlock(state, blockId, (b) => {
-    const lastIdx = b.sessions.length - 1;
-    if (lastIdx < 0) return b;
-    const last = b.sessions[lastIdx]!;
-    const sessions = [
-      ...b.sessions.slice(0, lastIdx),
-      { ...last, promptSent, endedAtMs: null },
-    ];
-    return {
-      ...b,
-      status: "running",
-      sessions,
-      stuckReason: null,
-      startedAtMs: b.startedAtMs ?? nowMs,
-    };
-  });
-  return {
-    ...next,
-    status: state.status === "paused-needs-input" ? "running" : state.status,
-  };
-};
 
 export const applyWorkerOutput = (
   state: RunState,
@@ -398,17 +363,6 @@ export const mapParallel = (
     return fn(b.parallel, b);
   });
 
-export const stuckParallelWorkers = (
-  blockRun: BlockRun,
-): readonly { workerBlockId: BlockId; reason: string }[] => {
-  if (!blockRun.parallel) return [];
-  const out: { workerBlockId: BlockId; reason: string }[] = [];
-  for (const w of blockRun.parallel.workerRuns) {
-    if (w.status === "stuck") out.push({ workerBlockId: w.workerBlockId, reason: w.stuckReason ?? "" });
-  }
-  return out;
-};
-
 const LOG_TAIL_CAP = 16384;
 
 export const applyDeterministicStarted = (
@@ -599,9 +553,4 @@ export const conditionSkipRange = (
   const stop = endIdx < 0 ? blocks.length : endIdx;
   if (stop <= startIdx + 1) return [];
   return blocks.slice(startIdx + 1, stop).map((b) => b.id);
-};
-
-export const allParallelWorkersDone = (blockRun: BlockRun): boolean => {
-  if (!blockRun.parallel) return false;
-  return blockRun.parallel.workerRuns.every((w) => w.status === "done");
 };

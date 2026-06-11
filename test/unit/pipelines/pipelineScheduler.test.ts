@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   applyBlockCrashed,
-  applyBlockResumed,
   applyBlockSpawned,
   applyBlockStopped,
   applyDecision,
@@ -157,20 +156,6 @@ describe("recovering from needs-input", () => {
 
     s = applyBlockStopped(s, toBlockId("a"), 0);
     expect(s.blocks[0]!.status).toBe("judging");
-  });
-
-  it("applyBlockResumed returns the run to running and clears the stuck reason", () => {
-    let s = initialRunState(threeStep(), toRunId("r1"), 0);
-    s = applyBlockSpawned(s, toBlockId("a"), "session-a", "p", 0);
-    s = applyBlockStopped(s, toBlockId("a"), 0);
-    s = applyDecision(s, toBlockId("a"), { kind: "needs-input", reason: "x" }, 0);
-    expect(s.status).toBe("paused-needs-input");
-
-    s = applyBlockResumed(s, toBlockId("a"), "new prompt", 0);
-    expect(s.status).toBe("running");
-    expect(s.blocks[0]!.status).toBe("running");
-    expect(s.blocks[0]!.sessions[0]!.promptSent).toBe("new prompt");
-    expect(s.blocks[0]!.stuckReason).toBeNull();
   });
 });
 

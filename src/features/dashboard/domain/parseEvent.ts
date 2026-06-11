@@ -5,6 +5,7 @@ import type { ContextSnapshot, CostSnapshot, SessionId, ToolInput, TraceEvent } 
 
 export interface ParseContext {
   sessionId: SessionId;
+  collectFileEdits: boolean;
   totalCostUsd: number;
   totalLinesAdded: number;
   totalLinesRemoved: number;
@@ -20,8 +21,9 @@ export interface ParseContext {
   fileEdits: RawFileEdit[];
 }
 
-export const createParseContext = (sessionId: SessionId): ParseContext => ({
+export const createParseContext = (sessionId: SessionId, collectFileEdits = true): ParseContext => ({
   sessionId,
+  collectFileEdits,
   totalCostUsd: 0,
   totalLinesAdded: 0,
   totalLinesRemoved: 0,
@@ -342,6 +344,7 @@ const recordFileEdit = (
   input: Record<string, unknown>,
   diff: { added: number; removed: number },
 ): void => {
+  if (!ctx.collectFileEdits) return;
   const action = fileEditActionForTool(toolName);
   if (!action) return;
   const filePath = input["file_path"];

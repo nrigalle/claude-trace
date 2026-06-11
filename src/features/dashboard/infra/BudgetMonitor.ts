@@ -2,10 +2,9 @@ import * as vscode from "vscode";
 import { dayStartMs, nonNegativeNumber, sumCostSince } from "../domain/budgetMath";
 import type { SessionSummary } from "../domain/types";
 
-const DEBOUNCE_MS = 250;
+const DEBOUNCE_MS = 5000;
 
 interface BudgetConfig {
-  readonly perSession: number;
   readonly perDay: number;
 }
 
@@ -71,8 +70,7 @@ export class BudgetMonitor implements vscode.Disposable {
   private readConfig(): BudgetConfig {
     const cfg = vscode.workspace.getConfiguration("claudeTrace");
     return {
-      perSession: nonNegative(cfg.get("budgetPerSession")),
-      perDay: nonNegative(cfg.get("budgetPerDay")),
+      perDay: nonNegativeNumber(cfg.get("budgetPerDay")),
     };
   }
 }
@@ -86,5 +84,3 @@ const backgroundFor = (today: number, cfg: BudgetConfig): vscode.ThemeColor | un
 
 const sumTodayCost = (sessions: readonly SessionSummary[]): number =>
   sumCostSince(sessions, dayStartMs(new Date()));
-
-const nonNegative = (v: unknown): number => nonNegativeNumber(v);

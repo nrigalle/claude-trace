@@ -21,6 +21,7 @@ type LibraryHandler = (msg: LibraryHostToWebview) => void;
 
 const SESSION_MESSAGE_TYPE_TABLE: Record<HostToWebview["type"], true> = {
   update: true,
+  updateDelta: true,
   sessionDetail: true,
   detailLayout: true,
 };

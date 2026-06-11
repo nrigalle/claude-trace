@@ -29,7 +29,6 @@ export interface RunBlockState {
   readonly parallelTotalCount?: number;
   readonly poolDoneCount?: number;
   readonly poolActiveCount?: number;
-  readonly poolOrchestratorSessionId?: string | null;
   readonly poolVerdictPassCount?: number;
   readonly poolVerdictFailCount?: number;
 }
@@ -57,7 +56,7 @@ export const formatRelativeTime = (ms: number, nowMs: number): string => {
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 };
 
-export type RunDateGroup = "Today" | "Yesterday" | "Previous 7 days" | "Earlier";
+type RunDateGroup = "Today" | "Yesterday" | "Previous 7 days" | "Earlier";
 
 export const runDateGroup = (ms: number, nowMs: number): RunDateGroup => {
   const startOfToday = new Date(nowMs);
@@ -111,7 +110,6 @@ export const buildRunBlockState = (
   const isPool = definition.kind === "pool";
   const poolDoneCount = isPool ? blockRun.sessions.filter((s) => s.endedAtMs !== null).length : undefined;
   const poolActiveCount = isPool ? blockRun.sessions.filter((s) => s.endedAtMs === null).length : undefined;
-  const poolOrchestratorSessionId = isPool ? blockRun.orchestratorSessionId ?? null : undefined;
   const poolVerdictPassCount = isPool
     ? blockRun.sessions.filter((s) => s.verdict?.kind === "success").length
     : undefined;
@@ -136,7 +134,6 @@ export const buildRunBlockState = (
     parallelTotalCount,
     poolDoneCount,
     poolActiveCount,
-    poolOrchestratorSessionId,
     poolVerdictPassCount,
     poolVerdictFailCount,
   };

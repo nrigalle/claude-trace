@@ -89,10 +89,10 @@ export const reconcileFilter = (snapshot: LibrarySnapshot, projectFilter: Projec
   return stillExists ? projectFilter : { kind: "all" };
 };
 
-export const filterFromOptionValue = (v: string, current: ProjectFilter): ProjectFilter => {
+export const filterFromOptionValue = (v: string): ProjectFilter => {
   if (v === "all") return { kind: "all" };
   if (v === "global") return { kind: "global" };
   if (v === "unassigned") return { kind: "unassigned" };
   if (v.startsWith("project:")) return { kind: "project", path: v.slice("project:".length) as ProjectPath };
-  return current;
+  return { kind: "all" };
 };

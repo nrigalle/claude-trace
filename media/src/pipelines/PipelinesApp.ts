@@ -99,6 +99,7 @@ export class PipelinesApp {
   private readonly sidebar: PipelineSidebar;
   private readonly toolbar: PipelineToolbar;
   private readonly assistant: WorkflowAssistantPanel;
+  private readonly view: AppViewHost;
 
   constructor(private readonly deps: PipelinesAppDeps) {
     this.sidebarListEl = h("div", { className: "pl-sidebar-list" });
@@ -144,7 +145,6 @@ export class PipelinesApp {
       attrs: { role: "separator", "aria-orientation": "vertical", "aria-label": "Resize panel" },
     });
     this.panelEl = h("aside", { className: "pl-panel" }, panelResizer, this.panelHeader, this.panelBody);
-    this.wirePanelResizer(panelResizer);
 
     this.zoomReadout = h("span", { className: "pl-zoom-readout", textContent: "100%" });
     const zoomControls = h(
@@ -287,6 +287,25 @@ export class PipelinesApp {
         this.renderPanel();
       },
     });
+    this.view = {
+      canvasToolbar: this.canvasToolbar,
+      canvasEl: this.canvasEl,
+      canvasArea: this.canvasArea,
+      panelEl: this.panelEl,
+      canvas: this.canvas,
+      toolbar: this.toolbar,
+      assistantElement: () => this.assistant.element(),
+      editorSelection: () => (this.selection.kind === "pipeline" ? { draft: this.selection.draft, view: this.selection.view ?? "editor" } : null),
+      loopDefineMode: () => this.loopDefineMode,
+      exitLoopDefineMode: () => this.exitLoopDefineMode(),
+      renderPipelineRunsList: (pipelineId) => this.renderPipelineRunsList(toPipelineId(pipelineId)),
+      applyZoom: () => this.applyZoom(),
+      syncAssistant: () => this.syncAssistant(),
+      getRenderedRunSignature: () => this.renderedRunSignature,
+      setRenderedRunSignature: (sig) => { this.renderedRunSignature = sig; },
+      showNotice: (level, message) => this.showNotice(level, message),
+    };
+    wirePanelResizerView(this.view, panelResizer);
     this.renderEmpty();
     this.renderPanel();
     document.addEventListener("keydown", (e: KeyboardEvent) => {
@@ -415,49 +434,24 @@ export class PipelinesApp {
     }
   }
 
-  private wirePanelResizer(handle: HTMLElement): void {
-    wirePanelResizerView(this.viewHost(), handle);
-  }
-
   private renderEmpty(): void {
-    renderEmptyView(this.viewHost());
+    renderEmptyView(this.view);
   }
 
   private renderEditor(): void {
-    renderEditorView(this.viewHost());
+    renderEditorView(this.view);
   }
 
   private renderRunLoading(): void {
-    renderRunLoadingView(this.viewHost());
+    renderRunLoadingView(this.view);
   }
 
   private renderRunDetail(run: RunState): void {
-    renderRunDetailView(this.viewHost(), run);
+    renderRunDetailView(this.view, run);
   }
 
   private renderCanvasOnly(): void {
-    renderCanvasOnlyView(this.viewHost());
-  }
-
-  private viewHost(): AppViewHost {
-    return {
-      canvasToolbar: this.canvasToolbar,
-      canvasEl: this.canvasEl,
-      canvasArea: this.canvasArea,
-      panelEl: this.panelEl,
-      canvas: this.canvas,
-      toolbar: this.toolbar,
-      assistantElement: () => this.assistant.element(),
-      editorSelection: () => (this.selection.kind === "pipeline" ? { draft: this.selection.draft, view: this.selection.view ?? "editor" } : null),
-      loopDefineMode: () => this.loopDefineMode,
-      exitLoopDefineMode: () => this.exitLoopDefineMode(),
-      renderPipelineRunsList: (pipelineId) => this.renderPipelineRunsList(toPipelineId(pipelineId)),
-      applyZoom: () => this.applyZoom(),
-      syncAssistant: () => this.syncAssistant(),
-      getRenderedRunSignature: () => this.renderedRunSignature,
-      setRenderedRunSignature: (sig) => { this.renderedRunSignature = sig; },
-      showNotice: (level, message) => this.showNotice(level, message),
-    };
+    renderCanvasOnlyView(this.view);
   }
 
   private setZoom(next: number): void {

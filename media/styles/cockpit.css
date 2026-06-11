@@ -1233,15 +1233,6 @@ body.tc-dragging-window * {
 .tc-flash-icon svg { width: 17px; height: 17px; }
 
 .tc-flash-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.tc-flash-title {
-  font-size: 13px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  color: var(--ct-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .tc-flash-msg { font-size: 12px; color: var(--ct-text-secondary); }
 
 .tc-flash-close {

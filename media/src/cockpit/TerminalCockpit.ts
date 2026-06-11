@@ -9,7 +9,7 @@ import { assertNeverCockpit } from "../../../src/features/cockpit/protocol";
 import { dock, syncTree, type DropEdge, type LayoutNode } from "../../../src/features/cockpit/domain/splitTree";
 import { ICONS } from "../ui/icons.js";
 import { renderFoldersBar, type FoldersBarHost } from "./cockpitFoldersBar.js";
-import { renderTileMeta, sessionStatus, type SessionStatus } from "./cockpitTileMeta.js";
+import { renderTileMeta, sessionStatus } from "./cockpitTileMeta.js";
 import { flashToast } from "./cockpitToasts.js";
 import { renderSkeletonTiles } from "./cockpitSkeleton.js";
 import { renderTabStrip, type TabStripHost } from "./cockpitTabs.js";
@@ -26,6 +26,7 @@ const RESET_INPUT_MODES = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?101
 
 export interface TerminalCockpitDeps {
   send(msg: CockpitWebviewToHost): void;
+  fullscreenChanged?(on: boolean): void;
 }
 
 interface TerminalView extends CockpitTerminalView {
@@ -36,7 +37,10 @@ interface TerminalView extends CockpitTerminalView {
   lastRows: number;
   replaying: boolean;
   webgl: RendererHandle | null;
+  webglLost: boolean;
 }
+
+const MAX_WEBGL_TERMINALS = 8;
 
 
 export class TerminalCockpit {
@@ -66,6 +70,9 @@ export class TerminalCockpit {
   private pendingState: CockpitState | null = null;
   private pendingGridRender = false;
   private readonly resizeObserver: ResizeObserver;
+  private readonly foldersBarHost: FoldersBarHost;
+  private readonly tabStripHost: TabStripHost;
+  private readonly windowDragHost: WindowDragHost;
 
   constructor(private readonly deps: TerminalCockpitDeps) {
     this.folderBar = h("div", { className: "tc-folders" });
@@ -90,6 +97,42 @@ export class TerminalCockpit {
       this.launcherEl,
       this.gridEl,
     );
+    this.foldersBarHost = {
+      folderBar: this.folderBar,
+      topbarActions: this.topbarActions,
+      state: () => this.state,
+      groupWindows: () => this.groupWindows(),
+      windowFolder: (windowId) => this.windowFolder(windowId),
+      activeFolder: () => this.activeFolder,
+      setActiveFolder: (folder) => { this.activeFolder = folder; },
+      creatingFolder: () => this.creatingFolder,
+      setCreatingFolder: (v) => { this.creatingFolder = v; },
+      renamingFolder: () => this.renamingFolder,
+      setRenamingFolder: (v) => { this.renamingFolder = v; },
+      folderNeedsAttention: (folder) => this.folderNeedsAttention(folder),
+      attentionCount: () => this.attentionTerminals().length,
+      jumpToAttention: () => this.jumpToAttention(),
+      launcherOpen: () => this.launcher.isOpen(),
+      toggleLauncher: () => this.launcher.toggle(),
+      fullscreen: () => this.fullscreen,
+      toggleFullscreen: () => this.toggleFullscreen(),
+      send: (msg) => this.deps.send(msg),
+      rerender: () => this.renderFolders(),
+      renderGrid: () => this.renderGrid(),
+    };
+    this.tabStripHost = {
+      send: (msg) => this.deps.send(msg),
+      switchTab: (windowId, sessionId) => this.switchTab(windowId, sessionId),
+      flushBlockedUi: () => this.flushBlockedUi(),
+    };
+    this.windowDragHost = {
+      tileFor: (id) => this.tiles.get(id)?.tile,
+      tileElements: () => [...this.tiles.values()].map((t) => t.tile),
+      folderBar: this.folderBar,
+      moveToFolder: (windowId, folder) => this.moveWindowToFolder(windowId, folder),
+      dock: (dragged, target, edge) => this.dockWindow(dragged, target, edge),
+      dragEnded: () => this.flushBlockedUi(),
+    };
     this.resizeObserver = new ResizeObserver(() => this.scheduleFit());
     this.root.addEventListener(
       "pointerdown",
@@ -121,9 +164,9 @@ export class TerminalCockpit {
     this.fitVisible();
   }
 
-  adopt(sessionId: string, name: string, cwd: string | null): void {
+  adopt(sessionId: string, name: string, cwd: string | null, modelId?: string): void {
     const spaceId = this.activeFolder === ALL_FOLDER ? null : this.activeFolder;
-    this.deps.send({ type: "cockpitAdoptSession", sessionId, name, cwd, spaceId });
+    this.deps.send({ type: "cockpitAdoptSession", sessionId, name, cwd, spaceId, modelId });
     this.renderFolders();
   }
 
@@ -258,6 +301,7 @@ export class TerminalCockpit {
       lastRows: 0,
       replaying: false,
       webgl: null,
+      webglLost: false,
     };
     this.views.set(session.sessionId, view);
     const buffered = this.pendingData.get(session.sessionId);
@@ -349,12 +393,12 @@ export class TerminalCockpit {
       status,
     );
 
-    wireWindowDrag(this.dragHost(), head, tile, windowId);
+    wireWindowDrag(this.windowDragHost, head, tile, windowId);
 
     this.tiles.set(windowId, { tile, tabStrip, metaBar, termMount, resumeOverlay, bootingOverlay, status, activeId: "", announced: "" });
   }
 
-  private markAttention(sessionId: string, reason: AttentionReason = "notify"): void {
+  private markAttention(sessionId: string, reason: AttentionReason): void {
     const view = this.views.get(sessionId);
     if (!view) return;
     this.attention.add(sessionId);
@@ -456,17 +500,6 @@ export class TerminalCockpit {
     this.focusView(tile.activeId);
   }
 
-  private dragHost(): WindowDragHost {
-    return {
-      tileFor: (id) => this.tiles.get(id)?.tile,
-      tileElements: () => [...this.tiles.values()].map((t) => t.tile),
-      folderBar: this.folderBar,
-      moveToFolder: (windowId, folder) => this.moveWindowToFolder(windowId, folder),
-      dock: (dragged, target, edge) => this.dockWindow(dragged, target, edge),
-      dragEnded: () => this.flushBlockedUi(),
-    };
-  }
-
   private uiInteractionBlocked(): boolean {
     return (
       this.creatingFolder ||
@@ -532,45 +565,20 @@ export class TerminalCockpit {
   }
 
   private renderFolders(): void {
-    renderFoldersBar(this.foldersHost());
-  }
-
-  private foldersHost(): FoldersBarHost {
-    return {
-      folderBar: this.folderBar,
-      topbarActions: this.topbarActions,
-      state: () => this.state,
-      groupWindows: () => this.groupWindows(),
-      windowFolder: (windowId) => this.windowFolder(windowId),
-      activeFolder: () => this.activeFolder,
-      setActiveFolder: (folder) => { this.activeFolder = folder; },
-      creatingFolder: () => this.creatingFolder,
-      setCreatingFolder: (v) => { this.creatingFolder = v; },
-      renamingFolder: () => this.renamingFolder,
-      setRenamingFolder: (v) => { this.renamingFolder = v; },
-      folderNeedsAttention: (folder) => this.folderNeedsAttention(folder),
-      attentionCount: () => this.attentionTerminals().length,
-      jumpToAttention: () => this.jumpToAttention(),
-      launcherOpen: () => this.launcher.isOpen(),
-      toggleLauncher: () => this.launcher.toggle(),
-      fullscreen: () => this.fullscreen,
-      toggleFullscreen: () => this.toggleFullscreen(),
-      send: (msg) => this.deps.send(msg),
-      rerender: () => this.renderFolders(),
-      renderGrid: () => this.renderGrid(),
-    };
+    renderFoldersBar(this.foldersBarHost);
   }
 
   private toggleFullscreen(): void {
     this.fullscreen = !this.fullscreen;
     document.body.classList.toggle("ct-cockpit-fullscreen", this.fullscreen);
+    this.deps.fullscreenChanged?.(this.fullscreen);
     this.renderFolders();
     this.fitImmediate();
   }
 
   private renderGrid(): void {
     if (!this.loaded) {
-      this.renderSkeleton();
+      renderSkeletonTiles(this.gridEl);
       return;
     }
     const groups = this.groupWindows();
@@ -581,7 +589,7 @@ export class TerminalCockpit {
       const terminals = groups.get(wid) ?? [];
       if (!tile || terminals.length === 0) continue;
       if (!terminals.some((t) => t.sessionId === tile.activeId)) tile.activeId = terminals[0]!.sessionId;
-      this.renderTabs(tile, wid, terminals);
+      renderTabStrip(this.tabStripHost, tile, wid, terminals);
       this.mountWindow(tile, terminals);
       this.applyAttention(wid);
       const active = terminals.find((t) => t.sessionId === tile.activeId)!;
@@ -637,19 +645,34 @@ export class TerminalCockpit {
   }
 
   private syncRenderers(): void {
+    let active = 0;
     for (const view of this.views.values()) {
-      if (!view.initialised) continue;
-      const visible = view.termHost.isConnected && !view.termHost.classList.contains("hidden");
-      if (visible && view.webgl === null) {
-        view.webgl = attachWebglRenderer(view.term, () => {
-          view.webgl = null;
-          setTimeout(() => this.syncRenderers(), 0);
-        });
-      } else if (!visible && view.webgl !== null) {
-        view.webgl.dispose();
-        view.webgl = null;
+      if (view.webgl === null) continue;
+      if (this.viewVisible(view)) {
+        active++;
+        continue;
       }
+      view.webgl.dispose();
+      view.webgl = null;
     }
+    for (const view of this.views.values()) {
+      if (active >= MAX_WEBGL_TERMINALS) break;
+      if (!view.initialised || view.webgl !== null || view.webglLost || !this.viewVisible(view)) continue;
+      const handle = attachWebglRenderer(view.term, () => {
+        view.webgl = null;
+        view.webglLost = true;
+      });
+      if (handle === null) {
+        view.webglLost = true;
+        continue;
+      }
+      view.webgl = handle;
+      active++;
+    }
+  }
+
+  private viewVisible(view: TerminalView): boolean {
+    return view.termHost.isConnected && !view.termHost.classList.contains("hidden");
   }
 
   private updateWindowMeta(windowId: string): void {
@@ -660,23 +683,7 @@ export class TerminalCockpit {
   }
 
   private renderTileMeta(tile: WindowTile, active: TerminalSession): void {
-    renderTileMeta(tile, active, this.sessionStatus(active));
-  }
-
-  private sessionStatus(active: TerminalSession): SessionStatus {
-    return sessionStatus(active, this.attention, this.attentionReasons);
-  }
-
-  private renderTabs(tile: WindowTile, windowId: string, terminals: readonly TerminalSession[]): void {
-    renderTabStrip(this.tabsHost(), tile, windowId, terminals);
-  }
-
-  private tabsHost(): TabStripHost {
-    return {
-      send: (msg) => this.deps.send(msg),
-      switchTab: (windowId, sessionId) => this.switchTab(windowId, sessionId),
-      flushBlockedUi: () => this.flushBlockedUi(),
-    };
+    renderTileMeta(tile, active, sessionStatus(active, this.attention, this.attentionReasons));
   }
 
   private mountWindow(tile: WindowTile, terminals: readonly TerminalSession[]): void {
@@ -717,10 +724,6 @@ export class TerminalCockpit {
     requestAnimationFrame(() => this.fitVisible());
   }
 
-  private renderSkeleton(): void {
-    renderSkeletonTiles(this.gridEl);
-  }
-
   private fitVisible(): void {
     for (const [sessionId, view] of this.views) {
       if (!view.initialised) continue;
@@ -743,8 +746,8 @@ export class TerminalCockpit {
     this.launcher.renderInto(this.launcherEl, this.state, this.activeFolder);
   }
 
-  private flash(message: string, level: "info" | "warning" | "error", title?: string): void {
-    flashToast(this.root, message, level, title);
+  private flash(message: string, level: "info" | "warning" | "error"): void {
+    flashToast(this.root, message, level);
   }
 
 }

@@ -46,8 +46,8 @@ describe("tmux command construction (background-persistent sessions)", () => {
     expect(tmuxConfigText()).toContain("set -g alternate-screen on");
   });
 
-  it("keeps tmux out of UI-level mouse and passthrough handling", () => {
-    expect(tmuxConfigText()).toContain("set -g mouse off");
+  it("enables tmux mouse handling so the wheel scrolls real scrollback instead of arrow-spamming the shell (regression: wheel cycled command history and flooded sessions with key events)", () => {
+    expect(tmuxConfigText()).toContain("set -g mouse on");
     expect(tmuxConfigText()).not.toContain("allow-passthrough");
   });
 });

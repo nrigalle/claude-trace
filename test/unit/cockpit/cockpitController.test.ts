@@ -102,7 +102,6 @@ let terminalHistoryStore: CockpitTerminalHistoryStore;
 let host: FakeHost;
 let backend: FakeBackend;
 let names: Map<string, string>;
-let transcripts: Set<string>;
 let idSeq: number;
 let cleanedHooks: string[];
 let attentionListener: ((sessionId: string, reason: "stop" | "notify" | "active" | "start") => void) | null;
@@ -121,7 +120,6 @@ const makeController = (): CockpitController =>
       setName: (id, name) => names.set(id, name),
       defaultCwd: () => "/repo",
       newSessionId: () => `uuid-${++idSeq}`,
-      transcriptExists: (_cwd, id) => transcripts.has(id),
       prepareHooks: (id) => `/hooks/${id}.json`,
       cleanupHooks: (id) => cleanedHooks.push(id),
       watchAttention: (listener) => {
@@ -144,7 +142,6 @@ beforeEach(() => {
   host = new FakeHost();
   backend = new FakeBackend();
   names = new Map();
-  transcripts = new Set();
   idSeq = 0;
   cleanedHooks = [];
   attentionListener = null;
@@ -417,7 +414,6 @@ describe("CockpitController persistence and resume — a session NEVER vanishes 
 
   it("a fresh controller (RELOAD) restores persisted sessions with the SAME id and auto-resumes them", () => {
     host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
-    transcripts.add("uuid-1");
     backend = new FakeBackend();
     host = new FakeHost();
     makeController();
@@ -703,6 +699,28 @@ describe("CockpitController adopt a resumed session into the active folder", () 
     host.send({ type: "cockpitAdoptSession", sessionId: "r3", name: "Resumed", cwd: "/repo", spaceId: "space-x" });
     host.send({ type: "cockpitAdoptSession", sessionId: "r3", name: "Resumed", cwd: "/repo", spaceId: "space-y" });
     expect(host.lastState().state.terminals.find((s) => s.sessionId === "r3")!.spaceId).toBe("space-y");
+  });
+
+  it("does not auto-start the adopted session: it waits on the resume overlay so the user picks the permission mode", () => {
+    host.send({ type: "cockpitAdoptSession", sessionId: "r4", name: "Resumed", cwd: "/repo", spaceId: null, modelId: "claude-opus-4-7" });
+    expect(backend.spawns).toHaveLength(0);
+    expect(host.lastState().state.terminals.find((s) => s.sessionId === "r4")!.alive).toBe(false);
+  });
+
+  it("restores the session's ORIGINAL model on resume instead of forcing the default (regression: every resume ran on opus-4-8)", () => {
+    host.send({ type: "cockpitAdoptSession", sessionId: "r5", name: "Resumed", cwd: "/repo", spaceId: null, modelId: "claude-opus-4-7" });
+    host.send({ type: "cockpitResumeSession", sessionId: "r5", permissionMode: "plan" });
+    expect(backend.spawns).toHaveLength(1);
+    const cmd = backend.spawns[0]!.initialInput;
+    expect(cmd).toContain("--resume r5");
+    expect(cmd).toContain("--model 'claude-opus-4-7'");
+    expect(cmd).not.toContain("claude-opus-4-8");
+  });
+
+  it("falls back to the default model only when the transcript carries no model id", () => {
+    host.send({ type: "cockpitAdoptSession", sessionId: "r6", name: "Resumed", cwd: "/repo", spaceId: null });
+    host.send({ type: "cockpitResumeSession", sessionId: "r6" });
+    expect(backend.spawns[0]!.initialInput).toContain("--model 'claude-opus-4-8'");
   });
 });
 

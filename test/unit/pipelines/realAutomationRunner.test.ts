@@ -4,6 +4,7 @@ import {
   parseOrchestratorDecision,
 } from "../../../src/features/pipelines/domain/orchestratorProtocol";
 import { encodeCwdForProjects } from "../../../src/shared/projectPathEncoding";
+import { buildRunnerHookSettings } from "../../../src/features/pipelines/infra/RealAutomationRunner";
 
 describe("encodeCwdForProjects", () => {
   it("matches Claude Code's real rule: every non-alphanumeric becomes a dash (dots included)", () => {
@@ -107,5 +108,19 @@ describe("readConversationDigest — the orchestrator prompt must stay command-l
     expect(digest).toContain("Mockup pushed on branch maquettes/zen-spa");
     expect(digest).not.toContain(giant);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("buildRunnerHookSettings — needs-input detection matches 2026 Claude Code hook events", () => {
+  it("covers permission prompts, idle prompts and elicitation dialogs, and only writes start/stop/notify markers", () => {
+    const settings = buildRunnerHookSettings("sess-1", "/tmp/signals");
+    expect(settings.hooks["Notification"]![0]!.matcher).toBe("permission_prompt|idle_prompt|elicitation_dialog");
+    expect(settings.hooks["Elicitation"]![0]!.hooks[0]!.command).toContain("sess-1.notify");
+    const commands = Object.values(settings.hooks).flatMap((entries) =>
+      entries.flatMap((e) => e.hooks.map((h) => h.command)),
+    );
+    for (const command of commands) {
+      expect(command).toMatch(/sess-1\.(start|stop|notify)/);
+    }
   });
 });

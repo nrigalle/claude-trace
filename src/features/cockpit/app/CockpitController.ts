@@ -19,7 +19,7 @@ import {
   type ProfileId,
   type SessionProfile,
 } from "../domain/profiles";
-import { DEFAULT_MODEL_CHOICE, normalizeModelChoice, type EffortChoice, type ModelChoice } from "../../../shared/models";
+import { DEFAULT_MODEL_CHOICE, modelChoiceFromId, modelDefaultEffort, normalizeModelChoice, type EffortChoice, type ModelChoice } from "../../../shared/models";
 import { buildClaudeCommand, type PermissionMode, type ShellQuote } from "../../../shared/permissionModes";
 
 export interface CockpitHost {
@@ -63,7 +63,6 @@ export interface CockpitActions {
   setName(sessionId: string, name: string): void;
   defaultCwd(): string | null;
   newSessionId(): string;
-  transcriptExists(cwd: string | null, sessionId: string): boolean;
   prepareHooks(sessionId: string): string | null;
   cleanupHooks(sessionId: string): void;
   watchAttention(listener: (sessionId: string, reason: "stop" | "notify" | "active" | "start") => void): { dispose(): void };
@@ -179,9 +178,7 @@ export class CockpitController {
     if (this.disposed) return;
     this.disposed = true;
     this.deps.terminals.dispose();
-    try {
-      this.deps.terminalHistoryStore.flushAll();
-    } catch {}
+    this.deps.terminalHistoryStore.flushAll();
     for (const d of this.disposables) {
       try {
         d.dispose();
@@ -282,7 +279,7 @@ export class CockpitController {
         return;
       }
       case "cockpitAdoptSession":
-        this.handleAdopt(msg.sessionId, msg.name, msg.cwd, msg.spaceId);
+        this.handleAdopt(msg.sessionId, msg.name, msg.cwd, msg.spaceId, msg.modelId);
         return;
       case "cockpitDropImage": {
         const imgPath = this.deps.actions.saveDroppedImage(msg.fileName, msg.dataBase64);
@@ -470,7 +467,13 @@ export class CockpitController {
     if (this.spawnResume(key, permissionMode)) this.broadcast();
   }
 
-  private handleAdopt(sessionId: string, name: string, cwd: string | null, spaceId: string | null): void {
+  private handleAdopt(
+    sessionId: string,
+    name: string,
+    cwd: string | null,
+    spaceId: string | null,
+    modelId?: string,
+  ): void {
     const existing = this.managed.get(sessionId);
     if (existing) {
       if (existing.spaceId !== spaceId) {
@@ -478,14 +481,15 @@ export class CockpitController {
         this.persist(existing);
       }
     } else {
+      const model = modelChoiceFromId(modelId);
       this.managed.set(sessionId, {
         sessionId,
         windowId: sessionId,
         name,
         spaceId,
         cwd,
-        model: DEFAULT_MODEL_CHOICE,
-        effort: "default",
+        model,
+        effort: modelDefaultEffort(model),
         permissionMode: "default",
         startedAtMs: this.deps.actions.now(),
         kind: "claude",
@@ -494,7 +498,6 @@ export class CockpitController {
       this.deps.actions.setName(sessionId, name);
       this.persist(this.managed.get(sessionId)!);
     }
-    this.spawnResume(sessionId);
     this.broadcast();
   }
 

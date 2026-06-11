@@ -20,6 +20,12 @@ export type HostToWebview =
       readonly removedIds: readonly SessionId[];
     }
   | {
+      readonly type: "updateDelta";
+      readonly changed: readonly SessionSummary[];
+      readonly stats: GlobalStats;
+      readonly removedIds: readonly SessionId[];
+    }
+  | {
       readonly type: "sessionDetail";
       readonly sessionId: SessionId;
       readonly detail: SessionDetail;
@@ -31,6 +37,7 @@ export type HostToWebview =
 
 export type WebviewToHost =
   | { readonly type: "ready" }
+  | { readonly type: "sessionsViewVisible"; readonly visible: boolean }
   | { readonly type: "selectSession"; readonly sessionId: SessionId | null }
   | { readonly type: "renameSession"; readonly sessionId: SessionId }
   | { readonly type: "resumeSession"; readonly sessionId: SessionId }

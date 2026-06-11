@@ -12,8 +12,6 @@ import {
   type EffortChoice,
 } from "../../../src/shared/models";
 
-export const ASSISTANT_DEFAULT_MODEL: ModelChoice = DEFAULT_MODEL_CHOICE;
-
 export interface BaseTurn {
   readonly role: "user" | "assistant";
   readonly text: string;
@@ -32,7 +30,7 @@ export interface ChatConversation<TTurn extends BaseTurn> {
   stopped: boolean;
 }
 
-export interface ConversationMeta {
+interface ConversationMeta {
   readonly id: string;
   readonly title: string;
   readonly createdAtMs: number;
@@ -258,7 +256,7 @@ export abstract class ChatPanelBase<TTurn extends BaseTurn> {
   private ensureConversation(conversationId: string): ChatConversation<TTurn> {
     let conv = this.conversations.get(conversationId);
     if (!conv) {
-      conv = { turns: [], busy: false, error: null, pendingEvents: [], historyLoaded: false, historyApplied: false, model: ASSISTANT_DEFAULT_MODEL, effort: "default", stopped: false };
+      conv = { turns: [], busy: false, error: null, pendingEvents: [], historyLoaded: false, historyApplied: false, model: DEFAULT_MODEL_CHOICE, effort: "default", stopped: false };
       this.conversations.set(conversationId, conv);
     }
     return conv;

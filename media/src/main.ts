@@ -20,8 +20,15 @@ const boot = () => {
   let statsCache: GlobalStats | null = null;
 
   const client = new MessageClient(store);
+  let cockpitFullscreen = false;
+  const sendSessionsViewVisible = () =>
+    client.send({ type: "sessionsViewVisible", visible: mode === "sessions" && !cockpitFullscreen });
   const terminalCockpit = new TerminalCockpit({
     send: (msg: CockpitWebviewToHost) => client.send(msg),
+    fullscreenChanged: (on: boolean) => {
+      cockpitFullscreen = on;
+      sendSessionsViewVisible();
+    },
   });
 
   const app = new App(store, {
@@ -101,6 +108,7 @@ const boot = () => {
   const setMode = (next: Mode) => {
     if (next === mode) return;
     mode = next;
+    sendSessionsViewVisible();
     store.update({ activeTab: next });
     sessionsTab.classList.toggle("active", next === "sessions");
     pipelinesTab.classList.toggle("active", next === "pipelines");
@@ -116,7 +124,7 @@ const boot = () => {
   const resumeInCockpit = (id: SessionId) => {
     const summary = sessionsCache.find((s) => s.session_id === id);
     const name = summary?.title && summary.title.length > 0 ? summary.title : `Session ${id.slice(0, 8)}`;
-    terminalCockpit.adopt(id, name, summary?.cwd ?? null);
+    terminalCockpit.adopt(id, name, summary?.cwd ?? null, summary?.model?.id);
     setMode("sessions");
     if (store.state.selectedId !== null) {
       store.update({ selectedId: null });
@@ -146,6 +154,23 @@ const boot = () => {
             store.update({ selectedId: null });
             app.noSelection();
           }
+        }
+        break;
+      }
+      case "updateDelta": {
+        const byId = new Map(sessionsCache.map((s) => [s.session_id, s]));
+        for (const s of msg.changed) byId.set(s.session_id, s);
+        for (const id of msg.removedIds) byId.delete(id);
+        const merged = [...byId.values()].sort(
+          (a, b) => (b.ended_at ?? b.last_modified_ms) - (a.ended_at ?? a.last_modified_ms),
+        );
+        sessionsCache = merged;
+        statsCache = msg.stats;
+        app.updateSessions(merged, msg.stats, new Set(msg.changed.map((s) => s.session_id)));
+        const selected = store.state.selectedId;
+        if (selected && msg.removedIds.includes(selected)) {
+          store.update({ selectedId: null });
+          app.noSelection();
         }
         break;
       }

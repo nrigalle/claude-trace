@@ -236,7 +236,6 @@ const judgePoolItem = (
           cwd: host.runCwd(),
           taskGoal,
           workerJsonlPath,
-          resumeSessionId: null,
           signal: host.signal(),
         });
       orch.sessionId = outcome.orchestratorSessionId ?? orch.sessionId;

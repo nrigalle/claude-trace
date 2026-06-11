@@ -2,7 +2,7 @@ import type { LibrarySnapshot } from "../../../src/features/library/domain/types
 import { askName } from "../ui/modal.js";
 import { normalizeName } from "./libraryHelpers.js";
 
-export type NameDialogMode = { readonly mode: "create" } | { readonly mode: "rename"; readonly currentName: string };
+type NameDialogMode = { readonly mode: "create" } | { readonly mode: "rename"; readonly currentName: string };
 
 export const askLibraryItemName = async (
   root: HTMLElement,

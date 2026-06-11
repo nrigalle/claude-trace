@@ -2,12 +2,8 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import * as pty from "node-pty";
-import {
-  buildCockpitHookSettings,
-  shQuote,
-  type CockpitHookSettings,
-  type HookEntry,
-} from "../../../features/cockpit/infra/cockpitHooks";
+import { buildCockpitHookSettings } from "../../../features/cockpit/infra/cockpitHooks";
+import { shQuote, type ClaudeHookSettings, type HookEntry } from "../../claudeHookMarkers";
 import { READ_ONLY_DENY_MATCHER, READ_ONLY_DENY_REASON } from "../../assistant/readOnlyAssistant";
 import {
   concatTextEvents,
@@ -54,7 +50,7 @@ export interface ChatHooks {
   readonly installHooks: (sessionId: string) => string | null;
   readonly removeHooks: (sessionId: string) => void;
   readonly subscribeStop: (sessionId: string, listener: () => void) => { dispose(): void };
-  readonly subscribeNotify?: (sessionId: string, listener: () => void) => { dispose(): void };
+  readonly subscribeNotify: (sessionId: string, listener: () => void) => { dispose(): void };
 }
 
 export interface ClaudeChatConfig {
@@ -215,7 +211,6 @@ export class ClaudeChatEngine {
     let poller: ReturnType<typeof setInterval> | null = null;
     let submitTimer: ReturnType<typeof setTimeout> | null = null;
     let quietTimer: ReturnType<typeof setTimeout> | null = null;
-    let lastEmittedJson = "";
     const startOffset = state.transcriptOffset;
     let child: ChatPty | null = null;
     try {
@@ -246,17 +241,14 @@ export class ClaudeChatEngine {
 
       const stopPromise = this.waitForStop(state, exited);
       let lastPolledSize = -1;
+      const progress: ProgressAccumulator = { events: [], offset: startOffset };
       poller = setInterval(() => {
         if (!options.onProgress) return;
         const size = currentFileSize(state.transcriptPath);
         if (size === lastPolledSize) return;
         lastPolledSize = size;
-        const events = readEventsFrom(state.transcriptPath, startOffset);
-        if (events.length === 0) return;
-        const snapshot = JSON.stringify(events);
-        if (snapshot === lastEmittedJson) return;
-        lastEmittedJson = snapshot;
-        options.onProgress(events);
+        if (!appendCompletedEvents(state.transcriptPath, progress)) return;
+        options.onProgress([...progress.events]);
       }, STREAM_POLL_MS);
 
       const reason = await stopPromise;
@@ -268,7 +260,7 @@ export class ClaudeChatEngine {
       if (reason === "notify") {
         state.transcriptOffset = currentFileSize(state.transcriptPath);
         throw new Error(
-          "The assistant paused on a permission prompt it can't answer here (it runs without an interactive approver). The turn was stopped — simplify the request or try again.",
+          "The assistant paused waiting for input it can't receive here — a permission prompt, idle prompt, or input dialog (it runs without an interactive approver). The turn was stopped — simplify the request or try again.",
         );
       }
       const events = await readFinalEvents(state.transcriptPath, startOffset);
@@ -395,7 +387,7 @@ export class ClaudeChatEngine {
       };
       subscription = this.hooks.subscribeStop(state.sessionId, () => finish("stop"));
       if (finished) return;
-      notifySubscription = this.hooks.subscribeNotify?.(state.sessionId, () => finish("notify")) ?? null;
+      notifySubscription = this.hooks.subscribeNotify(state.sessionId, () => finish("notify"));
       if (finished) return;
       checkInterval = setInterval(() => {
         if (state.cancelled) finish("cancel");
@@ -429,22 +421,20 @@ export const NODE_PTY_SPAWNER: ChatPtySpawner = {
 };
 
 const tryKillPty = (child: ChatPty): void => {
-  try { child.kill(); } catch (err: unknown) { ignoreBestEffortFailure(err); }
+  try { child.kill(); } catch { }
 };
 
 const tryWritePty = (child: ChatPty, data: string): void => {
-  try { child.write(data); } catch (err: unknown) { ignoreBestEffortFailure(err); }
+  try { child.write(data); } catch { }
 };
 
 const closeWatcher = (watcher: fs.FSWatcher | null): void => {
-  try { watcher?.close(); } catch (err: unknown) { ignoreBestEffortFailure(err); }
+  try { watcher?.close(); } catch { }
 };
 
 const removeFile = (filePath: string): void => {
-  try { fs.rmSync(filePath, { force: true }); } catch (err: unknown) { ignoreBestEffortFailure(err); }
+  try { fs.rmSync(filePath, { force: true }); } catch { }
 };
-
-const ignoreBestEffortFailure = (_err: unknown): void => {};
 
 const currentFileSize = (filePath: string): number => {
   try { return fs.statSync(filePath).size; } catch { return 0; }
@@ -470,6 +460,35 @@ const readFinalEvents = async (
     if (!hasContent && Date.now() - start >= FINAL_NO_CONTENT_MAX_MS) return [];
     if (Date.now() - start >= FINAL_MAX_WAIT_MS) return readEventsFrom(filePath, startOffset);
   }
+};
+
+interface ProgressAccumulator {
+  events: TimelineEvent[];
+  offset: number;
+}
+
+const appendCompletedEvents = (filePath: string, acc: ProgressAccumulator): boolean => {
+  let chunk: Buffer;
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size <= acc.offset) return false;
+    const fd = fs.openSync(filePath, "r");
+    try {
+      chunk = Buffer.alloc(stat.size - acc.offset);
+      fs.readSync(fd, chunk, 0, chunk.length, acc.offset);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+  const lastNewline = chunk.lastIndexOf(0x0a);
+  if (lastNewline < 0) return false;
+  acc.offset += lastNewline + 1;
+  const fresh = extractTimelineEvents(chunk.subarray(0, lastNewline + 1).toString("utf8"));
+  if (fresh.length === 0) return false;
+  acc.events.push(...fresh);
+  return true;
 };
 
 export const readEventsFrom = (filePath: string, startOffset: number): readonly TimelineEvent[] => {
@@ -519,10 +538,10 @@ const reminderInjectEntry = (reminderFile: string): HookEntry => ({
 });
 
 const augmentSettings = (
-  base: CockpitHookSettings,
+  base: ClaudeHookSettings,
   readOnly: boolean,
   reminderFile: string | null,
-): CockpitHookSettings => {
+): ClaudeHookSettings => {
   const hooks: Record<string, readonly HookEntry[]> = { ...base.hooks };
   if (readOnly) hooks["PreToolUse"] = [...base.hooks["PreToolUse"]!, readOnlyDenyEntry()];
   if (reminderFile !== null) hooks["UserPromptSubmit"] = [...base.hooks["UserPromptSubmit"]!, reminderInjectEntry(reminderFile)];
@@ -557,8 +576,7 @@ const watchSignalFile = (
       watcher = null;
       pollTimer = setInterval(check, 500);
     });
-  } catch (err: unknown) {
-    ignoreBestEffortFailure(err);
+  } catch {
     pollTimer = setInterval(check, 500);
   }
   check();

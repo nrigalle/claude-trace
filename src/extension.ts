@@ -17,7 +17,6 @@ import type { CockpitLayout } from "./features/cockpit/protocol";
 import { ProfileStore } from "./features/cockpit/infra/ProfileStore";
 import { CockpitSessionStore } from "./features/cockpit/infra/CockpitSessionStore";
 import { CockpitTerminalHistoryStore } from "./features/cockpit/infra/CockpitTerminalHistoryStore";
-import { encodeCwdForProjects } from "./shared/projectPathEncoding";
 import {
   writeSessionHooks,
   removeSessionHooks,
@@ -58,6 +57,7 @@ import { cwdForProjectDir, isHiddenAssistantProject } from "./features/dashboard
 import { SessionDirectoryWatcher, type WatcherListener } from "./features/dashboard/infra/SessionDirectoryWatcher";
 import { SessionFilePoller } from "./features/dashboard/infra/SessionFilePoller";
 import { BudgetMonitor } from "./features/dashboard/infra/BudgetMonitor";
+import { dayStartMs } from "./features/dashboard/domain/budgetMath";
 import { ClaudeTerminalRegistry } from "./features/dashboard/infra/ClaudeTerminalRegistry";
 import { ClaudeTraceQuickDiff } from "./features/dashboard/infra/ClaudeTraceQuickDiff";
 import { registerOpenDashboardCommand } from "./features/dashboard/infra/Commands";
@@ -154,12 +154,15 @@ export function activate(context: vscode.ExtensionContext): void {
   const terminalRegistry = new ClaudeTerminalRegistry();
   context.subscriptions.push(terminalRegistry);
 
-  const budgetMonitor = new BudgetMonitor(() => service.list());
+  const budgetMonitor = new BudgetMonitor(() => service.listActiveSince(dayStartMs(new Date())));
   context.subscriptions.push(budgetMonitor.start());
   context.subscriptions.push(budgetMonitor);
   context.subscriptions.push(
     watcherSource.onChange(() => budgetMonitor.schedule()),
   );
+
+  let sessionsViewShown = true;
+  let syncPollerActive: () => void = () => {};
 
   const actions: DashboardActions = {
     async renameSession(id: SessionId): Promise<void> {
@@ -303,6 +306,10 @@ export function activate(context: vscode.ExtensionContext): void {
     invalidateSession(id: SessionId): void {
       quickDiff.invalidate(id);
     },
+    setSessionsViewVisible(visible: boolean): void {
+      sessionsViewShown = visible;
+      syncPollerActive();
+    },
     loadDetailLayout(): readonly DetailLayoutEntry[] {
       const saved = context.globalState.get<readonly DetailLayoutEntry[]>("ct.detailLayout");
       return Array.isArray(saved) ? saved : [];
@@ -355,8 +362,9 @@ export function activate(context: vscode.ExtensionContext): void {
       existingPanel,
     });
     currentController = new DashboardController(host, service, watcherSource, actions, state);
-    poller.setActive(host.visible);
-    const pollerGate = host.onViewStateChange(() => poller.setActive(host.visible));
+    syncPollerActive = () => poller.setActive(host.visible && sessionsViewShown);
+    syncPollerActive();
+    const pollerGate = host.onViewStateChange(() => syncPollerActive());
     const pipelinesHost = new PipelinesHostAdapter(host.panel);
     const runner = new RealAutomationRunner();
     const deterministic = new RealDeterministicRunner();
@@ -431,10 +439,6 @@ export function activate(context: vscode.ExtensionContext): void {
       setName: (id, name) => void nameStore.set(toSessionId(id), name),
       defaultCwd: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null,
       newSessionId: () => crypto.randomUUID(),
-      transcriptExists: (cwd, sessionId) =>
-        fs.existsSync(
-          path.join(PROJECTS_DIR, encodeCwdForProjects(cwd ?? os.homedir()), `${sessionId}.jsonl`),
-        ),
       prepareHooks: (sessionId) => writeSessionHooks(sessionId),
       cleanupHooks: (sessionId) => removeSessionHooks(sessionId),
       watchAttention: (listener) => watchAttentionSignals(listener),

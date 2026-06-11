@@ -15,8 +15,5 @@ export const sumCostSince = (
 export const dayStartMs = (now: Date): number =>
   new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 
-export const dayKey = (now: Date): string =>
-  `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
-
 export const nonNegativeNumber = (v: unknown): number =>
   typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;

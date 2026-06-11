@@ -5,6 +5,7 @@ import type { HostToWebview, WebviewToHost } from "../protocol";
 
 const DASHBOARD_MESSAGE_TYPE_TABLE: Record<WebviewToHost["type"], true> = {
   ready: true,
+  sessionsViewVisible: true,
   selectSession: true,
   renameSession: true,
   resumeSession: true,

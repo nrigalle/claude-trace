@@ -109,20 +109,35 @@ vi.mock("@xterm/addon-fit", () => ({
 vi.mock("@xterm/addon-web-links", () => ({
   WebLinksAddon: class {},
 }));
-const webglInstances: { disposed: boolean }[] = [];
+const webglInstances: { disposed: boolean; lossCb: (() => void) | null }[] = [];
 vi.mock("@xterm/addon-webgl", () => ({
   WebglAddon: class {
     disposed = false;
+    lossCb: (() => void) | null = null;
     constructor() {
       webglInstances.push(this);
     }
-    onContextLoss(): void {}
+    onContextLoss(cb: () => void): void {
+      this.lossCb = cb;
+    }
     dispose(): void {
       this.disposed = true;
     }
   },
 }));
 const activeWebglCount = (): number => webglInstances.filter((i) => !i.disposed).length;
+
+const FAKE_HARDWARE_GL = {
+  RENDERER: 0x1f01,
+  getExtension: (name: string): unknown =>
+    name === "WEBGL_debug_renderer_info"
+      ? { UNMASKED_RENDERER_WEBGL: 0x9246 }
+      : name === "WEBGL_lose_context"
+        ? { loseContext: (): void => {} }
+        : null,
+  getParameter: (): string => "ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)",
+};
+(HTMLCanvasElement.prototype as unknown as { getContext: () => unknown }).getContext = () => FAKE_HARDWARE_GL;
 
 const term = (
   sessionId: string,
@@ -1247,5 +1262,23 @@ describe("TerminalCockpit — WebGL renderers are visibility-scoped (regression:
 
     (document.querySelector('.tc-folder[data-folder="s2"]') as HTMLElement).click();
     expect(activeWebglCount() - before, "switching back releases one and reattaches the other").toBe(1);
+  });
+
+  it("caps concurrent WebGL renderers so the browser never evicts contexts in a loop (regression: >16 tiles thrashed context-loss/reattach forever)", () => {
+    const before = activeWebglCount();
+    const many = Array.from({ length: 12 }, (_, i) => term(`s${i}`, `w${i}`, `T${i}`));
+    cockpit.receive({ type: "cockpitState", state: state(many) });
+    expect(activeWebglCount() - before, "12 visible terminals must not open 12 GL contexts").toBe(8);
+  });
+
+  it("falls back to the DOM renderer for good after a context loss instead of reattaching in a busy loop", () => {
+    const before = activeWebglCount();
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "A")]) });
+    expect(activeWebglCount() - before).toBe(1);
+    const instance = webglInstances[webglInstances.length - 1]!;
+    instance.disposed = true;
+    instance.lossCb?.();
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "A")]) });
+    expect(activeWebglCount() - before, "a lost context must not be reattached").toBe(0);
   });
 });

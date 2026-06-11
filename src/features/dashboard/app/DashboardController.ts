@@ -24,10 +24,13 @@ export interface DashboardActions {
   deleteSessionFiles(ids: readonly SessionId[]): Promise<void>;
   setActiveSession(id: SessionId | null): void;
   invalidateSession(id: SessionId): void;
+  setSessionsViewVisible?(visible: boolean): void;
   loadDetailLayout(): readonly DetailLayoutEntry[];
   saveDetailLayout(layout: readonly DetailLayoutEntry[]): void;
   showError?(message: string): void;
 }
+
+const DETAIL_MIN_INTERVAL_MS = 2000;
 
 export class DashboardController {
   private readonly disposables: { dispose(): void }[] = [];
@@ -37,6 +40,9 @@ export class DashboardController {
   private dirtySessions = new Set<SessionId>();
   private listDirty = false;
   private disposed = false;
+  private lastDetailSentMs = 0;
+  private detailTimer: ReturnType<typeof setTimeout> | null = null;
+  private sessionsViewShown = true;
 
   constructor(
     private readonly host: WebviewHost,
@@ -51,7 +57,7 @@ export class DashboardController {
     this.actions.setActiveSession(this.activeSessionId);
 
     this.scheduler = new RefreshScheduler({
-      isVisible: () => this.host.visible,
+      isVisible: () => this.host.visible && this.sessionsViewShown,
       flush: () => this.flush(),
     });
 
@@ -65,6 +71,10 @@ export class DashboardController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    if (this.detailTimer !== null) {
+      clearTimeout(this.detailTimer);
+      this.detailTimer = null;
+    }
     this.actions.setActiveSession(null);
     this.scheduler.dispose();
     for (const d of this.disposables) d.dispose();
@@ -90,10 +100,19 @@ export class DashboardController {
         this.sendInitialPayload();
         if (this.activeSessionId) this.sendSessionDetail(this.activeSessionId);
         return;
+      case "sessionsViewVisible":
+        this.sessionsViewShown = msg.visible;
+        this.actions.setSessionsViewVisible?.(msg.visible);
+        if (msg.visible) this.scheduler.notifyVisible();
+        else this.scheduler.notifyHidden();
+        return;
       case "selectSession":
         this.activeSessionId = msg.sessionId;
         this.actions.setActiveSession(this.activeSessionId);
-        if (this.activeSessionId) this.sendSessionDetail(this.activeSessionId);
+        if (this.activeSessionId) {
+          this.lastDetailSentMs = Date.now();
+          this.sendSessionDetail(this.activeSessionId);
+        }
         return;
       case "renameSession":
         void this.handleRename(msg.sessionId);
@@ -199,26 +218,53 @@ export class DashboardController {
 
   private flush(): void {
     if (this.disposed) return;
-    const sessions = this.service.list();
+    const fast = !this.listDirty && this.dirtySessions.size > 0;
+    const sessions = this.service.list(fast ? this.dirtySessions : undefined);
     const stats = this.service.stats(sessions);
     const changedIds = this.diffAndRemember(sessions);
     const removedIds = this.computeRemoved(sessions);
 
-    this.host.postMessage({
-      type: "update",
-      sessions,
-      stats,
-      changedIds,
-      removedIds,
-    });
+    if (fast) {
+      const changedSet = new Set(changedIds);
+      this.host.postMessage({
+        type: "updateDelta",
+        changed: sessions.filter((s) => changedSet.has(s.session_id)),
+        stats,
+        removedIds,
+      });
+    } else {
+      this.host.postMessage({
+        type: "update",
+        sessions,
+        stats,
+        changedIds,
+        removedIds,
+      });
+    }
 
     const active = this.activeSessionId;
     if (active && (changedIds.includes(active) || this.dirtySessions.has(active) || this.listDirty)) {
-      this.sendSessionDetail(active);
+      this.scheduleDetail();
     }
 
     this.dirtySessions.clear();
     this.listDirty = false;
+  }
+
+  private scheduleDetail(): void {
+    const wait = this.lastDetailSentMs + DETAIL_MIN_INTERVAL_MS - Date.now();
+    if (wait <= 0) {
+      this.lastDetailSentMs = Date.now();
+      if (this.activeSessionId) this.sendSessionDetail(this.activeSessionId);
+      return;
+    }
+    if (this.detailTimer !== null) return;
+    this.detailTimer = setTimeout(() => {
+      this.detailTimer = null;
+      if (this.disposed || this.activeSessionId === null) return;
+      this.lastDetailSentMs = Date.now();
+      this.sendSessionDetail(this.activeSessionId);
+    }, wait);
   }
 
   private diffAndRemember(sessions: readonly SessionSummary[]): SessionId[] {

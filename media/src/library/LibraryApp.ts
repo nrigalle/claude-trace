@@ -56,7 +56,6 @@ export class LibraryApp {
   private readonly editorEl: HTMLElement;
   private readonly skillsTabBtn: HTMLButtonElement;
   private readonly agentsTabBtn: HTMLButtonElement;
-  private emptyHelpEl: HTMLElement;
   private snapshot: LibrarySnapshot = { skills: [], agents: [], projects: [] };
   private tab: Tab = "skills";
   private query = "";
@@ -187,8 +186,7 @@ export class LibraryApp {
     );
 
     this.editorEl = h("div", { className: "lib-editor" });
-    this.emptyHelpEl = h("div", { className: "lib-empty" });
-    this.editorEl.appendChild(this.emptyHelpEl);
+    this.editorEl.appendChild(h("div", { className: "lib-empty" }));
 
     this.assistantPanel = new AssistantPanel({
       send: (m) => this.deps.send(m),
@@ -205,7 +203,6 @@ export class LibraryApp {
     );
 
     this.root = h("div", { className: "lib-root" }, toolbar, main);
-    renderEmptyHelp();
     this.editorEl.addEventListener(
       "focusout",
       () => { setTimeout(() => this.flushDeferredSnapshot(), 0); },
@@ -540,7 +537,7 @@ export class LibraryApp {
 
   private applyFilterFromSelect(): void {
     if (!this.filterSelect) return;
-    this.projectFilter = filterFromOptionValue(this.filterSelect.value, this.projectFilter);
+    this.projectFilter = filterFromOptionValue(this.filterSelect.value);
     this.renderList();
   }
 
@@ -573,8 +570,7 @@ export class LibraryApp {
     if (this.tab === "skills") {
       const skill = this.snapshot.skills.find((s) => s.name === this.selectedSkill);
       if (!skill) {
-        this.emptyHelpEl = renderEmptyHelp();
-        this.editorEl.appendChild(this.emptyHelpEl);
+        this.editorEl.appendChild(renderEmptyHelp());
         this.assistantPanel.switchItem();
         return;
       }
@@ -585,8 +581,7 @@ export class LibraryApp {
     }
     const agent = this.snapshot.agents.find((a) => a.name === this.selectedAgent);
     if (!agent) {
-      this.emptyHelpEl = renderEmptyHelp();
-      this.editorEl.appendChild(this.emptyHelpEl);
+      this.editorEl.appendChild(renderEmptyHelp());
       this.assistantPanel.switchItem();
       return;
     }

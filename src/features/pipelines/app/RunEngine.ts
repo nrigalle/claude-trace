@@ -82,7 +82,6 @@ interface ActiveRun {
 
 export class RunEngine {
   private active: ActiveRun | null = null;
-  private logBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
   private runPostTimer: ReturnType<typeof setTimeout> | null = null;
   private lastRunPostMs = 0;
   private lastPostedShape = "";
@@ -121,7 +120,6 @@ export class RunEngine {
     } finally {
       this.deps.runner.killRun(runId);
       this.active = null;
-      if (this.logBroadcastTimer !== null) { clearTimeout(this.logBroadcastTimer); this.logBroadcastTimer = null; }
       if (this.runPostTimer !== null) { clearTimeout(this.runPostTimer); this.runPostTimer = null; }
       this.onRunListChanged();
     }
@@ -384,7 +382,6 @@ export class RunEngine {
       cwd: this.runCwd(),
       taskGoal: goal,
       workerJsonlPath: jsonlPath,
-      resumeSessionId: null,
       signal: active.abort.signal,
     });
     if (active.abort.signal.aborted) throw new InterruptedError();
@@ -607,7 +604,6 @@ export class RunEngine {
           cwd: this.runCwd(),
           taskGoal: worker.prompt,
           workerJsonlPath: priorJsonlPath,
-          resumeSessionId: null,
           signal,
         });
         if (signal.aborted) throw new InterruptedError();
@@ -718,7 +714,6 @@ export class RunEngine {
         cwd: this.runCwd(),
         taskGoal: judgePrompt,
         workerJsonlPath: handle.jsonlPath,
-        resumeSessionId: null,
         signal,
       });
       if (signal.aborted) throw new InterruptedError();

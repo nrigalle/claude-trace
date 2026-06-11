@@ -7,7 +7,6 @@ import type { TerminalSpawnSpec } from "../../app/CockpitController";
 import { TerminalServiceBase } from "./TerminalServiceBase";
 
 const SOCKET = "claude-trace";
-const ignoreBestEffortFailure = (_err: unknown): void => {};
 
 const TMUX_CONF = [
   "set -g status off",
@@ -20,7 +19,7 @@ const TMUX_CONF = [
   "set -g window-size latest",
   "set -g history-limit 5000",
   "set -g focus-events on",
-  "set -g mouse off",
+  "set -g mouse on",
   "set -g set-clipboard on",
   "set -g extended-keys on",
   "set -g alternate-screen on",
@@ -133,11 +132,7 @@ export class TmuxTerminalService extends TerminalServiceBase {
     );
     this.sourceConf(conf);
     this.track(spec.sessionId, proc, alreadyRunning && spec.forceInitialInput !== true ? undefined : spec.initialInput);
-    try {
-      this.tmux(["set-option", "-w", "-u", "-t", name, "window-size"]);
-    } catch (err: unknown) {
-      ignoreBestEffortFailure(err);
-    }
+    try { this.tmux(["set-option", "-w", "-u", "-t", name, "window-size"]); } catch {}
   }
 
   override captureHistory(sessionId: string): string | null {

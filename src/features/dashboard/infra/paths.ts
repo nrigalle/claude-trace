@@ -4,8 +4,6 @@ import { PROJECTS_DIR } from "../../../shared/config";
 import type { SessionId } from "../domain/types";
 import { toSessionId } from "../domain/types";
 
-const ignoreBestEffortFailure = (_err: unknown): void => {};
-
 export interface SessionRef {
   readonly sessionId: SessionId;
   readonly projectDirName: string;
@@ -33,7 +31,7 @@ const firstCwdInTranscript = (filePath: string): string | null => {
     return null;
   } finally {
     if (fd !== -1) {
-      try { fs.closeSync(fd); } catch (err: unknown) { ignoreBestEffortFailure(err); }
+      try { fs.closeSync(fd); } catch { }
     }
   }
 };

@@ -57,9 +57,6 @@ export const createCockpitTerminal = (
     theme: TERM_THEME,
     scrollback: 5000,
     scrollOnUserInput: true,
-    scrollSensitivity: 3,
-    fastScrollSensitivity: 6,
-    fastScrollModifier: "alt",
     allowProposedApi: true,
     altClickMovesCursor: false,
     macOptionClickForcesSelection: true,
@@ -88,7 +85,32 @@ export interface RendererHandle {
   dispose(): void;
 }
 
+let webglUsableCache: boolean | null = null;
+
+export const webglUsable = (): boolean => {
+  if (webglUsableCache !== null) return webglUsableCache;
+  webglUsableCache = probeWebgl();
+  return webglUsableCache;
+};
+
+const probeWebgl = (): boolean => {
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl2");
+    if (!gl) return false;
+    const ext = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer = String(
+      ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+    );
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
+    return !/swiftshader|llvmpipe|software/i.test(renderer);
+  } catch {
+    return false;
+  }
+};
+
 export const attachWebglRenderer = (term: Terminal, onLost: () => void): RendererHandle | null => {
+  if (!webglUsable()) return null;
   try {
     const addon = new WebglAddon();
     addon.onContextLoss(() => {

@@ -125,6 +125,10 @@ export const renderEditor = (host: AppViewHost): void => {
     host.canvasEl.appendChild(banner);
   }
 
+  appendEditorStack(host, draft);
+};
+
+const appendEditorStack = (host: AppViewHost, draft: Pipeline): void => {
   const stack = h("div", { className: "pl-canvas-stack" });
   stack.appendChild(host.canvas.renderStaticNode("start", "Start", "Workflow entry", ICON_START));
   stack.appendChild(host.canvas.renderConnector({ insertIndex: 0 }));
@@ -206,7 +210,7 @@ export const renderRunDetail = (host: AppViewHost, run: RunState): void => {
 };
 
 
-export const updateRunResults = (host: AppViewHost, run: RunState): void => {
+const updateRunResults = (host: AppViewHost, run: RunState): void => {
   const existing = host.canvasEl.querySelector<HTMLElement>(".pl-run-results");
   const next = renderRunResults(run, () => host.showNotice("info", "Results copied to clipboard."));
   if (!next) {
@@ -224,24 +228,6 @@ export const updateRunResults = (host: AppViewHost, run: RunState): void => {
 export const renderCanvasOnly = (host: AppViewHost): void => {
   const sel = host.editorSelection();
   if (sel === null) return;
-  const draft = sel.draft;
   clear(host.canvasEl);
-  const stack = h("div", { className: "pl-canvas-stack" });
-  stack.appendChild(host.canvas.renderStaticNode("start", "Start", "Workflow entry", ICON_START));
-  stack.appendChild(host.canvas.renderConnector({ insertIndex: 0 }));
-  draft.blocks.forEach((block, index) => {
-      if (block.kind === "parallel") {
-        stack.appendChild(host.canvas.renderParallelExpanded(block));
-      } else if (block.kind === "pool") {
-        stack.appendChild(host.canvas.renderPoolExpanded(block));
-      } else {
-        stack.appendChild(host.canvas.renderBlockRowWithOrch(host.canvas.renderBlockNode(block)));
-      }
-      stack.appendChild(host.canvas.renderConnector({ insertIndex: index + 1 }));
-    });
-  stack.appendChild(host.canvas.renderStaticNode("end", "End", "Workflow complete", ICON_END));
-  host.canvasEl.appendChild(stack);
-  host.canvas.setStack(stack);
-  host.applyZoom();
-  requestAnimationFrame(() => host.canvas.drawLoopArrows());
+  appendEditorStack(host, sel.draft);
 };

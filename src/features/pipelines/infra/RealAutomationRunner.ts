@@ -224,7 +224,8 @@ export const buildRunnerHookSettings = (sessionId: string, signalsDir: string): 
     hooks: {
       SessionStart: [{ hooks: [{ type: "command", command: marker("start") }] }],
       Stop: [{ hooks: [{ type: "command", command: marker("stop") }] }],
-      Notification: [{ matcher: "permission_prompt", hooks: [{ type: "command", command: marker("notify") }] }],
+      Notification: [{ matcher: "permission_prompt|idle_prompt|elicitation_dialog", hooks: [{ type: "command", command: marker("notify") }] }],
+      Elicitation: [{ hooks: [{ type: "command", command: marker("notify") }] }],
     },
   };
 };
@@ -362,7 +363,7 @@ export class RealAutomationRunner implements AutomationRunner {
       const reason = err instanceof Error ? err.message : String(err);
       return {
         decision: { kind: "needs-input", reason: `Orchestrator could not run: ${reason}` },
-        orchestratorSessionId: opts.resumeSessionId,
+        orchestratorSessionId: null,
       };
     }
   }
@@ -378,7 +379,7 @@ export class RealAutomationRunner implements AutomationRunner {
       prompt: buildOrchestratorPrompt(opts.taskGoal, conversationTail),
       model: "claude-sonnet-4-6",
       effort: "medium",
-      resumeSessionId: opts.resumeSessionId,
+      resumeSessionId: null,
       signal: opts.signal,
     });
 

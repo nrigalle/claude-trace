@@ -75,7 +75,7 @@ export class StubAutomationRunner implements AutomationRunner {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.judgeCounter += 1;
-        const orchestratorSessionId = options.resumeSessionId ?? `stub-orchestrator-${this.judgeCounter}`;
+        const orchestratorSessionId = `stub-orchestrator-${this.judgeCounter}`;
         const finish = (decision: OrchestratorDecision): void =>
           resolve({ decision, orchestratorSessionId });
         if (this.options.decide) {

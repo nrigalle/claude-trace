@@ -187,4 +187,41 @@ describe("SessionService — summary cache invalidation", () => {
     expect(matches).toHaveLength(1);
     expect(svc.filePathFor(toSessionId(id))).toBe(newer);
   });
+
+  it("list with a changed hint refreshes only the hinted sessions and serves the rest from cache without touching their files", () => {
+    const stamp = Date.now();
+    const dir = `-svc-fast-${stamp}`;
+    const idA = `svc-fast-a-${stamp}`;
+    const idB = `svc-fast-b-${stamp}`;
+    writeSession(dir, idA, [assistantTurn("2026-05-01T10:00:00Z")]);
+    writeSession(dir, idB, [assistantTurn("2026-05-01T10:00:00Z")]);
+    const service = new SessionService(new SessionFileReader());
+    service.list();
+
+    writeSession(dir, idA, [assistantTurn("2026-05-01T10:00:00Z"), assistantTurn("2026-05-01T11:00:00Z")]);
+    writeSession(dir, idB, [assistantTurn("2026-05-01T10:00:00Z"), assistantTurn("2026-05-01T11:00:00Z")]);
+
+    const fast = service.list(new Set([toSessionId(idA)]));
+    const a = fast.find((s) => s.session_id === toSessionId(idA))!;
+    const b = fast.find((s) => s.session_id === toSessionId(idB))!;
+    expect(a.event_count, "hinted session must be re-read").toBeGreaterThan(b.event_count);
+
+    const full = service.list();
+    const bAfter = full.find((s) => s.session_id === toSessionId(idB))!;
+    expect(bAfter.event_count, "a full list must pick up the change the fast path skipped").toBe(a.event_count);
+  });
+
+  it("list with a hint naming an unknown session falls back to a full re-discovery", () => {
+    const stamp = Date.now();
+    const dir = `-svc-fastmiss-${stamp}`;
+    const idA = `svc-fastmiss-a-${stamp}`;
+    writeSession(dir, idA, [assistantTurn("2026-05-01T10:00:00Z")]);
+    const service = new SessionService(new SessionFileReader());
+    service.list();
+
+    const idNew = `svc-fastmiss-new-${stamp}`;
+    writeSession(dir, idNew, [assistantTurn("2026-05-01T12:00:00Z")]);
+    const out = service.list(new Set([toSessionId(idNew)]));
+    expect(out.some((s) => s.session_id === toSessionId(idNew))).toBe(true);
+  });
 });

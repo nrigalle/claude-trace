@@ -34,7 +34,6 @@ export interface JudgeOptions {
   readonly cwd: string;
   readonly taskGoal: string;
   readonly workerJsonlPath: string;
-  readonly resumeSessionId: string | null;
   readonly signal: AbortSignal;
 }
 
