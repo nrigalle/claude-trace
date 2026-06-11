@@ -17,6 +17,7 @@ import {
   applyInputSubmitted,
   applyInterrupted,
   applyResumeInterrupted,
+  applyRerunAll,
   firstApprovalAwaitingInput,
   firstInputAwaitingInput,
   initialRunState,
@@ -278,6 +279,10 @@ export class PipelinesController {
     }
     const state = this.deps.runStore.get(runId);
     if (!state) return;
+    if (state.status === "failed") {
+      await this.engine.run(applyRerunAll(state, this.deps.clock()));
+      return;
+    }
     if (state.status === "interrupted") {
       await this.engine.run(applyResumeInterrupted(state));
       return;

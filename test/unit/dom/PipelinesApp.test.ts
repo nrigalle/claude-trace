@@ -346,4 +346,29 @@ describe("PipelinesApp — run rename survives live updates (regression: typing 
     expect(rebuilt, "the deferred runUpdate re-render applies once editing ends").not.toBe(input);
     document.body.removeChild(app.element());
   });
+
+  it("mouse-clicking into the name field does NOT select-all, so partial edits work (regression: every keystroke replaced the whole name)", () => {
+    const p = pipeline("p1", "Demo", [worker("w1", "Step 1")]);
+    const app = new PipelinesApp({ send: () => {} });
+    document.body.appendChild(app.element());
+    app.receive({
+      type: "pipelinesList",
+      payload: { pipelines: [p], runs: [runSummary({ runId: "r1", pipelineId: "p1" })] },
+    });
+    (app as unknown as PrivateSelect).handleSelectRun(toRunId("r1"));
+    app.receive({ type: "runUpdate", run: runState("r1", p, [blockRun("w1", "running", 1)]) });
+
+    const input = app.element().querySelector<HTMLInputElement>(".pl-run-name-input")!;
+    let selectAllCalls = 0;
+    input.select = () => { selectAllCalls += 1; };
+
+    input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    input.focus();
+    expect(selectAllCalls, "mouse focus must leave the caret where the user clicked").toBe(0);
+    input.blur();
+
+    input.focus();
+    expect(selectAllCalls, "keyboard focus still selects all for quick replacement").toBe(1);
+    document.body.removeChild(app.element());
+  });
 });

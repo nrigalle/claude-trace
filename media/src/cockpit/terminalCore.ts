@@ -84,13 +84,24 @@ export const createCockpitTerminal = (
   return { term, fit, termHost };
 };
 
-export const enableWebglRenderer = (term: Terminal): void => {
+export interface RendererHandle {
+  dispose(): void;
+}
+
+export const attachWebglRenderer = (term: Terminal, onLost: () => void): RendererHandle | null => {
   try {
     const addon = new WebglAddon();
-    addon.onContextLoss(() => addon.dispose());
+    addon.onContextLoss(() => {
+      try { addon.dispose(); } catch (err: unknown) { ignoreOptionalRendererFailure(err); }
+      onLost();
+    });
     term.loadAddon(addon);
+    return {
+      dispose: () => { try { addon.dispose(); } catch (err: unknown) { ignoreOptionalRendererFailure(err); } },
+    };
   } catch (err: unknown) {
     ignoreOptionalRendererFailure(err);
+    return null;
   }
 };
 

@@ -1,11 +1,5 @@
 import type { EffortChoice, ModelChoice } from "./models";
 
-const ONE_MILLION_CONTEXT_MODELS: ReadonlySet<ModelChoice> = new Set([
-  "claude-opus-4-8",
-  "claude-opus-4-7",
-  "claude-sonnet-4-6",
-]);
-
 export type PermissionMode =
   | "default"
   | "acceptEdits"
@@ -73,11 +67,6 @@ const quoterFor = (shell: ShellQuote): ((value: string) => string) =>
 export const quoteShellArg = (value: string, shell: ShellQuote = "posix"): string =>
   quoterFor(shell)(value);
 
-const modelArg = (model: ModelChoice, quote: (value: string) => string): string => {
-  const id = ONE_MILLION_CONTEXT_MODELS.has(model) ? `${model}[1m]` : model;
-  return quote(id);
-};
-
 export const buildClaudeCommand = (
   opts: ClaudeCommandOptions,
   shell: ShellQuote = "posix",
@@ -86,7 +75,7 @@ export const buildClaudeCommand = (
   const parts = ["claude"];
   if (opts.resumeId) parts.push("--resume", opts.resumeId);
   if (opts.sessionId) parts.push("--session-id", opts.sessionId);
-  if (opts.model && opts.model !== "default") parts.push("--model", modelArg(opts.model, quote));
+  if (opts.model && opts.model !== "default") parts.push("--model", quote(opts.model));
   if (opts.effort && opts.effort !== "default") {
     parts.push("--effort", opts.effort);
   }

@@ -55,6 +55,8 @@ export interface TerminalHistoryStore {
   append(sessionId: string, data: string): void;
   read(sessionId: string): Iterable<string>;
   delete(sessionId: string): void;
+  persistSession(sessionId: string): void;
+  flushAll(): void;
 }
 
 export interface CockpitActions {
@@ -64,7 +66,7 @@ export interface CockpitActions {
   transcriptExists(cwd: string | null, sessionId: string): boolean;
   prepareHooks(sessionId: string): string | null;
   cleanupHooks(sessionId: string): void;
-  watchAttention(listener: (sessionId: string, reason: "stop" | "notify" | "active") => void): { dispose(): void };
+  watchAttention(listener: (sessionId: string, reason: "stop" | "notify" | "active" | "start") => void): { dispose(): void };
   saveDroppedImage(fileName: string, dataBase64: string): string | null;
   loadCockpitLayout(): CockpitLayout;
   saveCockpitLayout(layout: CockpitLayout): void;
@@ -103,6 +105,7 @@ export class CockpitController {
   private readonly managed = new Map<string, ManagedTerminal>();
   private readonly nextIndex = new Map<string, number>();
   private readonly paused = new Set<string>();
+  private readonly pendingInitialPrompts = new Map<string, string>();
   private disposed = false;
 
   constructor(private readonly deps: CockpitControllerDeps) {
@@ -118,9 +121,17 @@ export class CockpitController {
       deps.terminals.onExit((sessionId, exitCode) => this.onTerminalExit(sessionId, exitCode)),
     );
     this.disposables.push(
-      deps.actions.watchAttention((sessionId, reason) =>
-        reason === "active" ? this.onActive(sessionId) : this.onAttention(sessionId, reason),
-      ),
+      deps.actions.watchAttention((sessionId, reason) => {
+        if (reason === "start") {
+          this.deliverInitialPrompt(sessionId);
+          return;
+        }
+        if (reason === "active") {
+          this.onActive(sessionId);
+          return;
+        }
+        this.onAttention(sessionId, reason);
+      }),
     );
     for (const s of deps.sessionStore.load()) {
       this.managed.set(s.id, {
@@ -139,6 +150,14 @@ export class CockpitController {
       deps.actions.setName(s.id, s.name);
     }
     for (const key of this.managed.keys()) this.spawnResume(key);
+  }
+
+  private deliverInitialPrompt(sessionId: string): void {
+    const prompt = this.pendingInitialPrompts.get(sessionId);
+    if (prompt === undefined) return;
+    this.pendingInitialPrompts.delete(sessionId);
+    this.deps.terminals.write(sessionId, `\u001b[200~${prompt.replace(/\r\n/g, "\n")}\u001b[201~`);
+    setTimeout(() => this.deps.terminals.write(sessionId, "\r"), 350);
   }
 
   private persist(m: ManagedTerminal): void {
@@ -160,6 +179,9 @@ export class CockpitController {
     if (this.disposed) return;
     this.disposed = true;
     this.deps.terminals.dispose();
+    try {
+      this.deps.terminalHistoryStore.flushAll();
+    } catch {}
     for (const d of this.disposables) {
       try {
         d.dispose();
@@ -336,15 +358,19 @@ export class CockpitController {
   ): void {
     for (const name of names) {
       const sessionId = this.deps.actions.newSessionId();
+      const settingsPath = this.deps.actions.prepareHooks(sessionId);
+      const prompt = config.prompt?.trim() ?? "";
+      const deliverViaPty = settingsPath !== null && prompt.length > 0;
       const command = buildClaudeCommand({
         mode: config.permissionMode,
         model: config.model,
         effort: config.effort,
         name,
         sessionId,
-        initialPrompt: config.prompt,
-        settingsPath: this.deps.actions.prepareHooks(sessionId),
+        initialPrompt: deliverViaPty ? null : config.prompt,
+        settingsPath,
       }, this.deps.terminals.shellQuoteStyle());
+      if (deliverViaPty) this.pendingInitialPrompts.set(sessionId, prompt);
       this.deps.terminals.spawn({
         sessionId,
         cwd: config.cwd,
@@ -519,6 +545,7 @@ export class CockpitController {
   private onTerminalExit(sessionId: string, exitCode: number): void {
     const managed = this.managed.get(sessionId);
     if (managed) managed.exitCode = exitCode;
+    this.deps.terminalHistoryStore.persistSession(sessionId);
     this.deps.host.postMessage({ type: "terminalExit", sessionId, exitCode });
     this.broadcast();
   }

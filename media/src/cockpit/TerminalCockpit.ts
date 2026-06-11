@@ -1,4 +1,3 @@
-import { toSpaceId } from "../../../src/features/cockpit/domain/profiles";
 import type {
   CockpitHostToWebview,
   CockpitLayout,
@@ -9,11 +8,17 @@ import type {
 import { assertNeverCockpit } from "../../../src/features/cockpit/protocol";
 import { dock, syncTree, type DropEdge, type LayoutNode } from "../../../src/features/cockpit/domain/splitTree";
 import { ICONS } from "../ui/icons.js";
+import { renderFoldersBar, type FoldersBarHost } from "./cockpitFoldersBar.js";
+import { renderTileMeta, sessionStatus, type SessionStatus } from "./cockpitTileMeta.js";
+import { flashToast } from "./cockpitToasts.js";
+import { renderSkeletonTiles } from "./cockpitSkeleton.js";
+import { renderTabStrip, type TabStripHost } from "./cockpitTabs.js";
+import type { AttentionReason, WindowTile } from "./cockpitTileTypes.js";
 import { clear, h } from "../ui/h.js";
 import { renderLayoutNode } from "./cockpitLayoutView.js";
 import { CockpitLauncher } from "./cockpitLauncher.js";
-import { createCockpitTerminal, enableWebglRenderer, type CockpitTerminalView } from "./terminalCore.js";
-import { ALL_FOLDER, compactPath, formatStartTime, newId } from "./cockpitUtils.js";
+import { createCockpitTerminal, attachWebglRenderer, type CockpitTerminalView, type RendererHandle } from "./terminalCore.js";
+import { ALL_FOLDER } from "./cockpitUtils.js";
 import { wireWindowDrag, type WindowDragHost } from "./windowDrag.js";
 import { buildResumeOverlay } from "./resumeOverlay.js";
 
@@ -30,21 +35,9 @@ interface TerminalView extends CockpitTerminalView {
   lastCols: number;
   lastRows: number;
   replaying: boolean;
+  webgl: RendererHandle | null;
 }
 
-interface WindowTile {
-  readonly tile: HTMLElement;
-  readonly tabStrip: HTMLElement;
-  readonly metaBar: HTMLElement;
-  readonly termMount: HTMLElement;
-  readonly resumeOverlay: HTMLElement;
-  readonly bootingOverlay: HTMLElement;
-  readonly status: HTMLElement;
-  activeId: string;
-  announced: string;
-}
-
-type AttentionReason = "stop" | "notify" | "bell";
 
 export class TerminalCockpit {
   private readonly root: HTMLElement;
@@ -98,6 +91,16 @@ export class TerminalCockpit {
       this.gridEl,
     );
     this.resizeObserver = new ResizeObserver(() => this.scheduleFit());
+    this.root.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (!this.launcher.isOpen()) return;
+        const target = e.target instanceof HTMLElement ? e.target : null;
+        if (!target || this.launcherEl.contains(target) || target.closest(".tc-newsession") !== null) return;
+        this.launcher.close();
+      },
+      true,
+    );
     this.folderBar.addEventListener(
       "focusout",
       () => { setTimeout(() => this.flushBlockedUi(), 0); },
@@ -136,7 +139,7 @@ export class TerminalCockpit {
         this.syncTerminals(msg.state.terminals);
         this.renderFolders();
         this.renderGrid();
-        this.renderLauncher();
+        if (!this.launcher.isOpen()) this.renderLauncher();
         return;
       case "terminalData": {
         const view = this.views.get(msg.sessionId);
@@ -207,6 +210,8 @@ export class TerminalCockpit {
 
     for (const [id, view] of this.views) {
       if (!present.has(id)) {
+        view.webgl?.dispose();
+        view.webgl = null;
         view.term.dispose();
         view.termHost.remove();
         this.views.delete(id);
@@ -252,6 +257,7 @@ export class TerminalCockpit {
       lastCols: 0,
       lastRows: 0,
       replaying: false,
+      webgl: null,
     };
     this.views.set(session.sessionId, view);
     const buffered = this.pendingData.get(session.sessionId);
@@ -463,7 +469,6 @@ export class TerminalCockpit {
 
   private uiInteractionBlocked(): boolean {
     return (
-      this.launcher.isOpen() ||
       this.creatingFolder ||
       this.renamingFolder !== null ||
       document.body.classList.contains("tc-dragging-window") ||
@@ -527,166 +532,33 @@ export class TerminalCockpit {
   }
 
   private renderFolders(): void {
-    clear(this.folderBar);
-    clear(this.topbarActions);
-    const groups = this.groupWindows();
-    const windowCount = (folder: string | null): number =>
-      [...groups.keys()].filter((wid) => (this.windowFolder(wid) ?? null) === folder).length;
-
-    const tab = (label: string, value: string, count: number, renamable = false) => {
-      const el = h(
-        "button",
-        {
-          className: `tc-folder${this.activeFolder === value ? " active" : ""}`,
-          attrs: { type: "button", "data-folder": value, ...(renamable ? { title: "Double-click to rename. Drop a session here to file it in this workspace." } : {}) },
-          on: { click: () => { this.activeFolder = value; this.renderFolders(); this.renderGrid(); } },
-        },
-        h("span", { className: "tc-folder-icon", innerHTML: ICONS.folder }),
-        h("span", { textContent: label }),
-        h("span", { className: "tc-folder-count", textContent: String(count) }),
-        h("span", {
-          className: `tc-folder-dot${this.folderNeedsAttention(value) ? " on" : ""}`,
-          attrs: { "aria-hidden": "true" },
-        }),
-      );
-      if (renamable) {
-        el.addEventListener("dblclick", (e) => {
-          e.preventDefault();
-          this.renamingFolder = value;
-          this.renderFolders();
-        });
-        el.appendChild(
-          h("span", {
-            className: "tc-folder-del",
-            attrs: { role: "button", title: "Delete workspace", "aria-label": `Delete workspace ${label}` },
-            innerHTML: ICONS.close,
-            on: {
-              click: (e: Event) => {
-                e.stopPropagation();
-                if (this.activeFolder === value) this.activeFolder = ALL_FOLDER;
-                this.deps.send({ type: "cockpitDeleteSpace", spaceId: toSpaceId(value) });
-              },
-            },
-          }),
-        );
-      }
-      return el;
-    };
-
-    this.folderBar.appendChild(tab("All", ALL_FOLDER, groups.size));
-    for (const space of this.state.spaces) {
-      if (this.renamingFolder === space.id) {
-        this.folderBar.appendChild(this.folderRenameInput(space.id, space.name));
-      } else {
-        this.folderBar.appendChild(tab(space.name, space.id, windowCount(space.id), true));
-      }
-    }
-
-    if (this.creatingFolder) {
-      const input = h("input", { className: "tc-folder-input", attrs: { type: "text", placeholder: "Workspace name" } }) as HTMLInputElement;
-      input.addEventListener("keydown", (e: KeyboardEvent) => {
-        if (e.key === "Enter" && input.value.trim().length > 0) {
-          this.deps.send({ type: "cockpitSaveSpace", space: { id: toSpaceId(newId()), name: input.value.trim() } });
-          this.creatingFolder = false;
-        } else if (e.key === "Escape") {
-          this.creatingFolder = false;
-          this.renderFolders();
-        }
-      });
-      input.addEventListener("blur", () => { this.creatingFolder = false; this.renderFolders(); });
-      this.folderBar.appendChild(input);
-      requestAnimationFrame(() => input.focus());
-    } else {
-      this.folderBar.appendChild(
-        h("button", {
-          className: "tc-folder-add",
-          attrs: { type: "button", title: "Create a workspace to group your sessions", "aria-label": "New workspace" },
-          on: { click: () => { this.creatingFolder = true; this.renderFolders(); } },
-        },
-          h("span", { className: "tc-folder-add-icon", innerHTML: ICONS.plus }),
-          h("span", { textContent: "New workspace" }),
-        ),
-      );
-      if (this.state.spaces.length === 0) {
-        this.folderBar.appendChild(
-          h("span", { className: "tc-folder-hint", textContent: "Group sessions into workspaces" }),
-        );
-      }
-    }
-
-    const attentionCount = this.attentionTerminals().length;
-    this.topbarActions.appendChild(
-      h("button", {
-        className: `tc-attention-jump${attentionCount > 0 ? " on" : ""}`,
-        attrs: {
-          type: "button",
-          title: attentionCount === 0 ? "No sessions need attention" : `${attentionCount} session${attentionCount === 1 ? "" : "s"} need attention. Jump to the oldest one.`,
-          "aria-label": attentionCount === 0 ? "No sessions need attention" : `${attentionCount} session${attentionCount === 1 ? "" : "s"} need attention. Jump to the oldest one.`,
-          ...(attentionCount === 0 ? { disabled: "true" } : {}),
-        },
-        innerHTML: `<span class="tc-btn-icon">${ICONS.bell}</span><span class="tc-attention-count">${attentionCount}</span>`,
-        on: { click: () => this.jumpToAttention() },
-      }),
-    );
-
-    this.topbarActions.appendChild(
-      h("button", {
-        className: "tc-newterminal",
-        attrs: { type: "button", title: "Open a plain shell terminal" },
-        innerHTML: `<span class="tc-btn-icon">${ICONS.terminal}</span><span>Terminal</span>`,
-        on: { click: () => this.deps.send({ type: "cockpitNewTerminal", spaceId: this.activeFolder === ALL_FOLDER ? null : this.activeFolder }) },
-      }),
-    );
-
-    this.topbarActions.appendChild(
-      h("button", {
-        className: `tc-newsession${this.launcher.isOpen() ? " active" : ""}`,
-        attrs: { type: "button" },
-        innerHTML: `<span class="tc-btn-icon">${ICONS.plus}</span><span>Session</span>`,
-        on: { click: () => this.launcher.toggle() },
-      }),
-    );
-
-    this.topbarActions.appendChild(
-      h("button", {
-        className: `tc-expand${this.fullscreen ? " active" : ""}`,
-        attrs: {
-          type: "button",
-          title: this.fullscreen ? "Exit full screen" : "Full screen",
-          "aria-label": this.fullscreen ? "Exit full screen" : "Full screen",
-        },
-        innerHTML: this.fullscreen ? ICONS.shrink : ICONS.expand,
-        on: { click: () => this.toggleFullscreen() },
-      }),
-    );
+    renderFoldersBar(this.foldersHost());
   }
 
-  private folderRenameInput(spaceId: string, currentName: string): HTMLElement {
-    const input = h("input", {
-      className: "tc-folder-input",
-      attrs: { type: "text", value: currentName, "aria-label": "Rename workspace" },
-    }) as HTMLInputElement;
-    let done = false;
-    const commit = (save: boolean): void => {
-      if (done) return;
-      done = true;
-      const name = input.value.trim();
-      if (save && name.length > 0 && name !== currentName) {
-        this.deps.send({ type: "cockpitSaveSpace", space: { id: toSpaceId(spaceId), name } });
-      }
-      this.renamingFolder = null;
-      this.renderFolders();
+  private foldersHost(): FoldersBarHost {
+    return {
+      folderBar: this.folderBar,
+      topbarActions: this.topbarActions,
+      state: () => this.state,
+      groupWindows: () => this.groupWindows(),
+      windowFolder: (windowId) => this.windowFolder(windowId),
+      activeFolder: () => this.activeFolder,
+      setActiveFolder: (folder) => { this.activeFolder = folder; },
+      creatingFolder: () => this.creatingFolder,
+      setCreatingFolder: (v) => { this.creatingFolder = v; },
+      renamingFolder: () => this.renamingFolder,
+      setRenamingFolder: (v) => { this.renamingFolder = v; },
+      folderNeedsAttention: (folder) => this.folderNeedsAttention(folder),
+      attentionCount: () => this.attentionTerminals().length,
+      jumpToAttention: () => this.jumpToAttention(),
+      launcherOpen: () => this.launcher.isOpen(),
+      toggleLauncher: () => this.launcher.toggle(),
+      fullscreen: () => this.fullscreen,
+      toggleFullscreen: () => this.toggleFullscreen(),
+      send: (msg) => this.deps.send(msg),
+      rerender: () => this.renderFolders(),
+      renderGrid: () => this.renderGrid(),
     };
-    input.addEventListener("keydown", (e: KeyboardEvent) => {
-      if (e.key === "Enter") commit(true);
-      else if (e.key === "Escape") commit(false);
-    });
-    input.addEventListener("blur", () => commit(true));
-    requestAnimationFrame(() => {
-      input.focus();
-      input.select();
-    });
-    return input;
   }
 
   private toggleFullscreen(): void {
@@ -757,11 +629,27 @@ export class TerminalCockpit {
     for (const view of this.views.values()) {
       if (!view.initialised && view.termHost.isConnected && !view.termHost.classList.contains("hidden")) {
         view.term.open(view.termHost);
-        enableWebglRenderer(view.term);
         view.initialised = true;
       }
     }
+    this.syncRenderers();
     this.fitImmediate();
+  }
+
+  private syncRenderers(): void {
+    for (const view of this.views.values()) {
+      if (!view.initialised) continue;
+      const visible = view.termHost.isConnected && !view.termHost.classList.contains("hidden");
+      if (visible && view.webgl === null) {
+        view.webgl = attachWebglRenderer(view.term, () => {
+          view.webgl = null;
+          setTimeout(() => this.syncRenderers(), 0);
+        });
+      } else if (!visible && view.webgl !== null) {
+        view.webgl.dispose();
+        view.webgl = null;
+      }
+    }
   }
 
   private updateWindowMeta(windowId: string): void {
@@ -772,121 +660,23 @@ export class TerminalCockpit {
   }
 
   private renderTileMeta(tile: WindowTile, active: TerminalSession): void {
-    clear(tile.metaBar);
-    const status = this.sessionStatus(active);
-    tile.tile.setAttribute("aria-label", `${active.name} session, ${status.label}`);
-    this.announceStatus(tile, active.name, status.label);
-    tile.metaBar.append(
-      h("span", { className: `tc-meta-pill ${status.className}` }, h("span", { className: "tc-meta-dot" }), h("span", { textContent: status.label })),
-      h("span", { className: "tc-meta-pill", textContent: active.kind === "shell" ? "Terminal" : "Claude" }),
-      h("span", {
-        className: "tc-meta-path",
-        attrs: { title: active.cwd ?? "VS Code workspace" },
-        textContent: active.cwd ? compactPath(active.cwd) : "Workspace",
-      }),
-      h("span", { className: "tc-meta-time", textContent: formatStartTime(active.startedAtMs) }),
-    );
+    renderTileMeta(tile, active, this.sessionStatus(active));
   }
 
-  private announceStatus(tile: WindowTile, name: string, label: string): void {
-    const key = `${tile.activeId}:${label}`;
-    if (tile.announced === key) return;
-    const first = tile.announced === "";
-    tile.announced = key;
-    if (first) return;
-    tile.status.textContent = `${name}: ${label}`;
-  }
-
-  private sessionStatus(active: TerminalSession): { readonly className: string; readonly label: string } {
-    if (this.attention.has(active.sessionId)) {
-      const reason = this.attentionReasons.get(active.sessionId);
-      if (reason === "bell") return { className: "attention", label: "Bell" };
-      if (reason === "notify") return { className: "attention", label: "Needs you" };
-      return { className: "attention", label: "Needs input" };
-    }
-    if (!active.alive) {
-      return active.exitCode === 0
-        ? { className: "paused", label: "Paused" }
-        : { className: "exited", label: `Exited ${active.exitCode ?? ""}`.trim() };
-    }
-    return { className: "running", label: "Running" };
+  private sessionStatus(active: TerminalSession): SessionStatus {
+    return sessionStatus(active, this.attention, this.attentionReasons);
   }
 
   private renderTabs(tile: WindowTile, windowId: string, terminals: readonly TerminalSession[]): void {
-    clear(tile.tabStrip);
-    const single = terminals.length === 1;
-    for (const t of terminals) {
-      const chip = h(
-        "button",
-        {
-          className: `tc-tab${t.sessionId === tile.activeId ? " active" : ""}${t.alive ? "" : " exited"}`,
-          dataset: { tab: t.sessionId },
-          attrs: { type: "button", title: t.name },
-        },
-        h("span", { className: "tc-tab-dot" }),
-        h("span", { className: "tc-tab-name", textContent: t.name }),
-        h("span", {
-          className: "tc-tab-close",
-          attrs: {
-            role: "button",
-            title: single ? "Close window" : "Close tab",
-            "aria-label": single ? `Close ${t.name}` : `Close tab ${t.name}`,
-          },
-          innerHTML: ICONS.close,
-          on: {
-            click: (e: Event) => {
-              e.stopPropagation();
-              this.deps.send({ type: "terminalClose", sessionId: t.sessionId });
-            },
-          },
-        }),
-      );
-      this.wireTabDrag(chip, tile, windowId, t.sessionId, terminals.length > 1);
-      tile.tabStrip.appendChild(chip);
-    }
+    renderTabStrip(this.tabsHost(), tile, windowId, terminals);
   }
 
-  private wireTabDrag(chip: HTMLElement, tile: WindowTile, windowId: string, sessionId: string, canDetach: boolean): void {
-    chip.addEventListener("pointerdown", (e: PointerEvent) => {
-      if (e.button !== 0 || (e.target instanceof Element && e.target.closest(".tc-tab-close"))) return;
-      const startX = e.clientX;
-      const startY = e.clientY;
-      let tearing = false;
-      let ghost: HTMLElement | null = null;
-      const outside = (ev: PointerEvent): boolean => {
-        const r = tile.tabStrip.getBoundingClientRect();
-        return ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom;
-      };
-      const move = (ev: PointerEvent): void => {
-        if (!tearing) {
-          if (!canDetach || Math.hypot(ev.clientX - startX, ev.clientY - startY) < 8) return;
-          tearing = true;
-          chip.classList.add("tearing");
-          document.body.classList.add("tc-tearing");
-          ghost = h("div", { className: "tc-tab-ghost", textContent: chip.textContent ?? "" });
-          document.body.appendChild(ghost);
-        }
-        if (ghost) {
-          ghost.style.transform = `translate(${ev.clientX + 12}px, ${ev.clientY + 8}px)`;
-          ghost.classList.toggle("out", outside(ev));
-        }
-      };
-      const up = (ev: PointerEvent): void => {
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        ghost?.remove();
-        chip.classList.remove("tearing");
-        document.body.classList.remove("tc-tearing");
-        if (!tearing) {
-          this.switchTab(windowId, sessionId);
-        } else if (outside(ev)) {
-          this.deps.send({ type: "cockpitDetachTab", sessionId });
-        }
-        this.flushBlockedUi();
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
-    });
+  private tabsHost(): TabStripHost {
+    return {
+      send: (msg) => this.deps.send(msg),
+      switchTab: (windowId, sessionId) => this.switchTab(windowId, sessionId),
+      flushBlockedUi: () => this.flushBlockedUi(),
+    };
   }
 
   private mountWindow(tile: WindowTile, terminals: readonly TerminalSession[]): void {
@@ -928,13 +718,7 @@ export class TerminalCockpit {
   }
 
   private renderSkeleton(): void {
-    if (this.gridEl.querySelector(".tc-skel-tile")) return;
-    this.gridEl.classList.remove("empty");
-    for (let i = 0; i < 4; i++) {
-      this.gridEl.appendChild(
-        h("div", { className: "tc-skel-tile" }, h("div", { className: "tc-skel-head" }), h("div", { className: "tc-skel-body" })),
-      );
-    }
+    renderSkeletonTiles(this.gridEl);
   }
 
   private fitVisible(): void {
@@ -959,30 +743,8 @@ export class TerminalCockpit {
     this.launcher.renderInto(this.launcherEl, this.state, this.activeFolder);
   }
 
-  private buildToast(level: string, icon: string, title: string | undefined, message: string): HTMLElement {
-    const body = h("div", { className: "tc-flash-body" });
-    if (title) body.appendChild(h("div", { className: "tc-flash-title", textContent: title }));
-    body.appendChild(h("div", { className: "tc-flash-msg", textContent: message }));
-    const note = h(
-      "div",
-      { className: `tc-flash ${level}` },
-      h("span", { className: "tc-flash-icon", innerHTML: icon }),
-      body,
-    );
-    this.root.appendChild(note);
-    requestAnimationFrame(() => note.classList.add("in"));
-    return note;
-  }
-
-  private removeToast(note: HTMLElement): void {
-    note.classList.remove("in");
-    setTimeout(() => note.remove(), 220);
-  }
-
   private flash(message: string, level: "info" | "warning" | "error", title?: string): void {
-    const icon = level === "error" || level === "warning" ? ICONS.alert : ICONS.check;
-    const note = this.buildToast(level, icon, title, message);
-    setTimeout(() => this.removeToast(note), 4000);
+    flashToast(this.root, message, level, title);
   }
 
 }

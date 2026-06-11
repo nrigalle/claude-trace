@@ -15,6 +15,9 @@ import { RunStore } from "../../../src/features/pipelines/infra/RunStore";
 import {
   initialRunState,
   applyBlockSpawned,
+  applyBlockCrashed,
+  applyInputPaused,
+  applyInputSubmitted,
   applyBlockStopped,
   applyDecision,
 } from "../../../src/features/pipelines/domain/scheduler";
@@ -1186,6 +1189,82 @@ describe("PipelinesController — worker pool (bounded concurrency)", () => {
     ctrl.dispose();
   });
 
+  it("orchestrator verdicts: a failed item flags the block as failed AFTER draining all items, and one orchestrator session is resumed across every verdict", async () => {
+    const runner = new StubAutomationRunner({
+      workerDurationMs: 5,
+      judgeDurationMs: 1,
+      decide: (opts) =>
+        opts.taskGoal.includes("bravo")
+          ? { kind: "failed", reason: "bravo worker produced garbage" }
+          : { kind: "success", summary: "looks right" },
+    });
+    const deterministic = new StubDeterministicRunner();
+    deterministic.scriptHandler = () => ({ stdout: "alpha\nbravo\ncharlie", stderr: "", exitCode: 0 });
+    const ctrl = new PipelinesController({
+      host,
+      pipelineStore,
+      runStore,
+      runner,
+      deterministic,
+      actions: makeActions(),
+      clock: tick,
+      newRunId,
+    });
+
+    const p: Pipeline = {
+      id: toPipelineId("p-pool-verdict"),
+      name: "Pool verdicts",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      triggers: [],
+      blocks: [
+        { id: toBlockId("seed"), kind: "script", name: "Seed", interpreter: "bash", code: "echo list", outputVar: "leads" },
+        {
+          id: toBlockId("pool"),
+          kind: "pool",
+          name: "Drain",
+          listVar: "leads",
+          itemVar: "item",
+          concurrency: 2,
+          prompt: "Process ${vars.item}",
+          model: "default",
+          effort: "medium",
+          outputVar: "results",
+        },
+      ],
+    };
+    pipelineStore.save(p);
+
+    host.send({ type: "runPipeline", pipelineId: p.id });
+    await waitForRunCompletion(() => {
+      const runs = host.messagesOfType("runUpdate");
+      return runs.length > 0 && runs[runs.length - 1]!.run.status === "failed";
+    }, 5000);
+
+    const final = host.messagesOfType("runUpdate").at(-1)!.run;
+    const poolRun = final.blocks.find((b) => b.blockId === toBlockId("pool"))!;
+    expect(poolRun.status).toBe("failed");
+    expect(poolRun.failureReason).toContain("1/3 pool workers failed");
+    expect(poolRun.failureReason).toContain("bravo worker produced garbage");
+    expect(poolRun.sessions, "every item still ran — failure is flagged after the drain").toHaveLength(3);
+    expect(poolRun.sessions.every((s) => s.endedAtMs !== null)).toBe(true);
+
+    const verdicts = poolRun.sessions.map((s) => s.verdict?.kind);
+    expect(verdicts.filter((v) => v === "failed")).toHaveLength(1);
+    expect(verdicts.filter((v) => v === "success")).toHaveLength(2);
+
+    expect(runner.judgeCalls, "one orchestrator verdict per item").toHaveLength(3);
+    expect(
+      runner.judgeCalls.every((c) => c.resumeSessionId === null),
+      "every verdict runs in a FRESH judge session — resuming a killed session proved unreliable in the real claude",
+    ).toBe(true);
+    expect(poolRun.orchestratorSessionId, "the latest judge session is recorded on the block for the UI").toMatch(
+      /^stub-orchestrator-\d+$/,
+    );
+
+    ctrl.dispose();
+  });
+
   it("fails the pool block instead of silently completing when a file list source is missing", async () => {
     const runner = new StubAutomationRunner({ workerDurationMs: 5, judgeDurationMs: 1 });
     const ctrl = new PipelinesController({
@@ -1320,6 +1399,87 @@ describe("PipelinesController — orphaned run reconciliation + resume", () => {
     const final = host.messagesOfType("runUpdate").at(-1)!.run;
     expect(final.blocks.find((b) => b.blockId === toBlockId("a"))!.status).toBe("done");
     expect(final.blocks.find((b) => b.blockId === toBlockId("b"))!.status).toBe("done");
+  });
+
+  it("resumeRun on a FAILED run reruns the ENTIRE workflow from scratch — every step, fresh sessions, cleared variables", async () => {
+    const p = pipeline("p-rerun", "Rerun", [block("a", "A", "do a"), block("b", "B", "do b")]);
+    pipelineStore.save(p);
+
+    let seed = initialRunState(p, newRunId(), tick());
+    seed = applyBlockSpawned(seed, toBlockId("a"), "sess-old-a", "do a", tick());
+    seed = applyBlockStopped(seed, toBlockId("a"), tick());
+    seed = applyDecision(seed, toBlockId("a"), { kind: "success", summary: "A done" }, tick());
+    seed = applyBlockCrashed(seed, toBlockId("b"), "judge could not boot", tick());
+    expect(seed.status).toBe("failed");
+    runStore.save({ ...seed, name: "Maquettes du soir" });
+    const runId = seed.runId;
+
+    makeController();
+    host.send({ type: "resumeRun", runId });
+    await waitForRunCompletion(() => {
+      const runs = host.messagesOfType("runUpdate");
+      return runs.length > 0 && runs[runs.length - 1]!.run.status === "completed";
+    });
+
+    const final = host.messagesOfType("runUpdate").at(-1)!.run;
+    expect(final.runId).toBe(runId);
+    expect(final.name, "the run keeps its name across the rerun").toBe("Maquettes du soir");
+    const aRun = final.blocks.find((b) => b.blockId === toBlockId("a"))!;
+    expect(aRun.status).toBe("done");
+    expect(aRun.sessions, "step A re-executed from scratch, not reused").toHaveLength(1);
+    expect(aRun.sessions[0]!.sessionId).not.toBe("sess-old-a");
+    const bRun = final.blocks.find((b) => b.blockId === toBlockId("b"))!;
+    expect(bRun.status).toBe("done");
+    expect(bRun.failureReason).toBeNull();
+  });
+
+  it("rerun of a failed run KEEPS the submitted input rows — the user never re-fills the table", async () => {
+    const p: Pipeline = {
+      id: toPipelineId("p-rerun-input"),
+      name: "Rerun input",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      triggers: [],
+      blocks: [
+        {
+          id: toBlockId("in"),
+          kind: "input",
+          name: "Leads",
+          message: "Fill the leads",
+          columns: [{ key: "site", label: "Site", type: "url", options: [], required: true, help: null }],
+          outputVar: "rows",
+        },
+        block("work", "Work", "process ${vars.rows}"),
+      ],
+    };
+    pipelineStore.save(p);
+
+    let seed = initialRunState(p, newRunId(), tick());
+    seed = applyInputPaused(seed, toBlockId("in"), "Fill the leads", tick());
+    seed = applyInputSubmitted(seed, toBlockId("in"), [{ site: "https://osez-massage.fr" }], tick());
+    seed = applyBlockCrashed(seed, toBlockId("work"), "judge could not boot", tick());
+    expect(seed.status).toBe("failed");
+    runStore.save(seed);
+    const runId = seed.runId;
+
+    makeController();
+    host.send({ type: "resumeRun", runId });
+    await waitForRunCompletion(() => {
+      const runs = host.messagesOfType("runUpdate");
+      return runs.length > 0 && runs[runs.length - 1]!.run.status === "completed";
+    });
+
+    const updates = host.messagesOfType("runUpdate").map((m) => m.run);
+    expect(
+      updates.every((r) => r.status !== "paused-needs-input"),
+      "the rerun must never pause to re-ask for the input rows",
+    ).toBe(true);
+    const final = updates.at(-1)!;
+    const inputRun = final.blocks.find((b) => b.blockId === toBlockId("in"))!;
+    expect(inputRun.status).toBe("done");
+    expect(inputRun.output).toContain("osez-massage.fr");
+    expect(final.variables["rows"], "the rows variable feeds downstream blocks again").toContain("osez-massage.fr");
+    expect(final.blocks.find((b) => b.blockId === toBlockId("work"))!.status).toBe("done");
   });
 
   it("loading a stale 'running' run (engine not driving it) returns it as interrupted, never stuck running", () => {

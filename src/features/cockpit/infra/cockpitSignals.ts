@@ -4,9 +4,9 @@ import { COCKPIT_HOOKS_DIR, COCKPIT_SIGNALS_DIR } from "../../../shared/config";
 import { buildCockpitHookSettings } from "./cockpitHooks";
 import { logWarn } from "../../../shared/infra/traceLog";
 
-export type AttentionReason = "stop" | "notify" | "active";
+export type AttentionReason = "stop" | "notify" | "active" | "start";
 
-const SIGNAL_FILE = /^(.+)\.(stop|notify|active)$/;
+const SIGNAL_FILE = /^(.+)\.(stop|notify|active|start)$/;
 const SIGNALS_POLL_INTERVAL_MS = 1000;
 
 export const writeSessionHooks = (sessionId: string): string | null => {
@@ -29,6 +29,7 @@ export const removeSessionHooks = (sessionId: string): void => {
     path.join(COCKPIT_SIGNALS_DIR, `${sessionId}.stop`),
     path.join(COCKPIT_SIGNALS_DIR, `${sessionId}.notify`),
     path.join(COCKPIT_SIGNALS_DIR, `${sessionId}.active`),
+    path.join(COCKPIT_SIGNALS_DIR, `${sessionId}.start`),
   ]) {
     removeFile(f);
   }

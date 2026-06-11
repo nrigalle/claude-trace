@@ -1,6 +1,7 @@
 import type {
   AutomationRunner,
   JudgeOptions,
+  JudgeOutcome,
   SpawnHandle,
   SpawnOptions,
   TurnEndKind,
@@ -30,9 +31,11 @@ interface ResolvedOptions {
 }
 
 export class StubAutomationRunner implements AutomationRunner {
+  readonly judgeCalls: JudgeOptions[] = [];
   private readonly active = new Map<string, ActiveBlock>();
   private readonly options: ResolvedOptions;
   private sessionCounter = 0;
+  private judgeCounter = 0;
   private disposed = false;
 
   constructor(options: StubRunnerOptions = {}) {
@@ -67,11 +70,16 @@ export class StubAutomationRunner implements AutomationRunner {
     return Promise.resolve(handle);
   }
 
-  judge(options: JudgeOptions): Promise<OrchestratorDecision> {
+  judge(options: JudgeOptions): Promise<JudgeOutcome> {
+    this.judgeCalls.push(options);
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
+        this.judgeCounter += 1;
+        const orchestratorSessionId = options.resumeSessionId ?? `stub-orchestrator-${this.judgeCounter}`;
+        const finish = (decision: OrchestratorDecision): void =>
+          resolve({ decision, orchestratorSessionId });
         if (this.options.decide) {
-          resolve(this.options.decide(options));
+          finish(this.options.decide(options));
           return;
         }
         const firstLine = options.taskGoal
@@ -79,7 +87,7 @@ export class StubAutomationRunner implements AutomationRunner {
           .map((line) => line.trim())
           .find((line) => line.length > 0 && !line.startsWith("["))
           ?.slice(0, 140) ?? "no prompt";
-        resolve({
+        finish({
           kind: "success",
           summary: `[stub runner] Worker completed without actually invoking Claude. Configured task: "${firstLine}". When the real PTY+MCP runner ships, this summary will be produced by the orchestrator's judgment of the worker's session.`,
         });

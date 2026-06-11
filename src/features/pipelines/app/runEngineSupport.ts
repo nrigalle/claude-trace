@@ -3,12 +3,36 @@ import type {
   Block,
   BlockId,
   EffortLevel,
+  FileBlock,
+  HttpBlock,
   LoopBlock,
   OrchestratorDecision,
   ParallelBlock,
   RunState,
+  ScriptBlock,
   WorkerBlock,
 } from "../domain/types";
+import type { DeterministicRunner } from "./DeterministicRunner";
+import { interpolate, type InterpolationContext } from "../domain/interpolate";
+import {
+  applyBlockCrashed,
+  applyBlockSpawned,
+  applyBlockStopped,
+  applyDecision,
+  applyWorkerOutput,
+} from "../domain/scheduler";
+import {
+  applyMergerCrashed,
+  applyMergerDecision,
+  applyMergerOutput,
+  applyMergerSpawned,
+  applyMergerStopped,
+  applyParallelWorkerCrashed,
+  applyParallelWorkerDecision,
+  applyParallelWorkerOutput,
+  applyParallelWorkerSpawned,
+  applyParallelWorkerStopped,
+} from "../domain/schedulerParallel";
 import type { ModelChoice } from "../../../shared/models";
 import { assertNever } from "../../../shared/assertNever";
 
@@ -72,6 +96,93 @@ export interface SpawnRequest {
   readonly effort: EffortLevel;
   readonly resumeSessionId: string | null;
 }
+
+export interface PoolOrchestratorState {
+  sessionId: string | null;
+  queue: Promise<void>;
+}
+
+export const crashReasonForTurnEnd = (turnEnd: "terminal-closed" | "process-exited"): string =>
+  turnEnd === "process-exited"
+    ? "The Claude process exited before finishing its turn."
+    : "Terminal was closed before Claude finished responding.";
+
+export const executeDeterministicBlock = async (
+  deterministic: DeterministicRunner,
+  block: ScriptBlock | HttpBlock | FileBlock,
+  ctx: InterpolationContext,
+  signal: AbortSignal,
+  onLog: (chunk: string) => void,
+): Promise<string> => {
+  switch (block.kind) {
+    case "script": {
+      const result = await deterministic.runScript({
+        interpreter: block.interpreter,
+        code: interpolate(block.code, ctx),
+        cwd: ctx.workspace,
+        env: ctx.vars,
+        signal,
+        onLog,
+      });
+      if (result.exitCode !== 0) {
+        const detail = result.stderr.trim() || result.stdout.trim();
+        throw new Error(`Script exited with code ${result.exitCode}${detail ? `: ${detail}` : ""}`);
+      }
+      return result.stdout.trim();
+    }
+    case "http": {
+      const url = interpolate(block.url, ctx);
+      const result = await deterministic.runHttp({
+        method: block.method,
+        url,
+        headers: block.headers.map((h) => ({
+          name: interpolate(h.name, ctx),
+          value: interpolate(h.value, ctx),
+        })),
+        body: block.body === null ? null : interpolate(block.body, ctx),
+        signal,
+      });
+      if (result.status >= 400) {
+        throw new Error(`HTTP ${block.method} ${url} returned ${result.status}`);
+      }
+      return result.body;
+    }
+    case "file": {
+      const path = interpolate(block.path, ctx);
+      if (block.operation === "write") {
+        await deterministic.writeFile({ cwd: ctx.workspace, path, content: interpolate(block.content, ctx) });
+        return path;
+      }
+      return deterministic.readFile({ cwd: ctx.workspace, path });
+    }
+    default:
+      return assertNever(block);
+  }
+};
+
+export const linearMutators = (blockId: BlockId): SessionMutators => ({
+  applySpawned: (s, sid, p, n) => applyBlockSpawned(s, blockId, sid, p, n),
+  applyStopped: (s, n) => applyBlockStopped(s, blockId, n),
+  applyDecision: (s, d, n) => applyDecision(s, blockId, d, n),
+  applyCrashed: (s, r, n) => applyBlockCrashed(s, blockId, r, n),
+  applyWorkerOutput: (s, o) => applyWorkerOutput(s, blockId, o),
+});
+
+export const parallelWorkerMutators = (blockId: BlockId, workerBlockId: BlockId): SessionMutators => ({
+  applySpawned: (s, sid, p, n) => applyParallelWorkerSpawned(s, blockId, workerBlockId, sid, p, n),
+  applyStopped: (s, n) => applyParallelWorkerStopped(s, blockId, workerBlockId, n),
+  applyDecision: (s, d, n) => applyParallelWorkerDecision(s, blockId, workerBlockId, d, n),
+  applyCrashed: (s, r, n) => applyParallelWorkerCrashed(s, blockId, workerBlockId, r, n),
+  applyWorkerOutput: (s, o) => applyParallelWorkerOutput(s, blockId, workerBlockId, o),
+});
+
+export const mergerMutators = (blockId: BlockId): SessionMutators => ({
+  applySpawned: (s, sid, p, n) => applyMergerSpawned(s, blockId, sid, p, n),
+  applyStopped: (s, n) => applyMergerStopped(s, blockId, n),
+  applyDecision: (s, d, n) => applyMergerDecision(s, blockId, d, n),
+  applyCrashed: (s, r, n) => applyMergerCrashed(s, blockId, r, n),
+  applyWorkerOutput: (s, o) => applyMergerOutput(s, blockId, o),
+});
 
 export const composePromptWithUpstream = (
   state: RunState,

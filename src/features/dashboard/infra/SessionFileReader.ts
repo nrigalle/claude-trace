@@ -33,6 +33,10 @@ export class SessionFileReader {
     this.cache.clear();
   }
 
+  getCustomTitle(id: SessionId): string | null {
+    return this.cache.get(id)?.parseCtx.customTitle ?? null;
+  }
+
   getTitle(id: SessionId): string | null {
     const entry = this.cache.get(id);
     if (!entry) return null;

@@ -45,6 +45,8 @@ Wire several Claude sessions into a pipeline on a canvas. Run workers in sequenc
 
 Every step drives a real Claude Code session and passes its output to the next. The result is the kind of deterministic multi agent flow that subagents and agent teams don't give you, built visually instead of in code.
 
+Long runs fail in boring ways: a worker gets stuck, or an agent says done when it quietly skipped the work. So each worker pool has an orchestrator session that reads every worker's output and rules it passed or failed before the run moves on. Stopping a run kills every session it started, no zombies left behind, and a failed run reruns from the first step in one click with the answers you typed still in place.
+
 You don't have to draw every workflow by hand either. Press Build with AI, describe what you want or point it at the scripts you already have, and the assistant reads your repo, asks the questions it needs to get the design right, then proposes a complete workflow you drop onto the canvas in one click. Changed your mind? Undo puts the canvas back exactly as it was.
 
 ![Describe a workflow and the assistant builds it](https://raw.githubusercontent.com/nrigalle/claude-trace/main/media/shot-workflow-assistant.png)

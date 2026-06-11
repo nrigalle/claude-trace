@@ -17,6 +17,8 @@ export const COCKPIT_SESSIONS_FILE = path.join(TRACE_DATA_DIR, "cockpit-sessions
 export const COCKPIT_TERMINAL_HISTORY_DIR = path.join(TRACE_DATA_DIR, "terminal-history");
 export const COCKPIT_HOOKS_DIR = path.join(TRACE_DATA_DIR, "hooks");
 export const COCKPIT_SIGNALS_DIR = path.join(TRACE_DATA_DIR, "signals");
+export const RUN_HOOKS_DIR = path.join(TRACE_DATA_DIR, "run-hooks");
+export const RUN_SIGNALS_DIR = path.join(TRACE_DATA_DIR, "run-signals");
 
 export const PROJECTS_DIR =
   process.env["CLAUDE_TRACE_PROJECTS_DIR"] ??

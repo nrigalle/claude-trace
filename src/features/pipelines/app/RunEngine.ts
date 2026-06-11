@@ -2,22 +2,7 @@ import type { SpawnHandle } from "./AutomationRunner";
 import { type SessionTarget } from "../protocol";
 import {
   applyBlockCrashed,
-  applyBlockSessionFinished,
-  applyBlockSpawned,
-  applyBlockStopped,
-  applyDecision,
   applyInterrupted,
-  applyMergerCrashed,
-  applyMergerDecision,
-  applyMergerOutput,
-  applyMergerSpawned,
-  applyMergerStopped,
-  applyParallelWorkerCrashed,
-  applyParallelWorkerDecision,
-  applyParallelWorkerOutput,
-  applyParallelWorkerSpawned,
-  applyParallelWorkerStopped,
-  applyWorkerOutput,
   applyDeterministicStarted,
   applyDeterministicDone,
   applyDeterministicFailed,
@@ -32,7 +17,6 @@ import {
   resetBlocksForLoopIteration,
 } from "../domain/scheduler";
 import {
-  clampConcurrency,
   isDeterministicBlock,
   latestSessionId,
   type ApprovalBlock,
@@ -58,6 +42,7 @@ import {
 import { interpolate, evaluateCondition, type InterpolationContext } from "../domain/interpolate";
 import { assertNever } from "../../../shared/assertNever";
 import type { PipelinesControllerDeps } from "./PipelinesController";
+import { runMapBlockIn, runPoolBlockIn, type PoolHost } from "./poolRunner";
 
 import {
   SELF_KEY,
@@ -65,11 +50,13 @@ import {
   POOL_KEY,
   MAX_PARALLEL_WORKER_TURNS,
   RUN_POST_MIN_INTERVAL_MS,
-  MAX_MAP_ITEMS,
   runShapeSignature,
   handleKey,
   sessionTargetToHandleSub,
   InterruptedError,
+  linearMutators,
+  parallelWorkerMutators,
+  mergerMutators,
   BlockFailedError,
   PausedError,
   composePromptWithUpstream,
@@ -79,6 +66,8 @@ import {
   anySignal,
   blocksInLoopRange,
   blockDispatch,
+  executeDeterministicBlock,
+  crashReasonForTurnEnd,
   type HandleKey,
   type SessionMutators,
   type SpawnRequest,
@@ -132,14 +121,8 @@ export class RunEngine {
     } finally {
       this.deps.runner.killRun(runId);
       this.active = null;
-      if (this.logBroadcastTimer !== null) {
-        clearTimeout(this.logBroadcastTimer);
-        this.logBroadcastTimer = null;
-      }
-      if (this.runPostTimer !== null) {
-        clearTimeout(this.runPostTimer);
-        this.runPostTimer = null;
-      }
+      if (this.logBroadcastTimer !== null) { clearTimeout(this.logBroadcastTimer); this.logBroadcastTimer = null; }
+      if (this.runPostTimer !== null) { clearTimeout(this.runPostTimer); this.runPostTimer = null; }
       this.onRunListChanged();
     }
   }
@@ -149,6 +132,13 @@ export class RunEngine {
     if (!active) return;
     active.state = applyDeterministicLog(active.state, blockId, chunk);
     this.postRunUpdate();
+  }
+
+  private crashSession(mutators: SessionMutators, reason: string): BlockFailedError {
+    const active = this.active!;
+    active.state = mutators.applyCrashed(active.state, reason, this.deps.clock());
+    this.persistAndBroadcastRun();
+    return new BlockFailedError(reason);
   }
 
   kill(runId: RunId): void {
@@ -273,7 +263,7 @@ export class RunEngine {
     const dispatch = blockDispatch(block);
     const interpolatedPrompt = interpolate(dispatch.prompt, this.interpolationCtx(), { bareVars: true });
     const chainedPrompt = composePromptWithUpstream(active.state, block.id, interpolatedPrompt);
-    const mutators = this.linearMutators(block.id);
+    const mutators = linearMutators(block.id);
     const turnStartMs = this.deps.clock();
     const restartEach = block.kind === "worker" && block.restartEachIteration === true;
     const handle = await this.spawnTracked(block.id, SELF_KEY, {
@@ -307,7 +297,13 @@ export class RunEngine {
 
     let output: string;
     try {
-      output = await this.executeDeterministic(block, this.interpolationCtx(), active.abort.signal);
+      output = await executeDeterministicBlock(
+        this.deps.deterministic,
+        block,
+        this.interpolationCtx(),
+        active.abort.signal,
+        (chunk) => this.appendBlockLog(block.id, chunk),
+      );
     } catch (err) {
       if (err instanceof InterruptedError || active.abort.signal.aborted) throw new InterruptedError();
       const reason = err instanceof Error ? err.message : String(err);
@@ -335,11 +331,11 @@ export class RunEngine {
     const handle = await this.spawnTracked(blockId, sub, req, mutators);
     const turnEnd = await handle.waitForTurnEnd(turnStartMs, active.abort.signal);
     if (turnEnd === "aborted") throw new InterruptedError();
-    if (turnEnd === "terminal-closed") {
-      const reason = "Terminal was closed before Claude finished responding.";
-      active.state = mutators.applyCrashed(active.state, reason, this.deps.clock());
-      this.persistAndBroadcastRun();
-      throw new BlockFailedError(reason);
+    if (turnEnd === "terminal-closed" || turnEnd === "process-exited") {
+      throw this.crashSession(mutators, crashReasonForTurnEnd(turnEnd));
+    }
+    if (turnEnd === "notified") {
+      throw this.crashSession(mutators, "Claude hit a permission prompt this unattended step cannot answer.");
     }
     active.state = mutators.applyStopped(active.state, this.deps.clock());
     const text = handle.readLastAssistantText();
@@ -353,7 +349,7 @@ export class RunEngine {
   private async runLlmBlock(block: LlmBlock): Promise<"success"> {
     const active = this.active!;
     const prompt = interpolate(block.prompt, this.interpolationCtx(), { bareVars: true });
-    const mutators = this.linearMutators(block.id);
+    const mutators = linearMutators(block.id);
     const { text } = await this.runSingleTurn(block.id, SELF_KEY, {
       cwd: this.runCwd(),
       prompt,
@@ -373,7 +369,7 @@ export class RunEngine {
   private async runEvaluatorBlock(block: EvaluatorBlock): Promise<"success"> {
     const active = this.active!;
     const goal = interpolate(block.goal, this.interpolationCtx(), { bareVars: true });
-    const mutators = this.linearMutators(block.id);
+    const mutators = linearMutators(block.id);
     const { jsonlPath } = await this.runSingleTurn(block.id, SELF_KEY, {
       cwd: this.runCwd(),
       prompt: goal,
@@ -382,12 +378,13 @@ export class RunEngine {
       resumeSessionId: null,
     }, mutators);
 
-    const decision = await this.deps.runner.judge({
+    const { decision } = await this.deps.runner.judge({
       runId: active.runId,
       blockId: block.id,
       cwd: this.runCwd(),
       taskGoal: goal,
       workerJsonlPath: jsonlPath,
+      resumeSessionId: null,
       signal: active.abort.signal,
     });
     if (active.abort.signal.aborted) throw new InterruptedError();
@@ -403,139 +400,32 @@ export class RunEngine {
     throw new BlockFailedError(`Evaluation failed: ${decision.reason}`);
   }
 
-  private async runMapBlock(block: MapBlock): Promise<"success"> {
+  private poolHost(): PoolHost {
     const active = this.active!;
-    active.state = applyDeterministicStarted(active.state, block.id, this.deps.clock());
-    this.persistAndBroadcastRun();
+    return {
+      runner: this.deps.runner,
+      deterministic: this.deps.deterministic,
+      clock: () => this.deps.clock(),
+      runId: () => active.runId,
+      runCwd: () => this.runCwd(),
+      interpolationCtx: () => this.interpolationCtx(),
+      signal: () => active.abort.signal,
+      getState: () => active.state,
+      setState: (state) => { active.state = state; },
+      persist: () => this.persistAndBroadcastRun(),
+      trackHandle: (key, handle) => active.handles.set(key, handle),
+      releaseHandle: (blockId, sub) => this.releaseHandle(blockId, sub),
+      releasePoolHandles: (blockId) => this.releasePoolHandles(blockId),
+      runSingleTurn: (blockId, sub, req, mutators) => this.runSingleTurn(blockId, sub, req, mutators),
+    };
+  }
 
-    const list = active.state.variables[block.listVar] ?? "";
-    const items = list.split("\n").map((l) => l.trim()).filter((l) => l.length > 0).slice(0, MAX_MAP_ITEMS);
-    const mutators = this.linearMutators(block.id);
-    const outputs: string[] = [];
-
-    for (const item of items) {
-      if (active.abort.signal.aborted) throw new InterruptedError();
-      const base = this.interpolationCtx();
-      const ctx: InterpolationContext = { ...base, vars: { ...base.vars, [block.itemVar]: item } };
-      const prompt = interpolate(block.prompt, ctx, { bareVars: true });
-      const { text } = await this.runSingleTurn(block.id, SELF_KEY, {
-        cwd: this.runCwd(),
-        prompt,
-        model: block.model,
-        effort: block.effort,
-        resumeSessionId: null,
-      }, mutators);
-      this.releaseHandle(block.id, SELF_KEY);
-      outputs.push(text);
-    }
-
-    const combined = outputs.join("\n");
-    active.state = applyDeterministicDone(active.state, block.id, combined, this.deps.clock());
-    if (block.outputVar !== null) {
-      active.state = setVariable(active.state, block.outputVar, combined);
-    }
-    this.persistAndBroadcastRun();
-    return "success";
+  private async runMapBlock(block: MapBlock): Promise<"success"> {
+    return runMapBlockIn(this.poolHost(), block);
   }
 
   private async runPoolBlock(block: PoolBlock): Promise<"success"> {
-    const active = this.active!;
-    active.state = applyDeterministicStarted(active.state, block.id, this.deps.clock());
-    this.persistAndBroadcastRun();
-
-    let outputs: string[];
-    try {
-      const items = (await this.resolvePoolItems(block)).slice(0, MAX_MAP_ITEMS);
-      outputs = new Array(items.length).fill("");
-      const concurrency = clampConcurrency(block.concurrency);
-
-      let nextIndex = 0;
-      const drainQueue = async (): Promise<void> => {
-        for (;;) {
-          if (active.abort.signal.aborted) throw new InterruptedError();
-          const index = nextIndex;
-          if (index >= items.length) return;
-          nextIndex += 1;
-          outputs[index] = await this.runPoolItem(block, index, items[index]!);
-        }
-      };
-
-      const workers = Math.min(concurrency, items.length);
-      await Promise.all(Array.from({ length: workers }, () => drainQueue()));
-      if (active.abort.signal.aborted) throw new InterruptedError();
-    } catch (err) {
-      this.releasePoolHandles(block.id);
-      if (err instanceof InterruptedError || active.abort.signal.aborted) throw new InterruptedError();
-      const reason = err instanceof Error ? err.message : String(err);
-      active.state = applyBlockCrashed(active.state, block.id, reason, this.deps.clock());
-      this.persistAndBroadcastRun();
-      throw new BlockFailedError(reason);
-    }
-
-    const combined = outputs.join("\n");
-    active.state = applyDeterministicDone(active.state, block.id, combined, this.deps.clock());
-    if (block.outputVar !== null) {
-      active.state = setVariable(active.state, block.outputVar, combined);
-    }
-    this.persistAndBroadcastRun();
-    return "success";
-  }
-
-  private async runPoolItem(block: PoolBlock, index: number, item: string): Promise<string> {
-    const active = this.active!;
-    const sub = `${POOL_KEY}#${index}`;
-    const base = this.interpolationCtx();
-    const ctx: InterpolationContext = { ...base, vars: { ...base.vars, [block.itemVar]: item } };
-    const prompt = interpolate(block.prompt, ctx, { bareVars: true });
-    const turnStartMs = this.deps.clock();
-
-    let handle: SpawnHandle;
-    try {
-      handle = await this.deps.runner.spawn({
-        runId: active.runId,
-        blockId: block.id,
-        cwd: this.runCwd(),
-        prompt,
-        model: block.model,
-        effort: block.effort,
-        resumeSessionId: null,
-        signal: active.abort.signal,
-      });
-    } catch (err) {
-      throw new BlockFailedError(err instanceof Error ? err.message : String(err));
-    }
-    active.handles.set(handleKey(block.id, sub), handle);
-    active.state = applyBlockSpawned(active.state, block.id, handle.sessionId, prompt, this.deps.clock());
-    this.persistAndBroadcastRun();
-
-    const turnEnd = await handle.waitForTurnEnd(turnStartMs, active.abort.signal);
-    if (turnEnd === "aborted") {
-      this.releaseHandle(block.id, sub);
-      throw new InterruptedError();
-    }
-    if (turnEnd === "terminal-closed") {
-      this.releaseHandle(block.id, sub);
-      throw new BlockFailedError("Terminal was closed before Claude finished responding.");
-    }
-
-    const text = handle.readLastAssistantText();
-    active.state = applyBlockSessionFinished(active.state, block.id, handle.sessionId, text, this.deps.clock());
-    this.persistAndBroadcastRun();
-    this.releaseHandle(block.id, sub);
-    return text;
-  }
-
-  private async resolvePoolItems(block: PoolBlock): Promise<string[]> {
-    const active = this.active!;
-    let listText: string;
-    if (block.listVar.includes("${")) {
-      listText = interpolate(block.listVar, this.interpolationCtx(), { bareVars: true });
-    } else if (block.listVar in active.state.variables) {
-      listText = active.state.variables[block.listVar] ?? "";
-    } else {
-      listText = await this.deps.deterministic.readFile({ cwd: this.runCwd(), path: block.listVar });
-    }
-    return listText.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+    return runPoolBlockIn(this.poolHost(), block);
   }
 
   private async runApprovalBlock(block: ApprovalBlock): Promise<never> {
@@ -594,7 +484,7 @@ export class RunEngine {
         .join(block.separator);
     } else {
       const prompt = `${interpolate(block.mergerGoal, this.interpolationCtx(), { bareVars: true })}\n\n<input>\n${input}\n</input>`;
-      const mutators = this.linearMutators(block.id);
+      const mutators = linearMutators(block.id);
       const turnStartMs = this.deps.clock();
       const handle = await this.spawnTracked(block.id, SELF_KEY, {
         cwd: this.runCwd(),
@@ -616,57 +506,6 @@ export class RunEngine {
     return "success";
   }
 
-  private async executeDeterministic(
-    block: ScriptBlock | HttpBlock | FileBlock,
-    ctx: InterpolationContext,
-    signal: AbortSignal,
-  ): Promise<string> {
-    switch (block.kind) {
-      case "script": {
-        const result = await this.deps.deterministic.runScript({
-          interpreter: block.interpreter,
-          code: interpolate(block.code, ctx),
-          cwd: ctx.workspace,
-          env: ctx.vars,
-          signal,
-          onLog: (chunk) => this.appendBlockLog(block.id, chunk),
-        });
-        if (result.exitCode !== 0) {
-          const detail = result.stderr.trim() || result.stdout.trim();
-          throw new Error(`Script exited with code ${result.exitCode}${detail ? `: ${detail}` : ""}`);
-        }
-        return result.stdout.trim();
-      }
-      case "http": {
-        const url = interpolate(block.url, ctx);
-        const result = await this.deps.deterministic.runHttp({
-          method: block.method,
-          url,
-          headers: block.headers.map((h) => ({
-            name: interpolate(h.name, ctx),
-            value: interpolate(h.value, ctx),
-          })),
-          body: block.body === null ? null : interpolate(block.body, ctx),
-          signal,
-        });
-        if (result.status >= 400) {
-          throw new Error(`HTTP ${block.method} ${url} returned ${result.status}`);
-        }
-        return result.body;
-      }
-      case "file": {
-        const path = interpolate(block.path, ctx);
-        if (block.operation === "write") {
-          await this.deps.deterministic.writeFile({ cwd: ctx.workspace, path, content: interpolate(block.content, ctx) });
-          return path;
-        }
-        return this.deps.deterministic.readFile({ cwd: ctx.workspace, path });
-      }
-      default:
-        return assertNever(block);
-    }
-  }
-
   private async runParallelBlock(block: ParallelBlock): Promise<"success" | "loop-done"> {
     const active = this.active!;
     const globalSignal = active.abort.signal;
@@ -681,7 +520,7 @@ export class RunEngine {
       const resumeId = restartEach ? null : latestSessionIdForParallelWorker(active.state, block.id, worker.id);
       const interpolatedPrompt = interpolate(worker.prompt, this.interpolationCtx(), { bareVars: true });
       const chainedPrompt = composePromptWithUpstream(active.state, block.id, interpolatedPrompt);
-      const mutators = this.parallelWorkerMutators(block.id, worker.id);
+      const mutators = parallelWorkerMutators(block.id, worker.id);
       const turnStartMs = this.deps.clock();
       workerStartTimes.set(worker.id, turnStartMs);
       const handle = await this.spawnTracked(block.id, worker.id, {
@@ -709,7 +548,7 @@ export class RunEngine {
     }
 
     const mergerPrompt = buildMergerPrompt(block, summaries);
-    const mergerMutators = this.mergerMutators(block.id);
+    const mutatorsForMerger = mergerMutators(block.id);
     const mergerTurnStartMs = this.deps.clock();
     const mergerHandle = await this.spawnTracked(block.id, MERGER_KEY, {
       cwd: this.runCwd(),
@@ -717,9 +556,9 @@ export class RunEngine {
       model: block.mergerModel,
       effort: "medium",
       resumeSessionId: null,
-    }, mergerMutators);
+    }, mutatorsForMerger);
 
-    const mergerResult = await this.runPatientSession(mergerHandle, block.id, mergerPrompt, globalSignal, mergerMutators, mergerTurnStartMs);
+    const mergerResult = await this.runPatientSession(mergerHandle, block.id, mergerPrompt, globalSignal, mutatorsForMerger, mergerTurnStartMs);
     this.releaseHandle(block.id, MERGER_KEY);
     return mergerResult.decisionKind;
   }
@@ -734,7 +573,7 @@ export class RunEngine {
     initialSinceMs: number,
   ): Promise<void> {
     const active = this.active!;
-    const mutators = this.parallelWorkerMutators(parallelBlock.id, worker.id);
+    const mutators = parallelWorkerMutators(parallelBlock.id, worker.id);
     let handle = initialHandle;
     let sinceMs = initialSinceMs;
     let turns = 0;
@@ -745,11 +584,8 @@ export class RunEngine {
         turns += 1;
         const turnEnd = await handle.waitForTurnEnd(sinceMs, signal);
         if (turnEnd === "aborted") throw new InterruptedError();
-        if (turnEnd === "terminal-closed") {
-          const reason = "Terminal was closed before Claude finished responding.";
-          active.state = mutators.applyCrashed(active.state, reason, this.deps.clock());
-          this.persistAndBroadcastRun();
-          throw new BlockFailedError(reason);
+        if (turnEnd === "terminal-closed" || turnEnd === "process-exited") {
+          throw this.crashSession(mutators, crashReasonForTurnEnd(turnEnd));
         }
 
         active.state = mutators.applyStopped(active.state, this.deps.clock());
@@ -765,12 +601,13 @@ export class RunEngine {
 
         this.releaseHandle(parallelBlock.id, worker.id);
 
-        const decision = await this.deps.runner.judge({
+        const { decision } = await this.deps.runner.judge({
           runId: active.runId,
           blockId: parallelBlock.id,
           cwd: this.runCwd(),
           taskGoal: worker.prompt,
           workerJsonlPath: priorJsonlPath,
+          resumeSessionId: null,
           signal,
         });
         if (signal.aborted) throw new InterruptedError();
@@ -781,6 +618,9 @@ export class RunEngine {
         if (decision.kind === "success" || decision.kind === "loop-done") {
           summaries.set(worker.id, decision.summary);
           return;
+        }
+        if (decision.kind === "failed") {
+          throw new BlockFailedError(decision.reason);
         }
 
         if (turns >= MAX_PARALLEL_WORKER_TURNS) {
@@ -861,11 +701,8 @@ export class RunEngine {
     while (true) {
       const turnEnd = await handle.waitForTurnEnd(sinceMs, signal);
       if (turnEnd === "aborted") throw new InterruptedError();
-      if (turnEnd === "terminal-closed") {
-        const reason = "Terminal was closed before Claude finished responding.";
-        active.state = mutators.applyCrashed(active.state, reason, this.deps.clock());
-        this.persistAndBroadcastRun();
-        throw new BlockFailedError(reason);
+      if (turnEnd === "terminal-closed" || turnEnd === "process-exited") {
+        throw this.crashSession(mutators, crashReasonForTurnEnd(turnEnd));
       }
 
       active.state = mutators.applyStopped(active.state, this.deps.clock());
@@ -875,12 +712,13 @@ export class RunEngine {
       }
       this.persistAndBroadcastRun();
 
-      const decision = await this.deps.runner.judge({
+      const { decision } = await this.deps.runner.judge({
         runId: active.runId,
         blockId,
         cwd: this.runCwd(),
         taskGoal: judgePrompt,
         workerJsonlPath: handle.jsonlPath,
+        resumeSessionId: null,
         signal,
       });
       if (signal.aborted) throw new InterruptedError();
@@ -891,39 +729,12 @@ export class RunEngine {
       if (decision.kind === "success" || decision.kind === "loop-done") {
         return { summary: decision.summary, decisionKind: decision.kind };
       }
+      if (decision.kind === "failed") {
+        throw new BlockFailedError(decision.reason);
+      }
 
       sinceMs = this.deps.clock();
     }
-  }
-
-  private linearMutators(blockId: BlockId): SessionMutators {
-    return {
-      applySpawned: (s, sid, p, n) => applyBlockSpawned(s, blockId, sid, p, n),
-      applyStopped: (s, n) => applyBlockStopped(s, blockId, n),
-      applyDecision: (s, d, n) => applyDecision(s, blockId, d, n),
-      applyCrashed: (s, r, n) => applyBlockCrashed(s, blockId, r, n),
-      applyWorkerOutput: (s, o) => applyWorkerOutput(s, blockId, o),
-    };
-  }
-
-  private parallelWorkerMutators(blockId: BlockId, workerBlockId: BlockId): SessionMutators {
-    return {
-      applySpawned: (s, sid, p, n) => applyParallelWorkerSpawned(s, blockId, workerBlockId, sid, p, n),
-      applyStopped: (s, n) => applyParallelWorkerStopped(s, blockId, workerBlockId, n),
-      applyDecision: (s, d, n) => applyParallelWorkerDecision(s, blockId, workerBlockId, d, n),
-      applyCrashed: (s, r, n) => applyParallelWorkerCrashed(s, blockId, workerBlockId, r, n),
-      applyWorkerOutput: (s, o) => applyParallelWorkerOutput(s, blockId, workerBlockId, o),
-    };
-  }
-
-  private mergerMutators(blockId: BlockId): SessionMutators {
-    return {
-      applySpawned: (s, sid, p, n) => applyMergerSpawned(s, blockId, sid, p, n),
-      applyStopped: (s, n) => applyMergerStopped(s, blockId, n),
-      applyDecision: (s, d, n) => applyMergerDecision(s, blockId, d, n),
-      applyCrashed: (s, r, n) => applyMergerCrashed(s, blockId, r, n),
-      applyWorkerOutput: (s, o) => applyMergerOutput(s, blockId, o),
-    };
   }
 
   private releaseHandle(blockId: BlockId, sub: string): void {

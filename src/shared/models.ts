@@ -1,9 +1,13 @@
 export type ModelChoice =
   | "default"
+  | "claude-fable-5"
   | "claude-fable-5[1m]"
   | "claude-opus-4-8"
+  | "claude-opus-4-8[1m]"
   | "claude-opus-4-7"
+  | "claude-opus-4-7[1m]"
   | "claude-sonnet-4-6"
+  | "claude-sonnet-4-6[1m]"
   | "claude-haiku-4-5";
 
 export type EffortChoice = "default" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -19,39 +23,70 @@ export const DEFAULT_MODEL_CHOICE: ModelChoice = "claude-opus-4-8";
 
 export const MODEL_CHOICES: readonly ModelChoice[] = [
   "default",
+  "claude-fable-5",
   "claude-fable-5[1m]",
   "claude-opus-4-8",
+  "claude-opus-4-8[1m]",
   "claude-opus-4-7",
+  "claude-opus-4-7[1m]",
   "claude-sonnet-4-6",
+  "claude-sonnet-4-6[1m]",
   "claude-haiku-4-5",
 ];
 
 const BASE_EFFORT_LEVELS: readonly EffortChoice[] = ["default", "low", "medium", "high", "max"];
 const OPUS_EFFORT_LEVELS: readonly EffortChoice[] = ["default", "low", "medium", "high", "xhigh", "max"];
 
+export const baseModelId = (model: ModelChoice): ModelChoice =>
+  model.endsWith("[1m]") ? (model.slice(0, -"[1m]".length) as ModelChoice) : model;
+
 export const MODEL_OPTIONS: readonly ModelOption[] = [
   {
     id: "claude-opus-4-8",
     label: "Opus 4.8",
-    oneLine: "Default. 1M context, adaptive thinking, best for hard coding and agents. $5/$25 per MTok.",
+    oneLine: "Default. 200k context, adaptive thinking, best for hard coding and agents. $5/$25 per MTok.",
+    effortLevels: OPUS_EFFORT_LEVELS,
+  },
+  {
+    id: "claude-opus-4-8[1m]",
+    label: "Opus 4.8 (1m)",
+    oneLine: "Opus 4.8 with the 1M token context window for very long sessions.",
+    effortLevels: OPUS_EFFORT_LEVELS,
+  },
+  {
+    id: "claude-fable-5",
+    label: "Fable 5",
+    oneLine: "Frontier preview. 200k context. Deepest reasoning available today.",
     effortLevels: OPUS_EFFORT_LEVELS,
   },
   {
     id: "claude-fable-5[1m]",
     label: "Fable 5 (1m)",
-    oneLine: "Frontier preview with a 1M context window. Deepest reasoning available today.",
+    oneLine: "Fable 5 with the 1M token context window for very long sessions.",
     effortLevels: OPUS_EFFORT_LEVELS,
   },
   {
     id: "claude-opus-4-7",
     label: "Opus 4.7",
-    oneLine: "1M context. Previous Opus with strong reasoning and agentic coding. $5/$25 per MTok.",
+    oneLine: "200k context. Previous Opus with strong reasoning and agentic coding. $5/$25 per MTok.",
+    effortLevels: OPUS_EFFORT_LEVELS,
+  },
+  {
+    id: "claude-opus-4-7[1m]",
+    label: "Opus 4.7 (1m)",
+    oneLine: "Opus 4.7 with the 1M token context window for very long sessions.",
     effortLevels: OPUS_EFFORT_LEVELS,
   },
   {
     id: "claude-sonnet-4-6",
     label: "Sonnet 4.6",
-    oneLine: "1M context. Balanced speed and intelligence. $3/$15 per MTok.",
+    oneLine: "200k context. Balanced speed and intelligence. $3/$15 per MTok.",
+    effortLevels: BASE_EFFORT_LEVELS,
+  },
+  {
+    id: "claude-sonnet-4-6[1m]",
+    label: "Sonnet 4.6 (1m)",
+    oneLine: "Sonnet 4.6 with the 1M token context window for very long sessions.",
     effortLevels: BASE_EFFORT_LEVELS,
   },
 ];
@@ -109,6 +144,6 @@ export function modelSupportsEffort(model: ModelChoice): boolean {
 }
 
 export function modelDefaultEffort(model: ModelChoice): EffortChoice {
-  if (model === "claude-opus-4-7") return "xhigh";
+  if (baseModelId(model) === "claude-opus-4-7") return "xhigh";
   return "default";
 }

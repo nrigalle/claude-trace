@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CockpitController,
   type TerminalBackend,
@@ -105,7 +105,7 @@ let names: Map<string, string>;
 let transcripts: Set<string>;
 let idSeq: number;
 let cleanedHooks: string[];
-let attentionListener: ((sessionId: string, reason: "stop" | "notify" | "active") => void) | null;
+let attentionListener: ((sessionId: string, reason: "stop" | "notify" | "active" | "start") => void) | null;
 let savedLayout: import("../../../src/features/cockpit/protocol").CockpitLayout;
 let folderPickerResult: string | null;
 const NOW = 9_000_000;
@@ -166,7 +166,7 @@ describe("CockpitController launch", () => {
     host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 2, promptOverride: null });
     expect(backend.spawns).toHaveLength(2);
     expect(backend.spawns[0]!.initialInput).toContain("--session-id uuid-1");
-    expect(backend.spawns[0]!.initialInput).toContain("--model 'claude-opus-4-7[1m]'");
+    expect(backend.spawns[0]!.initialInput).toContain("--model 'claude-opus-4-7'");
     expect(backend.spawns[0]!.initialInput).toContain("--name 'Critic 1'");
     expect(backend.spawns[0]!.initialInput.endsWith("\r")).toBe(true);
     expect(backend.spawns[0]!.cwd).toBe("/repo");
@@ -194,9 +194,20 @@ describe("CockpitController launch", () => {
     expect(backend.spawns).toHaveLength(8);
   });
 
-  it("folds a prompt override into the launched command", () => {
+  it("delivers a prompt override as a bracketed paste on start, then submits with a SEPARATE delayed CR", () => {
+    vi.useFakeTimers();
     host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: "review the diff" });
-    expect(backend.spawns[0]!.initialInput).toContain("'review the diff'");
+    expect(backend.spawns[0]!.initialInput).not.toContain("review the diff");
+    expect(backend.writes).toHaveLength(0);
+    attentionListener!("uuid-1", "start");
+    expect(backend.writes).toContainEqual({ id: "uuid-1", data: "\u001b[200~review the diff\u001b[201~" });
+    expect(backend.writes).toHaveLength(1);
+    vi.advanceTimersByTime(400);
+    expect(backend.writes).toContainEqual({ id: "uuid-1", data: "\r" });
+    attentionListener!("uuid-1", "start");
+    vi.advanceTimersByTime(400);
+    expect(backend.writes, "a second start signal must not re-deliver").toHaveLength(2);
+    vi.useRealTimers();
   });
 
   it("warns instead of spawning when the profile is gone", () => {
@@ -482,7 +493,7 @@ describe("CockpitController tabs — adding a tab clones the window's config int
     const tab = backend.spawns[1]!;
     expect(tab.sessionId).toBe("uuid-2");
     expect(tab.cwd).toBe("/repo");
-    expect(tab.initialInput).toContain("--model 'claude-opus-4-7[1m]'");
+    expect(tab.initialInput).toContain("--model 'claude-opus-4-7'");
     expect(tab.initialInput).toContain("plan");
     const terminals = host.lastState().state.terminals;
     expect(terminals).toHaveLength(2);
@@ -537,8 +548,14 @@ describe("CockpitController quick launch — no saved profile required", () => {
     });
     expect(backend.spawns).toHaveLength(1);
     expect(backend.spawns[0]!.initialInput).toContain("--name 'Scratch'");
-    expect(backend.spawns[0]!.initialInput).toContain("--model 'claude-opus-4-7[1m]'");
-    expect(backend.spawns[0]!.initialInput).toContain("'go'");
+    expect(backend.spawns[0]!.initialInput).toContain("--model 'claude-opus-4-7'");
+    expect(backend.spawns[0]!.initialInput).not.toContain("'go'");
+    vi.useFakeTimers();
+    attentionListener!("uuid-1", "start");
+    expect(backend.writes).toContainEqual({ id: "uuid-1", data: "\u001b[200~go\u001b[201~" });
+    vi.advanceTimersByTime(400);
+    expect(backend.writes).toContainEqual({ id: "uuid-1", data: "\r" });
+    vi.useRealTimers();
     expect(backend.spawns[0]!.cwd).toBe("/repo");
     const terminals = host.lastState().state.terminals;
     expect(terminals[0]!.spaceId).toBe("space-y");
@@ -786,6 +803,16 @@ describe("CockpitController — resume on webview re-show", () => {
       (m): m is Extract<typeof m, { type: "terminalData" }> => m.type === "terminalData" && m.sessionId === "uuid-1",
     );
     expect(replayed.map((m) => m.data).join("")).toContain("before pause");
+  });
+
+  it("persists a session's scrollback to disk on process exit, so a host restart can still replay it", async () => {
+    host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: null });
+    terminalHistoryStore.append("uuid-1", "final output before exit\r\n");
+    backend.emitExit("uuid-1", 0);
+    const restarted = new CockpitTerminalHistoryStore(path.join(dir, "terminal-history"));
+    await vi.waitFor(() => {
+      expect([...restarted.read("uuid-1")].join("")).toContain("final output before exit");
+    }, { timeout: 2000 });
   });
 });
 

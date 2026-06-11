@@ -38,3 +38,6 @@ export const prettyBytes = (n: number): string => {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 };
+
+export const normalizeName = (raw: string): string =>
+  raw.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");

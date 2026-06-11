@@ -40,20 +40,21 @@ describe("buildClaudeCommand", () => {
   });
 
   it.each<[ModelChoice, string]>([
-    ["claude-opus-4-8", "claude --model 'claude-opus-4-8[1m]'"],
-    ["claude-opus-4-7", "claude --model 'claude-opus-4-7[1m]'"],
-    ["claude-sonnet-4-6", "claude --model 'claude-sonnet-4-6[1m]'"],
-  ])("emits the 1M-context model %s as the single-quoted `%s`", (model, expected) => {
+    ["claude-opus-4-8", "claude --model 'claude-opus-4-8'"],
+    ["claude-opus-4-8[1m]", "claude --model 'claude-opus-4-8[1m]'"],
+    ["claude-opus-4-7[1m]", "claude --model 'claude-opus-4-7[1m]'"],
+    ["claude-sonnet-4-6[1m]", "claude --model 'claude-sonnet-4-6[1m]'"],
+  ])("emits the model id %s verbatim as the single-quoted `%s`", (model, expected) => {
     expect(buildClaudeCommand({ mode: "default", model })).toBe(expected);
   });
 
   it("single-quotes the model so the [1m] bracket is never glob-expanded by the shell", () => {
-    const out = buildClaudeCommand({ mode: "default", model: "claude-opus-4-8" });
+    const out = buildClaudeCommand({ mode: "default", model: "claude-opus-4-8[1m]" });
     expect(out).toContain("--model 'claude-opus-4-8[1m]'");
     expect(out).not.toContain("--model claude-opus-4-8[1m]");
   });
 
-  it("does NOT append [1m] to a non 1M-context model (haiku), but still quotes it", () => {
+  it("quotes haiku like every other model id", () => {
     expect(buildClaudeCommand({ mode: "default", model: "claude-haiku-4-5" })).toBe(
       "claude --model 'claude-haiku-4-5'",
     );
@@ -61,20 +62,20 @@ describe("buildClaudeCommand", () => {
 
   it("emits --model before --permission-mode in stable order", () => {
     expect(buildClaudeCommand({ mode: "acceptEdits", model: "claude-opus-4-7" })).toBe(
-      "claude --model 'claude-opus-4-7[1m]' --permission-mode acceptEdits",
+      "claude --model 'claude-opus-4-7' --permission-mode acceptEdits",
     );
   });
 
   it("combines --resume, --model, and --permission-mode in stable order", () => {
     expect(
       buildClaudeCommand({ mode: "plan", resumeId: "abc123", model: "claude-sonnet-4-6" }),
-    ).toBe("claude --resume abc123 --model 'claude-sonnet-4-6[1m]' --permission-mode plan");
+    ).toBe("claude --resume abc123 --model 'claude-sonnet-4-6' --permission-mode plan");
   });
 
   it("appends an initial prompt as a shell-quoted positional after every flag", () => {
     expect(
       buildClaudeCommand({ mode: "acceptEdits", model: "claude-opus-4-7", initialPrompt: "fix the auth bug" }),
-    ).toBe("claude --model 'claude-opus-4-7[1m]' --permission-mode acceptEdits 'fix the auth bug'");
+    ).toBe("claude --model 'claude-opus-4-7' --permission-mode acceptEdits 'fix the auth bug'");
   });
 
   it("escapes single quotes and shell metacharacters in the initial prompt", () => {
@@ -128,7 +129,7 @@ describe("buildClaudeCommand", () => {
   it("emits --effort after --model and before --permission-mode in stable order", () => {
     expect(
       buildClaudeCommand({ mode: "acceptEdits", model: "claude-opus-4-8", effort: "xhigh" }),
-    ).toBe("claude --model 'claude-opus-4-8[1m]' --effort xhigh --permission-mode acceptEdits");
+    ).toBe("claude --model 'claude-opus-4-8' --effort xhigh --permission-mode acceptEdits");
   });
 });
 
@@ -144,7 +145,7 @@ describe("buildClaudeCommand — Windows PowerShell quoting", () => {
   });
 
   it("quotes the model so the [1m] bracket stays literal under PowerShell too", () => {
-    expect(buildClaudeCommand({ mode: "default", model: "claude-opus-4-7" }, "powershell")).toBe(
+    expect(buildClaudeCommand({ mode: "default", model: "claude-opus-4-7[1m]" }, "powershell")).toBe(
       "claude --model 'claude-opus-4-7[1m]'",
     );
   });
@@ -171,13 +172,35 @@ describe("MODEL_OPTIONS catalog", () => {
     expect(MODEL_OPTIONS[0]!.label).toBe("Opus 4.8");
   });
 
-  it("lists only 1M-context launch models, Fable 5 included", () => {
+  it("lists every launch model in both 200k and 1m variants", () => {
     expect(MODEL_OPTIONS.map((m) => m.id)).toEqual([
       "claude-opus-4-8",
+      "claude-opus-4-8[1m]",
+      "claude-fable-5",
       "claude-fable-5[1m]",
       "claude-opus-4-7",
+      "claude-opus-4-7[1m]",
       "claude-sonnet-4-6",
+      "claude-sonnet-4-6[1m]",
     ]);
+  });
+
+  it("1m variants carry a (1m) label suffix and the same effort levels as their base model", () => {
+    for (const base of MODEL_OPTIONS.filter((m) => !m.id.endsWith("[1m]"))) {
+      const oneM = MODEL_OPTIONS.find((m) => m.id === `${base.id}[1m]`)!;
+      expect(oneM, `${base.id} must have a [1m] sibling`).toBeDefined();
+      expect(oneM.label).toBe(`${base.label} (1m)`);
+      expect(oneM.effortLevels).toEqual(base.effortLevels);
+    }
+  });
+
+  it("the model id is passed to the CLI verbatim — no hidden [1m] decoration", () => {
+    expect(buildClaudeCommand({ mode: "default", model: "claude-opus-4-8" })).toBe(
+      "claude --model 'claude-opus-4-8'",
+    );
+    expect(buildClaudeCommand({ mode: "default", model: "claude-opus-4-8[1m]" })).toBe(
+      "claude --model 'claude-opus-4-8[1m]'",
+    );
   });
 
   it("does not decorate Opus 4.8 with a new tag", () => {

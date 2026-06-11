@@ -43,6 +43,13 @@ describe("parseOrchestratorDecision", () => {
     });
   });
 
+  it("parses FAILED: prefix into a failed decision so broken workers flag the block instead of passing silently", () => {
+    expect(parseOrchestratorDecision("FAILED: the build never compiled")).toEqual({
+      kind: "failed",
+      reason: "the build never compiled",
+    });
+  });
+
   it("ignores leading lines and matches the first prefix-bearing line", () => {
     const text = ["", "  ", "Thinking…", "SUCCESS: done"].join("\n");
     expect(parseOrchestratorDecision(text)).toEqual({
@@ -76,5 +83,29 @@ describe("buildOrchestratorPrompt", () => {
   it("substitutes a placeholder when the conversation tail is empty so the prompt is still well-formed", () => {
     const prompt = buildOrchestratorPrompt("goal", "");
     expect(prompt).toContain("(no events captured)");
+  });
+});
+
+describe("readConversationDigest — the orchestrator prompt must stay command-line sized", () => {
+  it("caps a transcript whose tool results carry megabytes (image reads) to a small digest that keeps the recent text", async () => {
+    const fs = await import("fs");
+    const os = await import("os");
+    const path = await import("path");
+    const { readConversationDigest } = await import("../../../src/features/pipelines/infra/RealAutomationRunner");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ct-digest-"));
+    const file = path.join(dir, "w.jsonl");
+    const giant = "X".repeat(500_000);
+    const lines = [
+      JSON.stringify({ type: "user", message: { role: "user", content: "build the mockup" } }),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", name: "Read", input: { file_path: "/img.jpg" } }] } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", content: giant }] } }),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Mockup pushed on branch maquettes/zen-spa" }] } }),
+    ];
+    fs.writeFileSync(file, lines.join("\n") + "\n");
+    const digest = readConversationDigest(file);
+    expect(digest.length).toBeLessThan(60_000);
+    expect(digest).toContain("Mockup pushed on branch maquettes/zen-spa");
+    expect(digest).not.toContain(giant);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

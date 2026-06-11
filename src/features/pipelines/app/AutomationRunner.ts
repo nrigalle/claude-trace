@@ -17,7 +17,7 @@ export interface SpawnOptions {
   readonly signal: AbortSignal;
 }
 
-export type TurnEndKind = "stopped" | "terminal-closed" | "aborted";
+export type TurnEndKind = "stopped" | "notified" | "process-exited" | "terminal-closed" | "aborted";
 
 export interface SpawnHandle {
   readonly sessionId: string;
@@ -34,12 +34,18 @@ export interface JudgeOptions {
   readonly cwd: string;
   readonly taskGoal: string;
   readonly workerJsonlPath: string;
+  readonly resumeSessionId: string | null;
   readonly signal: AbortSignal;
+}
+
+export interface JudgeOutcome {
+  readonly decision: OrchestratorDecision;
+  readonly orchestratorSessionId: string | null;
 }
 
 export interface AutomationRunner {
   spawn(options: SpawnOptions): Promise<SpawnHandle>;
-  judge(options: JudgeOptions): Promise<OrchestratorDecision>;
+  judge(options: JudgeOptions): Promise<JudgeOutcome>;
   killRun(runId: RunId): void;
   dispose(): void;
 }

@@ -29,6 +29,9 @@ export interface RunBlockState {
   readonly parallelTotalCount?: number;
   readonly poolDoneCount?: number;
   readonly poolActiveCount?: number;
+  readonly poolOrchestratorSessionId?: string | null;
+  readonly poolVerdictPassCount?: number;
+  readonly poolVerdictFailCount?: number;
 }
 
 export const blockCountLabel = (n: number): string => `${n} block${n === 1 ? "" : "s"}`;
@@ -108,6 +111,13 @@ export const buildRunBlockState = (
   const isPool = definition.kind === "pool";
   const poolDoneCount = isPool ? blockRun.sessions.filter((s) => s.endedAtMs !== null).length : undefined;
   const poolActiveCount = isPool ? blockRun.sessions.filter((s) => s.endedAtMs === null).length : undefined;
+  const poolOrchestratorSessionId = isPool ? blockRun.orchestratorSessionId ?? null : undefined;
+  const poolVerdictPassCount = isPool
+    ? blockRun.sessions.filter((s) => s.verdict?.kind === "success").length
+    : undefined;
+  const poolVerdictFailCount = isPool
+    ? blockRun.sessions.filter((s) => s.verdict !== undefined && s.verdict !== null && s.verdict.kind !== "success").length
+    : undefined;
   return {
     runId,
     status: blockRun.status,
@@ -126,6 +136,9 @@ export const buildRunBlockState = (
     parallelTotalCount,
     poolDoneCount,
     poolActiveCount,
+    poolOrchestratorSessionId,
+    poolVerdictPassCount,
+    poolVerdictFailCount,
   };
 };
 

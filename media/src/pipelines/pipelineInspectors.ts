@@ -7,11 +7,6 @@ import type {
   Block,
   ConditionBlock,
   EvaluatorBlock,
-  FileBlock,
-  FileOperation,
-  HttpBlock,
-  HttpMethod,
-  Interpreter,
   LlmBlock,
   LoopBlock,
   MapBlock,
@@ -19,7 +14,6 @@ import type {
   PoolBlock,
   ReduceBlock,
   ReduceMode,
-  ScriptBlock,
   WaitBlock,
   WorkerBlock,
 } from "../../../src/features/pipelines/domain/types";
@@ -28,23 +22,17 @@ import {
   ICON_APPROVAL,
   ICON_CONDITION,
   ICON_EVALUATOR,
-  ICON_FILE,
   ICON_FILE_TEXT,
-  ICON_HTTP,
   ICON_MAP,
   ICON_PARALLEL,
   ICON_REDUCE,
   ICON_REPEAT,
-  ICON_SCRIPT,
   ICON_SLIDERS,
   ICON_TAG,
   ICON_TRASH,
   ICON_WAIT,
 } from "./pipelineIcons.js";
 import {
-  FILE_OP_OPTIONS,
-  HTTP_METHOD_OPTIONS,
-  INTERPRETER_OPTIONS,
   REDUCE_MODE_OPTIONS,
 } from "./pipelineCatalog.js";
 import {
@@ -62,6 +50,7 @@ import {
 } from "./inspectorFields.js";
 import { renderParallelWorkers } from "./parallelWorkersView.js";
 import { renderInputInspector } from "./inputInspector.js";
+import { renderFileInspector, renderHttpInspector, renderScriptInspector } from "./deterministicInspectors.js";
 
 export interface InspectorHost {
   readonly panelBody: HTMLElement;
@@ -92,13 +81,13 @@ export class PipelineInspectors {
         this.renderLoopInspector(block);
         return;
       case "script":
-        this.renderScriptInspector(block);
+        renderScriptInspector(this.host, block);
         return;
       case "http":
-        this.renderHttpInspector(block);
+        renderHttpInspector(this.host, block);
         return;
       case "file":
-        this.renderFileInspector(block);
+        renderFileInspector(this.host, block);
         return;
       case "condition":
         this.renderConditionInspector(block);
@@ -191,206 +180,6 @@ export class PipelineInspectors {
       ),
     );
 
-    this.host.panelBody.appendChild(form);
-  }
-
-  private renderScriptInspector(block: ScriptBlock): void {
-    const form = h("div", { className: "pl-inspector-form" });
-    form.appendChild(identitySection(block.name, "Name", (v) =>
-      this.host.updateBlock(block.id, (b) => ({ ...(b as ScriptBlock), name: v })),
-    ));
-
-    form.appendChild(
-      inspectorSection(
-        ICON_SLIDERS,
-        "Interpreter",
-        h(
-          "div",
-          { className: "pl-field" },
-          h("label", { className: "pl-field-label", textContent: "Run with" }),
-          selectFromOptions(INTERPRETER_OPTIONS, block.interpreter, (v) =>
-            this.host.updateBlock(block.id, (b) => ({ ...(b as ScriptBlock), interpreter: v as Interpreter })),
-          ),
-        ),
-      ),
-    );
-
-    const code = boundTextarea(block.code, "echo \"Hello from ${workspace}\"", "pl-block-prompt pl-code", (v) =>
-      this.host.updateBlock(block.id, (b) => ({ ...(b as ScriptBlock), code: v })),
-    );
-    form.appendChild(inspectorSection(ICON_SCRIPT, "Code", h("div", {}, code, refHint())));
-
-    form.appendChild(
-      inspectorSection(
-        ICON_TAG,
-        "Output",
-        outputVarField(block.outputVar, (v) =>
-          this.host.updateBlock(block.id, (b) => ({ ...(b as ScriptBlock), outputVar: v })),
-        ),
-      ),
-    );
-
-    form.appendChild(dangerRemoveSection(() => this.host.removeBlock(block.id)));
-    this.host.panelBody.appendChild(form);
-  }
-
-  private renderHttpInspector(block: HttpBlock): void {
-    const form = h("div", { className: "pl-inspector-form" });
-    form.appendChild(identitySection(block.name, "Name", (v) =>
-      this.host.updateBlock(block.id, (b) => ({ ...(b as HttpBlock), name: v })),
-    ));
-
-    form.appendChild(
-      inspectorSection(
-        ICON_HTTP,
-        "Request",
-        h(
-          "div",
-          { style: { display: "flex", flexDirection: "column", gap: "12px" } },
-          h(
-            "div",
-            { className: "pl-field" },
-            h("label", { className: "pl-field-label", textContent: "Method" }),
-            selectFromOptions(HTTP_METHOD_OPTIONS, block.method, (v) =>
-              this.host.updateBlock(block.id, (b) => ({ ...(b as HttpBlock), method: v as HttpMethod })),
-            ),
-          ),
-          h(
-            "div",
-            { className: "pl-field" },
-            h("label", { className: "pl-field-label", textContent: "URL" }),
-            bareTextInput(block.url, (v) =>
-              this.host.updateBlock(block.id, (b) => ({ ...(b as HttpBlock), url: v })),
-            ),
-            refHint(),
-          ),
-        ),
-      ),
-    );
-
-    form.appendChild(inspectorSection(ICON_SLIDERS, "Headers", this.httpHeadersEditor(block)));
-
-    const body = boundTextarea(block.body ?? "", "Request body (JSON, form data, …)", "pl-block-prompt", (v) =>
-      this.host.updateBlock(block.id, (b) => ({ ...(b as HttpBlock), body: v === "" ? null : v })),
-    );
-    form.appendChild(inspectorSection(ICON_FILE_TEXT, "Body", body));
-
-    form.appendChild(
-      inspectorSection(
-        ICON_TAG,
-        "Output",
-        outputVarField(block.outputVar, (v) =>
-          this.host.updateBlock(block.id, (b) => ({ ...(b as HttpBlock), outputVar: v })),
-        ),
-      ),
-    );
-
-    form.appendChild(dangerRemoveSection(() => this.host.removeBlock(block.id)));
-    this.host.panelBody.appendChild(form);
-  }
-
-  private httpHeadersEditor(block: HttpBlock): HTMLElement {
-    const container = h("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } });
-    block.headers.forEach((header, index) => {
-      container.appendChild(
-        h(
-          "div",
-          { style: { display: "flex", gap: "8px", alignItems: "center" } },
-          bareTextInput(header.name, (v) =>
-            this.host.updateBlock(block.id, (b) => ({
-              ...(b as HttpBlock),
-              headers: (b as HttpBlock).headers.map((hd, i) => (i === index ? { ...hd, name: v } : hd)),
-            })),
-          ),
-          bareTextInput(header.value, (v) =>
-            this.host.updateBlock(block.id, (b) => ({
-              ...(b as HttpBlock),
-              headers: (b as HttpBlock).headers.map((hd, i) => (i === index ? { ...hd, value: v } : hd)),
-            })),
-          ),
-          h("button", {
-            className: "pl-btn ghost",
-            attrs: { type: "button" },
-            textContent: "✕",
-            on: {
-              click: () =>
-                this.host.updateBlock(block.id, (b) => ({
-                  ...(b as HttpBlock),
-                  headers: (b as HttpBlock).headers.filter((_, i) => i !== index),
-                })),
-            },
-          }),
-        ),
-      );
-    });
-    container.appendChild(
-      h("button", {
-        className: "pl-btn ghost",
-        attrs: { type: "button" },
-        textContent: "+ Add header",
-        on: {
-          click: () =>
-            this.host.updateBlock(block.id, (b) => ({
-              ...(b as HttpBlock),
-              headers: [...(b as HttpBlock).headers, { name: "", value: "" }],
-            })),
-        },
-      }),
-    );
-    return container;
-  }
-
-  private renderFileInspector(block: FileBlock): void {
-    const form = h("div", { className: "pl-inspector-form" });
-    form.appendChild(identitySection(block.name, "Name", (v) =>
-      this.host.updateBlock(block.id, (b) => ({ ...(b as FileBlock), name: v })),
-    ));
-
-    form.appendChild(
-      inspectorSection(
-        ICON_FILE,
-        "Operation",
-        h(
-          "div",
-          { style: { display: "flex", flexDirection: "column", gap: "12px" } },
-          h(
-            "div",
-            { className: "pl-field" },
-            h("label", { className: "pl-field-label", textContent: "Operation" }),
-            selectFromOptions(FILE_OP_OPTIONS, block.operation, (v) =>
-              this.host.updateBlock(block.id, (b) => ({ ...(b as FileBlock), operation: v as FileOperation })),
-            ),
-          ),
-          h(
-            "div",
-            { className: "pl-field" },
-            h("label", { className: "pl-field-label", textContent: "Path (relative to workspace)" }),
-            bareTextInput(block.path, (v) =>
-              this.host.updateBlock(block.id, (b) => ({ ...(b as FileBlock), path: v })),
-            ),
-          ),
-        ),
-      ),
-    );
-
-    if (block.operation === "write") {
-      const content = boundTextarea(block.content, "File contents…", "pl-block-prompt", (v) =>
-        this.host.updateBlock(block.id, (b) => ({ ...(b as FileBlock), content: v })),
-      );
-      form.appendChild(inspectorSection(ICON_FILE_TEXT, "Content", h("div", {}, content, refHint())));
-    } else {
-      form.appendChild(
-        inspectorSection(
-          ICON_TAG,
-          "Output",
-          outputVarField(block.outputVar, (v) =>
-            this.host.updateBlock(block.id, (b) => ({ ...(b as FileBlock), outputVar: v })),
-          ),
-        ),
-      );
-    }
-
-    form.appendChild(dangerRemoveSection(() => this.host.removeBlock(block.id)));
     this.host.panelBody.appendChild(form);
   }
 

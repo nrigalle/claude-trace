@@ -83,6 +83,19 @@ describe("parseNativeLine — meta line handling", () => {
     parseNativeLine(JSON.stringify({ type: "ai-title", aiTitle: "Second" }), c);
     expect(c.aiTitle).toBe("Second");
   });
+
+  it("captures customTitle from a /rename custom-title record, last one wins", () => {
+    const c = ctx();
+    parseNativeLine(JSON.stringify({ type: "custom-title", customTitle: "Old name" }), c);
+    parseNativeLine(JSON.stringify({ type: "custom-title", customTitle: "Improve Claude Trace" }), c);
+    expect(c.customTitle).toBe("Improve Claude Trace");
+  });
+
+  it("ignores custom-title records with blank titles", () => {
+    const c = ctx();
+    parseNativeLine(JSON.stringify({ type: "custom-title", customTitle: "  " }), c);
+    expect(c.customTitle).toBeNull();
+  });
 });
 
 describe("parseNativeLine — timestamps", () => {

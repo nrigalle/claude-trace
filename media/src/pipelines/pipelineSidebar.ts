@@ -116,12 +116,17 @@ export class PipelineSidebar {
       ? `${Math.round((r.endedAtMs - r.startedAtMs) / 1000)}s`
       : null;
 
+    let mouseFocus = false;
     const nameInput = h("input", {
       className: "pl-run-name-edit",
       attrs: { type: "text", placeholder: runDisplayName("", r.pipelineName, r.startedAtMs), title: "Click to rename this run" },
       on: {
         click: (e: MouseEvent) => { e.stopPropagation(); },
-        focus: (e: FocusEvent) => { (e.currentTarget as HTMLInputElement).select(); },
+        mousedown: (e: MouseEvent) => { e.stopPropagation(); mouseFocus = true; },
+        focus: (e: FocusEvent) => {
+          if (!mouseFocus) (e.currentTarget as HTMLInputElement).select();
+          mouseFocus = false;
+        },
         change: (e: Event) => this.host.renameRun(r.runId, (e.currentTarget as HTMLInputElement).value),
         keydown: (e: KeyboardEvent) => {
           if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();

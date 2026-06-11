@@ -175,25 +175,37 @@ export class PipelineToolbar {
         })
       : null;
 
-    const resumeAction = run.status === "interrupted"
-      ? h("button", {
-          className: "pl-btn pl-btn-run",
-          attrs: { type: "button", title: "Resume this run from where it stopped" },
-          innerHTML: `<span class="pl-btn-icon">${ICON_PLAY}</span><span>Resume</span>`,
-          on: { click: () => this.host.resumeRun(run.runId) },
-        })
-      : null;
+    const resumeAction =
+      run.status === "interrupted" || run.status === "failed"
+        ? h("button", {
+            className: "pl-btn pl-btn-run",
+            attrs: {
+              type: "button",
+              title:
+                run.status === "failed"
+                  ? "Run the whole workflow again from the first step"
+                  : "Resume this run from where it stopped",
+            },
+            innerHTML: `<span class="pl-btn-icon">${ICON_PLAY}</span><span>${run.status === "failed" ? "Rerun" : "Resume"}</span>`,
+            on: { click: () => this.host.resumeRun(run.runId) },
+          })
+        : null;
 
     const statusPill = h("span", {
       className: `pl-status-pill pl-status-${run.status}`,
       textContent: run.status,
     });
 
+    let mouseFocus = false;
     const nameInput = h("input", {
       className: "pl-name-input pl-run-name-input",
       attrs: { type: "text", placeholder: run.pipelineSnapshot.name, title: "Click to rename this run" },
       on: {
-        focus: (e) => { (e.currentTarget as HTMLInputElement).select(); },
+        mousedown: () => { mouseFocus = true; },
+        focus: (e) => {
+          if (!mouseFocus) (e.currentTarget as HTMLInputElement).select();
+          mouseFocus = false;
+        },
         change: (e) => this.host.renameRun(run.runId, (e.currentTarget as HTMLInputElement).value),
         keydown: (e) => {
           const ev = e as KeyboardEvent;

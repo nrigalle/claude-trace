@@ -87,8 +87,9 @@ export class SessionService {
       }
 
       const events = this.reader.read(ref, stats);
-      const summary = summarize(ref.sessionId, events, stats.mtime, { title, pinned });
-      this.summaryCache.set(ref.sessionId, { mtime: stats.mtime, title, pinned, summary });
+      const freshTitle = this.titleFor(ref.sessionId);
+      const summary = summarize(ref.sessionId, events, stats.mtime, { title: freshTitle, pinned });
+      this.summaryCache.set(ref.sessionId, { mtime: stats.mtime, title: freshTitle, pinned, summary });
       summaries.push(summary);
     }
 
@@ -124,7 +125,7 @@ export class SessionService {
   }
 
   private titleFor(id: SessionId): string | null {
-    return this.overrides?.get(id) ?? this.reader.getTitle(id);
+    return this.reader.getCustomTitle(id) ?? this.overrides?.get(id) ?? this.reader.getTitle(id);
   }
 }
 

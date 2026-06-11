@@ -265,6 +265,7 @@ export interface BlockSessionRecord {
   readonly promptSent: string;
   readonly summary: string | null;
   readonly workerOutput: string | null;
+  readonly verdict?: SessionVerdict | null;
   readonly startedAtMs: number;
   readonly endedAtMs: number | null;
 }
@@ -293,6 +294,7 @@ export interface BlockRun {
   readonly parallel: ParallelRunState | null;
   readonly output: string | null;
   readonly logTail?: string | null;
+  readonly orchestratorSessionId?: string | null;
   readonly stuckReason: string | null;
   readonly failureReason: string | null;
   readonly startedAtMs: number | null;
@@ -341,5 +343,13 @@ export interface RunState {
 
 export type OrchestratorDecision =
   | { readonly kind: "success"; readonly summary: string }
+  | { readonly kind: "failed"; readonly reason: string }
   | { readonly kind: "needs-input"; readonly reason: string }
   | { readonly kind: "loop-done"; readonly summary: string };
+
+export type SessionVerdictKind = "success" | "failed" | "needs-input";
+
+export interface SessionVerdict {
+  readonly kind: SessionVerdictKind;
+  readonly detail: string;
+}

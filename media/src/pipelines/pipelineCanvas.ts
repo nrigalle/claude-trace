@@ -1,6 +1,5 @@
 import { setIfChanged } from "../ui/dom.js";
 import { h } from "../ui/h.js";
-import { clampConcurrency, POOL_MIN_CONCURRENCY, POOL_MAX_CONCURRENCY } from "../../../src/features/pipelines/domain/types";
 import type {
   Block,
   LoopBlock,
@@ -25,6 +24,7 @@ import {
   staticSublabel,
 } from "./pipelineRunState.js";
 import type { RunBlockState } from "./pipelineRunState.js";
+import { renderPoolExpanded, updatePoolInPlace, type PoolCanvasDeps } from "./poolCanvas.js";
 
 interface StaticNodeRefs {
   readonly bubbleEl: HTMLElement;
@@ -33,7 +33,6 @@ interface StaticNodeRefs {
   readonly kind: "start" | "end";
 }
 const staticNodeRefs = new WeakMap<HTMLElement, StaticNodeRefs>();
-const POOL_LANE_DISPLAY_CAP = 8;
 
 export interface CanvasHost {
   getZoom(): number;
@@ -596,190 +595,16 @@ export class PipelineCanvas {
   }
 
   renderPoolExpanded(block: PoolBlock, runState?: RunBlockState): HTMLElement {
-    const container = h("div", { className: "pl-parallel-block pl-pool-block", attrs: { "data-block-id": block.id } });
-    container.appendChild(this.renderPoolHeaderNode(block, runState));
-    container.appendChild(
-      h("div", {
-        className: "pl-pool-hint",
-        textContent: `Each agent grabs the next item${block.listVar ? ` from ${block.listVar}` : ""} until the list is empty.`,
-      }),
-    );
-    container.appendChild(this.renderConnector(null));
-
-    const isRunView = !!runState;
-    const concurrency = clampConcurrency(block.concurrency);
-    const lanes = h("div", { className: "pl-parallel-branches" });
-    const laneCount = Math.min(concurrency, POOL_LANE_DISPLAY_CAP);
-    for (let i = 0; i < laneCount; i += 1) {
-      lanes.appendChild(this.renderPoolLane(block, runState, !isRunView && concurrency > POOL_MIN_CONCURRENCY));
-    }
-    if (!isRunView && concurrency < POOL_MAX_CONCURRENCY) {
-      lanes.appendChild(
-        h("button", {
-          className: "pl-parallel-add-branch",
-          attrs: { type: "button", title: "Add a parallel agent" },
-          innerHTML: ICON_PLUS,
-          on: { click: () => this.host.setPoolConcurrency(block.id, concurrency + 1) },
-        }),
-      );
-    }
-    container.appendChild(lanes);
-
-    container.appendChild(this.renderConnector(null));
-    container.appendChild(this.renderPoolCollectNode(block, runState));
-    return container;
+    return renderPoolExpanded(this.poolCanvasDeps(), block, runState);
   }
 
-  private renderPoolHeaderNode(block: PoolBlock, runState?: RunBlockState): HTMLElement {
-    const isRunView = !!runState;
-    const isSelected = this.host.isBlockSelected(block.id);
-    const isAnchorCandidate = !isRunView && this.host.isLoopAnchorCandidate(block.id);
-    const classes = ["pl-node-bubble", "kind-pool", "clickable"];
-    if (isSelected) classes.push("selected");
-    if (isAnchorCandidate) classes.push("anchor-candidate");
-    const bubbleAttrs: Record<string, string> = {
-      role: "button",
-      "aria-label": `${isRunView ? "View" : "Edit"} ${block.name || "worker pool"}`,
-      "data-block-id": block.id,
+  private poolCanvasDeps(): PoolCanvasDeps {
+    return {
+      host: this.host,
+      connector: () => this.renderConnector(null),
+      removeButton: (blockId, label) => this.renderRemoveButton(blockId, label),
+      anchorDot: (blockId) => this.renderAnchorDot(blockId),
     };
-    if (runState) bubbleAttrs["data-status"] = runState.status;
-    const bubble = h("div", {
-      className: classes.join(" "),
-      innerHTML: ICON_PARALLEL,
-      on: {
-        click: () => {
-          if (this.host.getLoopDefineMode()) return;
-          if (isRunView) this.host.openRunBlockDetail(block.id);
-          else this.host.openInspector(block.id);
-        },
-      },
-      attrs: bubbleAttrs,
-    });
-    const concurrency = clampConcurrency(block.concurrency);
-    return h(
-      "div",
-      { className: "pl-node", attrs: { "data-block-id": block.id } },
-      h(
-        "div",
-        { className: "pl-node-bubble-wrap" },
-        bubble,
-        isRunView ? null : this.renderRemoveButton(block.id, "Remove worker pool"),
-        isAnchorCandidate ? this.renderAnchorDot(block.id) : null,
-      ),
-      h(
-        "div",
-        { className: "pl-node-label" },
-        h("span", { textContent: block.name || "Worker pool" }),
-        h(
-          "span",
-          { className: "pl-node-label-kind" },
-          h("span", { textContent: `Pool · ${concurrency} at a time` }),
-          runState ? this.renderPoolCounter(runState) : null,
-        ),
-      ),
-    );
-  }
-
-  private renderPoolCounter(runState: RunBlockState): HTMLElement | null {
-    const done = runState.poolDoneCount ?? 0;
-    const active = runState.poolActiveCount ?? 0;
-    if (done === 0 && active === 0) return null;
-    const allDone = active === 0 && done > 0 && runState.status === "done";
-    const label = active > 0 ? `${done} done · ${active} running` : `${done} done`;
-    return h(
-      "span",
-      { className: "pl-parallel-counter pl-pool-counter", attrs: allDone ? { "data-state": "done" } : {} },
-      active > 0 ? h("span", { className: "pl-spinner-dot" }) : null,
-      h("span", { textContent: label }),
-    );
-  }
-
-  private renderPoolLane(block: PoolBlock, runState?: RunBlockState, removable = false): HTMLElement {
-    const isRunView = !!runState;
-    const isSelected = this.host.isBlockSelected(block.id);
-    const classes = ["pl-node-bubble", "kind-worker", "clickable"];
-    if (isSelected) classes.push("selected");
-    const attrs: Record<string, string> = { role: "button", "aria-label": "Pool agent" };
-    if (runState) attrs["data-status"] = runState.status;
-    const bubble = h("div", {
-      className: classes.join(" "),
-      innerHTML: ICON_WORKER,
-      on: {
-        click: () => {
-          if (this.host.getLoopDefineMode()) return;
-          if (isRunView) this.host.openRunBlockDetail(block.id);
-          else this.host.openInspector(block.id);
-        },
-      },
-      attrs,
-    });
-    return h(
-      "div",
-      { className: "pl-parallel-branch" },
-      h(
-        "div",
-        { className: "pl-node" },
-        h(
-          "div",
-          { className: "pl-node-bubble-wrap" },
-          bubble,
-          removable
-            ? h("button", {
-                className: "pl-node-remove",
-                attrs: { type: "button", title: "Remove an agent", "aria-label": "Remove a pool agent" },
-                textContent: "−",
-                on: {
-                  click: (e) => {
-                    e.stopPropagation();
-                    this.host.setPoolConcurrency(block.id, clampConcurrency(block.concurrency) - 1);
-                  },
-                },
-              })
-            : null,
-        ),
-        h(
-          "div",
-          { className: "pl-node-label" },
-          h("span", { textContent: "Agent" }),
-          h("span", { className: "pl-node-label-kind", textContent: "pulls next item" }),
-        ),
-      ),
-    );
-  }
-
-  private renderPoolCollectNode(block: PoolBlock, runState?: RunBlockState): HTMLElement {
-    const isRunView = !!runState;
-    const isSelected = this.host.isBlockSelected(block.id);
-    const classes = ["pl-node-bubble", "kind-pool-collect", "clickable"];
-    if (isSelected) classes.push("selected");
-    const attrs: Record<string, string> = { role: "button", "aria-label": `${isRunView ? "View" : "Edit"} collect step` };
-    if (runState) attrs["data-status"] = runState.status;
-    const bubble = h("div", {
-      className: classes.join(" "),
-      innerHTML: ICON_MERGER,
-      on: {
-        click: () => {
-          if (this.host.getLoopDefineMode()) return;
-          if (isRunView) this.host.openRunBlockDetail(block.id);
-          else this.host.openInspector(block.id);
-        },
-      },
-      attrs,
-    });
-    return h(
-      "div",
-      { className: "pl-node" },
-      bubble,
-      h(
-        "div",
-        { className: "pl-node-label" },
-        h("span", { textContent: "Collect" }),
-        h("span", {
-          className: "pl-node-label-kind",
-          textContent: block.outputVar ? `outputs in order → ${block.outputVar}` : "outputs in list order",
-        }),
-      ),
-    );
   }
 
   renderConnector(insert: { insertIndex: number } | null): HTMLElement {
@@ -893,24 +718,8 @@ export class PipelineCanvas {
   }
 
   private updatePoolInPlace(block: PoolBlock, runState: RunBlockState): void {
-    const stack = this.currentStack;
-    if (!stack) return;
-    const wrapper = stack.querySelector<HTMLElement>(`.pl-pool-block[data-block-id="${CSS.escape(block.id)}"]`);
-    if (!wrapper) return;
-    const header = wrapper.querySelector<HTMLElement>(`.pl-node-bubble.kind-pool[data-block-id="${CSS.escape(block.id)}"]`);
-    if (header) header.setAttribute("data-status", runState.status);
-    wrapper.querySelectorAll<HTMLElement>(".pl-parallel-branch .pl-node-bubble.kind-worker").forEach((b) => {
-      b.setAttribute("data-status", runState.status);
-    });
-    const collect = wrapper.querySelector<HTMLElement>(".pl-node-bubble.kind-pool-collect");
-    if (collect) collect.setAttribute("data-status", runState.status);
-    const counter = wrapper.querySelector(".pl-pool-counter");
-    const fresh = this.renderPoolCounter(runState);
-    if (counter && fresh) counter.replaceWith(fresh);
-    else if (counter && !fresh) counter.remove();
-    else if (!counter && fresh) {
-      wrapper.querySelector(".pl-node-label .pl-node-label-kind")?.appendChild(fresh);
-    }
+    if (!this.currentStack) return;
+    updatePoolInPlace(this.currentStack, block, runState);
   }
 
   private updateOrchSatelliteInPlace(node: HTMLElement, status: string | undefined): void {

@@ -6,6 +6,7 @@ import {
   applyBlockStopped,
   applyDecision,
   applyInterrupted,
+  applyPoolOrchestrator,
   applyResumeInterrupted,
   initialRunState,
   nextPendingBlock,
@@ -233,6 +234,47 @@ describe("failure paths", () => {
     expect(r.blocks[1]!.status).toBe("pending");
     expect(r.blocks[2]!.status).toBe("pending");
     expect(nextPendingBlock(r)).toBe(toBlockId("b"));
+  });
+
+  it("applyResumeInterrupted keeps a worker block's session thread so the linear resume can continue it", () => {
+    let s = initialRunState(threeStep(), toRunId("r1"), 0);
+    s = applyBlockSpawned(s, toBlockId("a"), "session-a", "p", 0);
+    s = applyInterrupted(s, 500);
+    const r = applyResumeInterrupted(s);
+    expect(r.blocks[0]!.sessions, "worker sessions survive resume for --resume continuity").toHaveLength(1);
+  });
+
+  it("applyResumeInterrupted clears stale sessions on pool blocks so a resumed pool does not show ghost iterations", () => {
+    const p: Pipeline = {
+      id: toPipelineId("p-pool"),
+      name: "Pool",
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      blocks: [
+        {
+          id: toBlockId("pool"),
+          kind: "pool",
+          name: "Drain",
+          listVar: "rows",
+          itemVar: "item",
+          concurrency: 2,
+          prompt: "Process ${vars.item}",
+          model: "default",
+          effort: "medium",
+          outputVar: "results",
+        },
+      ],
+      triggers: [],
+    };
+    let s = initialRunState(p, toRunId("r2"), 0);
+    s = applyBlockSpawned(s, toBlockId("pool"), "frozen-1", "p", 0);
+    s = applyBlockSpawned(s, toBlockId("pool"), "frozen-2", "p", 0);
+    s = applyPoolOrchestrator(s, toBlockId("pool"), "orch-old");
+    s = applyInterrupted(s, 500);
+    const r = applyResumeInterrupted(s);
+    expect(r.blocks[0]!.status).toBe("pending");
+    expect(r.blocks[0]!.sessions, "ghost sessions from the frozen attempt must not count as iterations").toHaveLength(0);
+    expect(r.blocks[0]!.orchestratorSessionId).toBeNull();
   });
 });
 

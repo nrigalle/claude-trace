@@ -31,16 +31,18 @@ const path = require('path');
 const crypto = require('crypto');
 
 const projectsDir = process.env.MOCK_PROJECTS_DIR;
+const signalsDir = process.env.MOCK_SIGNALS_DIR;
 const responseMap = JSON.parse(process.env.MOCK_RESPONSE_MAP || '{}');
 const cwd = process.cwd();
 
 const argv = process.argv.slice(2);
-const knownFlagsWithValue = new Set(['--effort', '--model', '--resume', '--permission-mode']);
+const knownFlagsWithValue = new Set(['--effort', '--model', '--resume', '--permission-mode', '--session-id', '--settings']);
 const knownBoolFlags = new Set(['--dangerously-skip-permissions']);
+const flagValues = {};
 const positionalArgs = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
-  if (knownFlagsWithValue.has(a)) { i++; continue; }
+  if (knownFlagsWithValue.has(a)) { flagValues[a] = argv[i + 1]; i++; continue; }
   if (knownBoolFlags.has(a)) continue;
   if (a.startsWith('--')) continue;
   positionalArgs.push(a);
@@ -51,27 +53,32 @@ const encodeCwd = (c) => c.replace(/[^a-zA-Z0-9]/g, '-');
 const cwdDir = path.join(projectsDir, encodeCwd(cwd));
 fs.mkdirSync(cwdDir, { recursive: true });
 
-const sessionId = crypto.randomUUID();
-fs.appendFileSync(path.join(projectsDir, '_history.txt'), positionalPrompt + '\\n---\\n');
+const sessionId = flagValues['--resume'] || flagValues['--session-id'] || crypto.randomUUID();
+const marker = (kind) => {
+  if (!signalsDir) return;
+  fs.mkdirSync(signalsDir, { recursive: true });
+  fs.writeFileSync(path.join(signalsDir, sessionId + '.' + kind), '');
+};
 
-const findResponse = () => {
-  if (positionalPrompt.includes('Claude Trace workflow orchestrator')) {
+const findResponse = (prompt) => {
+  if (prompt.includes('Claude Trace workflow orchestrator')) {
     return responseMap['__orchestrator__'] || 'SUCCESS: judged ok';
   }
   for (const key of Object.keys(responseMap)) {
     if (key === '__orchestrator__') continue;
-    if (positionalPrompt.includes(key)) return responseMap[key];
+    if (prompt.includes(key)) return responseMap[key];
   }
   return 'fallback response';
 };
 
-setTimeout(() => {
-  if (positionalPrompt.length === 0) return;
-  const reply = findResponse();
+const answer = (prompt) => {
+  if (prompt.length === 0) return;
+  fs.appendFileSync(path.join(projectsDir, '_history.txt'), prompt + '\\n---\\n');
+  const reply = findResponse(prompt);
   const now = new Date().toISOString();
   const jsonlPath = path.join(cwdDir, sessionId + '.jsonl');
   const events = [
-    { type: 'user', message: { role: 'user', content: positionalPrompt }, timestamp: now, sessionId },
+    { type: 'user', message: { role: 'user', content: prompt }, timestamp: now, sessionId },
     {
       type: 'assistant',
       message: {
@@ -83,8 +90,28 @@ setTimeout(() => {
       sessionId,
     },
   ];
-  fs.writeFileSync(jsonlPath, events.map((e) => JSON.stringify(e)).join('\\n') + '\\n');
+  fs.appendFileSync(jsonlPath, events.map((e) => JSON.stringify(e)).join('\\n') + '\\n');
+  setTimeout(() => marker('stop'), 20);
+};
+
+setTimeout(() => {
+  if (!flagValues['--resume']) {
+    fs.appendFileSync(path.join(cwdDir, sessionId + '.jsonl'), '');
+  }
+  marker('start');
+  if (positionalPrompt.length > 0) setTimeout(() => answer(positionalPrompt), 30);
 }, 50);
+
+let buffered = '';
+process.stdin.on('data', (chunk) => {
+  buffered += chunk.toString('utf8');
+  const endIdx = buffered.indexOf('\\u001b[201~');
+  if (endIdx < 0) return;
+  const startIdx = buffered.indexOf('\\u001b[200~');
+  const prompt = buffered.slice(startIdx >= 0 ? startIdx + 6 : 0, endIdx);
+  buffered = '';
+  setTimeout(() => answer(prompt), 30);
+});
 
 process.on('SIGTERM', () => process.exit(0));
 process.stdin.on('end', () => process.exit(0));
@@ -144,6 +171,7 @@ beforeEach(() => {
   __testState.mockBinary = mockScript;
 
   process.env.MOCK_PROJECTS_DIR = projectsDir;
+  process.env.MOCK_SIGNALS_DIR = path.join(tmpRoot, "run-signals");
 
   host = new MockHost();
   pipelineStore = new PipelineStore(path.join(tmpRoot, "automations"));
@@ -151,6 +179,9 @@ beforeEach(() => {
   runner = new RealAutomationRunner({
     claudeCommand: "MOCK_CLAUDE",
     projectsDir,
+    hooksDir: path.join(tmpRoot, "run-hooks"),
+    signalsDir: path.join(tmpRoot, "run-signals"),
+    claudeConfigPath: path.join(tmpRoot, "claude.json"),
   });
   clockMs = 1000;
   runIdCounter = 0;
@@ -250,6 +281,7 @@ describe("end-to-end workflow against a mock claude binary — the whole pipelin
     expect(w3!).toContain("Critique");
     expect(w3!).toContain("CRITIQUE: Too generic — replace with something concrete.");
 
+    await __waitForProcessesToExit();
     expect(
       __testState.processes.size,
       `every spawned claude process must be killed when the run finishes — found ${__testState.processes.size} still alive`,
@@ -326,6 +358,7 @@ describe("end-to-end workflow against a mock claude binary — the whole pipelin
       ).toBe(true);
     }
 
+    await __waitForProcessesToExit();
     expect(__testState.processes.size).toBe(0);
     ctrl.dispose();
   }, 60000);
@@ -422,6 +455,7 @@ describe("end-to-end workflow against a mock claude binary — the whole pipelin
       expect(clarityPrompts[1]!).toContain("Seed");
     }
 
+    await __waitForProcessesToExit();
     expect(
       __testState.processes.size,
       `every claude process spawned during the stress run must be cleaned up — found ${__testState.processes.size} leaking`,
@@ -466,6 +500,7 @@ describe("end-to-end workflow against a mock claude binary — the whole pipelin
       expect(step5Prompt!, `step 5 must reference upstream block ${earlier}`).toContain(earlier);
     }
 
+    await __waitForProcessesToExit();
     expect(__testState.processes.size).toBe(0);
     ctrl.dispose();
   }, 90000);
@@ -503,8 +538,50 @@ describe("end-to-end workflow against a mock claude binary — the whole pipelin
     expect(w2!).toContain("<previous_steps>");
     expect(w2!).toContain("result one");
 
+    await __waitForProcessesToExit();
     expect(__testState.processes.size).toBe(0);
 
     ctrl.dispose();
   }, 60000);
+});
+
+describe("Stop kills everything — the user guarantee", () => {
+  it("killRun terminates EVERY spawned claude process immediately, even sessions that never initialised, and marks all blocks interrupted", async () => {
+    process.env.MOCK_BOOT_MS = "8000";
+    const ctrl = buildController();
+    const p: Pipeline = {
+      id: toPipelineId("p-kill-all"),
+      name: "Kill guarantee",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      triggers: [],
+      blocks: [
+        {
+          id: toBlockId("fan"),
+          kind: "parallel",
+          name: "Fan out",
+          workers: [worker("w1", "Slow 1", "never finishes one"), worker("w2", "Slow 2", "never finishes two")],
+          mergerGoal: "merge results",
+          mergerModel: "claude-sonnet-4-6",
+        },
+      ],
+    };
+    pipelineStore.save(p);
+
+    host.send({ type: "runPipeline", pipelineId: p.id });
+    await waitFor(() => (__testState.processes.size >= 2 ? true : null), 15000);
+
+    const runId = [...host.messages].reverse().flatMap((m) => (m.type === "runUpdate" ? [m.run.runId] : []))[0]!;
+    expect(runId).toBeDefined();
+    host.send({ type: "killRun", runId });
+
+    await __waitForProcessesToExit();
+    expect(__testState.processes.size, "no claude process may survive a Stop — ever").toBe(0);
+
+    await waitFor(() => (host.lastRunStatus() === "interrupted" ? true : null), 5000);
+    const final = [...host.messages].reverse().flatMap((m) => (m.type === "runUpdate" ? [m.run] : []))[0]!;
+    expect(final.blocks.every((b) => b.status === "interrupted"), "every not-done block reads interrupted after Stop").toBe(true);
+
+    ctrl.dispose();
+  }, 30000);
 });

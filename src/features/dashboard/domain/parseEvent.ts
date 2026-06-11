@@ -15,6 +15,7 @@ export interface ParseContext {
   maxTotalInputTokens: number;
   lastModel: string | null;
   aiTitle: string | null;
+  customTitle: string | null;
   firstUserText: string | null;
   fileEdits: RawFileEdit[];
 }
@@ -31,6 +32,7 @@ export const createParseContext = (sessionId: SessionId): ParseContext => ({
   maxTotalInputTokens: 0,
   lastModel: null,
   aiTitle: null,
+  customTitle: null,
   firstUserText: null,
   fileEdits: [],
 });
@@ -49,6 +51,12 @@ export const parseNativeLine = (line: string, ctx: ParseContext): TraceEvent[] =
   if (type === "ai-title") {
     const title = raw["aiTitle"];
     if (typeof title === "string" && title.length > 0) ctx.aiTitle = title;
+    return [];
+  }
+
+  if (type === "custom-title") {
+    const title = raw["customTitle"];
+    if (typeof title === "string" && title.trim().length > 0) ctx.customTitle = title.trim();
     return [];
   }
 

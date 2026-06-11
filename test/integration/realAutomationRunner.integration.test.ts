@@ -28,12 +28,13 @@ if (effortFlagIdx !== -1) {
   }
 }
 
-const knownFlagsWithValue = new Set(['--effort', '--model', '--resume', '--permission-mode']);
+const knownFlagsWithValue = new Set(['--effort', '--model', '--resume', '--permission-mode', '--session-id', '--settings']);
 const knownBoolFlags = new Set(['--dangerously-skip-permissions']);
+const flagValues = {};
 const positionalArgs = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
-  if (knownFlagsWithValue.has(a)) { i++; continue; }
+  if (knownFlagsWithValue.has(a)) { flagValues[a] = argv[i + 1]; i++; continue; }
   if (knownBoolFlags.has(a)) continue;
   if (a.startsWith('--')) continue;
   positionalArgs.push(a);
@@ -44,7 +45,13 @@ const encodeCwd = (c) => c.replace(/[^a-zA-Z0-9]/g, '-');
 const cwdDir = path.join(projectsDir, encodeCwd(cwd));
 fs.mkdirSync(cwdDir, { recursive: true });
 
-const sessionId = crypto.randomUUID();
+const sessionId = flagValues['--resume'] || flagValues['--session-id'] || crypto.randomUUID();
+const signalsDir = process.env.MOCK_SIGNALS_DIR;
+const marker = (kind) => {
+  if (!signalsDir) return;
+  fs.mkdirSync(signalsDir, { recursive: true });
+  fs.writeFileSync(path.join(signalsDir, sessionId + '.' + kind), '');
+};
 let firstInputProcessed = false;
 
 const writeJsonlOnce = (line) => {
@@ -71,9 +78,12 @@ const writeJsonlOnce = (line) => {
     },
   ];
   fs.writeFileSync(jsonlPath, events.map((e) => JSON.stringify(e)).join('\\n') + '\\n');
+  setTimeout(() => marker('stop'), 20);
 };
 
 setTimeout(() => {
+  fs.appendFileSync(path.join(cwdDir, sessionId + '.jsonl'), '');
+  if (!process.env.MOCK_SKIP_START_MARKER) marker('start');
   if (positionalPrompt.length > 0) {
     writeJsonlOnce(positionalPrompt);
   } else {
@@ -84,6 +94,18 @@ setTimeout(() => {
 let buffer = '';
 process.stdin.on('data', (chunk) => {
   buffer += chunk.toString();
+  const pasteEnd = buffer.indexOf('\\u001b[201~');
+  if (pasteEnd >= 0) {
+    const pasteStart = buffer.indexOf('\\u001b[200~');
+    const prompt = buffer.slice(pasteStart >= 0 ? pasteStart + 6 : 0, pasteEnd);
+    buffer = '';
+    if (prompt.startsWith('/effort')) {
+      process.stderr.write('MOCK_REJECTED: /effort should be a CLI flag, not a TUI slash command\\n');
+      process.exit(2);
+    }
+    writeJsonlOnce(prompt);
+    return;
+  }
   while (buffer.includes('\\n')) {
     const idx = buffer.indexOf('\\n');
     const line = buffer.slice(0, idx);
@@ -119,13 +141,18 @@ beforeEach(() => {
   __testState.mockBinary = mockScript;
 
   process.env.MOCK_PROJECTS_DIR = projectsDir;
+  process.env.MOCK_SIGNALS_DIR = path.join(tmpRoot, "run-signals");
   process.env.MOCK_TRUST_DIALOG = "0";
   process.env.MOCK_BOOT_MS = "80";
   process.env.MOCK_RESPONSE_LINES = JSON.stringify(["all done"]);
+  delete process.env.MOCK_SKIP_START_MARKER;
 
   runner = new RealAutomationRunner({
     claudeCommand: "MOCK_CLAUDE",
     projectsDir,
+    hooksDir: path.join(tmpRoot, "run-hooks"),
+    signalsDir: path.join(tmpRoot, "run-signals"),
+    claudeConfigPath: path.join(tmpRoot, "claude.json"),
   });
 });
 
@@ -143,7 +170,7 @@ const newWorkerCwd = (suffix: string): string => {
 };
 
 describe("RealAutomationRunner — end-to-end against a mock claude binary", () => {
-  it("the initial prompt rides on the claude CLI itself as a positional arg — no TUI typing, no separate send step", async () => {
+  it("the prompt rides the CLI as a QUOTED positional arg — typed pty pastes never submit in the real claude TUI", async () => {
     const handle = await runner.spawn({
       runId: toRunId("r1"),
       blockId: toBlockId("b1"),
@@ -161,13 +188,14 @@ describe("RealAutomationRunner — end-to-end against a mock claude binary", () 
     const launchEntries = __testState.sentTexts.filter((s) => s.text.startsWith("MOCK_CLAUDE"));
     expect(launchEntries.length, "exactly one MOCK_CLAUDE invocation").toBe(1);
     expect(launchEntries[0]!.text).toContain("'Hello world prompt'");
+    expect(launchEntries[0]!.text).toContain("--session-id");
+    expect(launchEntries[0]!.text).toContain("--settings");
 
-    const promptOnlyEntries = __testState.sentTexts.filter((s) => s.text === "Hello world prompt");
-    expect(promptOnlyEntries.length, "prompt must NOT be typed into the TUI separately").toBe(0);
+    const pasteEntries = __testState.sentTexts.filter((s) => s.text.includes("[200~"));
+    expect(pasteEntries, "no bracketed-paste delivery for workflow sessions").toHaveLength(0);
 
-    const submitEntries = __testState.sentTexts.filter((s) => s.text === "" && s.addNewLine);
-    expect(submitEntries.length, "no separate Enter-press should be sent").toBe(0);
-
+    const turnEnd = await handle.waitForTurnEnd(Date.now() - 5000, new AbortController().signal);
+    expect(turnEnd).toBe("stopped");
     const content = fs.readFileSync(handle.jsonlPath, "utf8");
     expect(content).toContain("Hello world prompt");
   });
@@ -244,6 +272,7 @@ describe("RealAutomationRunner — end-to-end against a mock claude binary", () 
     expect(__testState.sentTexts.some((s) => s.text === "/effort low")).toBe(false);
     expect(__testState.sentTexts.some((s) => s.text.includes("/effort"))).toBe(false);
 
+    await handle.waitForTurnEnd(Date.now() - 5000, new AbortController().signal);
     const content = fs.readFileSync(handle.jsonlPath, "utf8");
     expect(content).toContain("Write one tagline (max 8 words)");
     expect(content).not.toContain("/effort");
@@ -261,11 +290,63 @@ describe("RealAutomationRunner — end-to-end against a mock claude binary", () 
       resumeSessionId: null,
       signal: new AbortController().signal,
     });
+    await handle.waitForTurnEnd(Date.now() - 5000, new AbortController().signal);
     const content = fs.readFileSync(handle.jsonlPath, "utf8");
     const userEventLine = content.split("\n").find((l) => l.includes('"type":"user"'));
     expect(userEventLine).toBeDefined();
     const parsed = JSON.parse(userEventLine!) as { message: { content: string } };
     expect(parsed.message.content).toBe(trickyPrompt);
+  });
+
+  it("fails fast with a clear startup error when Claude never initialises (the folder-trust hang class)", async () => {
+    process.env.MOCK_SKIP_START_MARKER = "1";
+    const fast = new RealAutomationRunner({
+      claudeCommand: "MOCK_CLAUDE",
+      projectsDir,
+      hooksDir: path.join(tmpRoot, "run-hooks"),
+      signalsDir: path.join(tmpRoot, "run-signals"),
+      claudeConfigPath: path.join(tmpRoot, "claude.json"),
+      initDeadlineMs: 500,
+    });
+    try {
+      await expect(
+        fast.spawn({
+          runId: toRunId("r-hang"),
+          blockId: toBlockId("b-hang"),
+          cwd: newWorkerCwd("work-hang"),
+          prompt: "never delivered",
+          model: "default",
+          effort: "medium",
+          resumeSessionId: null,
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow(/did not start a session within/);
+    } finally {
+      delete process.env.MOCK_SKIP_START_MARKER;
+      fast.dispose();
+      await __waitForProcessesToExit();
+    }
+  });
+
+  it("pre-trusts the spawn cwd in the claude config so hidden sessions never hit the folder-trust dialog", async () => {
+    const cwd = newWorkerCwd("work-trust");
+    const handle = await runner.spawn({
+      runId: toRunId("r-trust"),
+      blockId: toBlockId("b-trust"),
+      cwd,
+      prompt: "hello",
+      model: "default",
+      effort: "medium",
+      resumeSessionId: null,
+      signal: new AbortController().signal,
+    });
+    const cfg = JSON.parse(fs.readFileSync(path.join(tmpRoot, "claude.json"), "utf8")) as {
+      projects: Record<string, { hasTrustDialogAccepted?: boolean }>;
+    };
+    const trustedDirs = Object.keys(cfg.projects);
+    expect(trustedDirs.length).toBeGreaterThan(0);
+    expect(trustedDirs.every((d) => cfg.projects[d]!.hasTrustDialogAccepted === true)).toBe(true);
+    handle.dispose();
   });
 
   it("every supported effort level lands in the --effort CLI flag without ever pasting a /effort line into the conversation", async () => {

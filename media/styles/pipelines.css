@@ -1302,6 +1302,9 @@
 }
 .pl-pool-counter { background: rgba(45, 212, 191, 0.18); color: #99f6e4; }
 .pl-pool-counter[data-state="done"] { background: rgba(16, 185, 129, 0.22); color: #6ee7b7; }
+.pl-pool-orch .pl-node-bubble { width: 34px; height: 34px; }
+.pl-pool-orch-bubble[data-status="failed"] { background: rgba(248, 113, 113, 0.18); border-color: #f87171; color: #fca5a5; }
+.pl-pool-orch-verdicts[data-state="failed"] { color: #fca5a5; }
 
 .pl-run-log {
   font-family: var(--ct-mono);

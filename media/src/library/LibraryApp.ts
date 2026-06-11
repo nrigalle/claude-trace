@@ -5,8 +5,6 @@ import {
   type AgentName,
   type Frontmatter,
   type LibrarySnapshot,
-  type ProjectPath,
-  type Scope,
   type SkillItem,
   type SkillName,
 } from "../../../src/features/library/domain/types";
@@ -19,9 +17,17 @@ import type {
 import { assertNever } from "../../../src/shared/assertNever";
 import { clear, h } from "../ui/h.js";
 import { attachTip } from "../ui/tooltip.js";
-import { askConfirm, askName } from "../ui/modal.js";
+import { askConfirm } from "../ui/modal.js";
 import { AssistantPanel } from "./AssistantPanel.js";
-import { descriptionOf } from "./libraryHelpers.js";
+import { askLibraryItemName } from "./libraryDialogs.js";
+import {
+  filteredSkills,
+  filteredAgents,
+  rebuildFilterOptions,
+  reconcileFilter,
+  filterFromOptionValue,
+  type ProjectFilter,
+} from "./libraryFilters.js";
 import { renderAgentHotReloadWarning, renderEditorTabs, renderEmptyHelp, renderResourceList, renderSkillHotReloadHint } from "./libraryEditorParts.js";
 import { buildImportSheet } from "./libraryImport.js";
 import { renderBodyEditor, renderFrontmatterForm } from "./libraryFrontmatterForm.js";
@@ -38,11 +44,6 @@ type Send = (msg: LibraryWebviewToHost) => void;
 
 type Tab = "skills" | "agents";
 type EditorTab = "edit" | "assignments";
-type ProjectFilter =
-  | { readonly kind: "all" }
-  | { readonly kind: "global" }
-  | { readonly kind: "unassigned" }
-  | { readonly kind: "project"; readonly path: ProjectPath };
 
 interface LibraryAppDeps {
   readonly send: Send;
@@ -521,62 +522,25 @@ export class LibraryApp {
   }
 
   private filteredSkills(): readonly SkillItem[] {
-    return this.snapshot.skills.filter((s) =>
-      scopeMatches(this.projectFilter, s.scope) &&
-      (this.query === "" || matchesQuery(this.query, [s.name as string, descriptionOf(s.frontmatter), s.body])),
-    );
+    return filteredSkills(this.snapshot, this.projectFilter, this.query);
   }
 
   private filteredAgents(): readonly AgentItem[] {
-    return this.snapshot.agents.filter((a) =>
-      scopeMatches(this.projectFilter, a.scope) &&
-      (this.query === "" || matchesQuery(this.query, [a.name as string, descriptionOf(a.frontmatter), a.body])),
-    );
+    return filteredAgents(this.snapshot, this.projectFilter, this.query);
   }
 
   private rebuildFilterOptions(): void {
     if (!this.filterSelect) return;
-    const select = this.filterSelect;
-    const current = select.value;
-    clear(select);
-    select.appendChild(makeOption("all", "All"));
-    select.appendChild(makeOption("global", "Global (~/.claude)"));
-    select.appendChild(makeOption("unassigned", "Unassigned"));
-    if (this.snapshot.projects.length > 0) {
-      const group = document.createElement("optgroup");
-      group.label = "Projects";
-      for (const p of this.snapshot.projects) {
-        const o = makeOption(`project:${p.path as string}`, p.label);
-        o.title = p.path as string;
-        group.appendChild(o);
-      }
-      select.appendChild(group);
-    }
-    const desired = filterToOptionValue(this.projectFilter);
-    if (current && [...select.options].some((o) => o.value === desired)) {
-      select.value = desired;
-    } else {
-      select.value = "all";
-    }
+    rebuildFilterOptions(this.filterSelect, this.snapshot, this.projectFilter);
   }
 
   private reconcileFilter(): void {
-    if (this.projectFilter.kind !== "project") return;
-    const stillExists = this.snapshot.projects.some(
-      (p) => (p.path as string) === (this.projectFilter as { readonly path: ProjectPath }).path as string,
-    );
-    if (!stillExists) this.projectFilter = { kind: "all" };
+    this.projectFilter = reconcileFilter(this.snapshot, this.projectFilter);
   }
 
   private applyFilterFromSelect(): void {
     if (!this.filterSelect) return;
-    const v = this.filterSelect.value;
-    if (v === "all") this.projectFilter = { kind: "all" };
-    else if (v === "global") this.projectFilter = { kind: "global" };
-    else if (v === "unassigned") this.projectFilter = { kind: "unassigned" };
-    else if (v.startsWith("project:")) {
-      this.projectFilter = { kind: "project", path: v.slice("project:".length) as ProjectPath };
-    }
+    this.projectFilter = filterFromOptionValue(this.filterSelect.value, this.projectFilter);
     this.renderList();
   }
 
@@ -761,27 +725,8 @@ export class LibraryApp {
   }
 
   private async startNew(): Promise<void> {
-    const which = this.tab === "skills" ? "skill" : "agent";
-    const raw = await askName(this.root, {
-      title: `New ${which}`,
-      description: "Lowercase letters, digits, and hyphens. This becomes the directory name and the command Claude uses.",
-      placeholder: which === "skill" ? "e.g. code-review" : "e.g. reviewer",
-      confirmLabel: `Create ${which}`,
-      validate: (value) => {
-        const n = normalizeName(value);
-        if (n === "") return "Name is required.";
-        if (this.tab === "skills" && this.snapshot.skills.some((s) => (s.name as string) === n)) {
-          return `A skill named "${n}" already exists.`;
-        }
-        if (this.tab === "agents" && this.snapshot.agents.some((a) => (a.name as string) === n)) {
-          return `An agent named "${n}" already exists.`;
-        }
-        return null;
-      },
-    });
-    if (raw === null) return;
-    const normalized = normalizeName(raw);
-    if (normalized === "") return;
+    const normalized = await askLibraryItemName(this.root, this.snapshot, this.tab, { mode: "create" });
+    if (normalized === null) return;
     if (this.tab === "skills") {
       this.selectedSkill = toSkillName(normalized);
       this.deps.send({ type: "createSkill", name: normalized });
@@ -792,28 +737,8 @@ export class LibraryApp {
   }
 
   private async startRename(currentName: string): Promise<void> {
-    const which = this.tab === "skills" ? "skill" : "agent";
-    const raw = await askName(this.root, {
-      title: `Rename ${which}`,
-      description: "Lowercase letters, digits, and hyphens. Renaming also moves the files in every assigned target.",
-      initial: currentName,
-      confirmLabel: "Rename",
-      validate: (value) => {
-        const n = normalizeName(value);
-        if (n === "") return "Name is required.";
-        if (n === currentName) return "Pick a different name to rename.";
-        if (this.tab === "skills" && this.snapshot.skills.some((s) => (s.name as string) === n)) {
-          return `A skill named "${n}" already exists.`;
-        }
-        if (this.tab === "agents" && this.snapshot.agents.some((a) => (a.name as string) === n)) {
-          return `An agent named "${n}" already exists.`;
-        }
-        return null;
-      },
-    });
-    if (raw === null) return;
-    const normalized = normalizeName(raw);
-    if (normalized === "" || normalized === currentName) return;
+    const normalized = await askLibraryItemName(this.root, this.snapshot, this.tab, { mode: "rename", currentName });
+    if (normalized === null) return;
     if (this.tab === "skills" && this.selectedSkill) {
       this.deps.send({ type: "renameSkill", from: this.selectedSkill, to: normalized });
       this.selectedSkill = toSkillName(normalized);
@@ -869,33 +794,4 @@ export class LibraryApp {
   }
 }
 
-const normalizeName = (raw: string): string =>
-  raw.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
 
-const makeOption = (value: string, label: string): HTMLOptionElement => {
-  const o = document.createElement("option");
-  o.value = value;
-  o.textContent = label;
-  return o;
-};
-
-const filterToOptionValue = (f: ProjectFilter): string => {
-  if (f.kind === "project") return `project:${f.path as string}`;
-  return f.kind;
-};
-
-const scopeMatches = (f: ProjectFilter, scope: Scope): boolean => {
-  if (f.kind === "all") return true;
-  if (f.kind === "unassigned") return scope.kind === "unassigned" || (scope.kind === "projects" && scope.paths.length === 0);
-  if (f.kind === "global") return scope.kind === "global";
-  if (scope.kind !== "projects") return false;
-  return scope.paths.some((p) => (p as string) === (f.path as string));
-};
-
-
-const matchesQuery = (q: string, parts: readonly string[]): boolean => {
-  for (const p of parts) {
-    if (typeof p === "string" && p.toLowerCase().includes(q)) return true;
-  }
-  return false;
-};

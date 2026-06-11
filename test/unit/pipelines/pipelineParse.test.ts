@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   parsePipeline,
-  parseRunState,
   serializePipeline,
-  serializeRunState,
 } from "../../../src/features/pipelines/domain/parse";
+import {
+  parseRunState,
+  serializeRunState,
+} from "../../../src/features/pipelines/domain/parseRun";
 import {
   toBlockId,
   toPipelineId,

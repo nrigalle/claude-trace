@@ -208,7 +208,55 @@ export class RunDetailPanel {
       );
     }
 
+    if (blockRun.orchestratorSessionId) {
+      form.appendChild(
+        inspectorSection(
+          ICON_SLIDERS,
+          "Orchestrator",
+          this.renderOrchestratorCard(blockRun.orchestratorSessionId),
+        ),
+      );
+    }
+
     this.host.panelBody.appendChild(form);
+  }
+
+  private renderOrchestratorCard(sessionId: string): HTMLElement {
+    const card = h("div", {
+      style: {
+        background: "var(--ct-bg-2)",
+        border: "1px solid var(--ct-border)",
+        borderRadius: "var(--ct-radius-sm)",
+        padding: "12px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "10px",
+      },
+    });
+    card.appendChild(
+      h("div", {
+        className: "pl-field-hint",
+        style: { margin: "0" },
+        textContent: "One Claude session reviewed every agent's result for this pool. Its verdicts appear on each session above.",
+      }),
+    );
+    const cached = this.transcripts.get(sessionId);
+    card.appendChild(
+      h(
+        "div",
+        { className: "pl-field" },
+        h("label", { className: "pl-field-label", textContent: "Judgments" }),
+        cached !== undefined
+          ? h("pre", { className: "pl-run-log", textContent: cached })
+          : h("button", {
+              className: "pl-btn",
+              attrs: { type: "button", title: "Read the orchestrator's session without resuming it" },
+              textContent: "Read session",
+              on: { click: () => this.host.send({ type: "loadSessionTranscript", sessionId }) },
+            }),
+      ),
+    );
+    return card;
   }
 
   private renderInputForm(runId: RunId, definition: InputBlock): HTMLElement {
@@ -375,7 +423,39 @@ export class RunDetailPanel {
       );
     }
 
-    if (session.summary) {
+    if (session.verdict) {
+      const verdictColor =
+        session.verdict.kind === "success"
+          ? "var(--ct-success, #4ade80)"
+          : session.verdict.kind === "failed"
+            ? "var(--ct-danger, #f87171)"
+            : "var(--ct-warning, #fbbf24)";
+      const verdictLabel =
+        session.verdict.kind === "success"
+          ? "Orchestrator: passed"
+          : session.verdict.kind === "failed"
+            ? "Orchestrator: failed"
+            : "Orchestrator: needs input";
+      card.appendChild(
+        h(
+          "div",
+          { className: "pl-field" },
+          h("label", { className: "pl-field-label", textContent: verdictLabel, style: { color: verdictColor } }),
+          h("div", {
+            style: {
+              fontSize: "12.5px",
+              lineHeight: "1.55",
+              color: "var(--ct-text-primary)",
+              whiteSpace: "pre-wrap",
+              fontFamily: "var(--ct-font)",
+            },
+            textContent: session.verdict.detail,
+          }),
+        ),
+      );
+    }
+
+    if (session.summary && session.summary !== session.verdict?.detail) {
       card.appendChild(
         h(
           "div",

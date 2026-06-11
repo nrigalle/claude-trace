@@ -1,18 +1,9 @@
-export const shQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
+import { markerCommand, shQuote, type ClaudeHookSettings, type HookEntry } from "../../../shared/claudeHookMarkers";
 
-const markerCommand = (signalsDir: string, sessionId: string, kind: string): string => {
-  const dir = signalsDir.replace(/\\/g, "/");
-  return `mkdir -p ${shQuote(dir)} && : > ${shQuote(`${dir}/${sessionId}.${kind}`)}`;
-};
+export { shQuote };
+export type { HookEntry };
 
-export interface HookEntry {
-  readonly matcher?: string;
-  readonly hooks: ReadonlyArray<{ readonly type: "command"; readonly command: string }>;
-}
-
-export interface CockpitHookSettings {
-  readonly hooks: Record<string, readonly HookEntry[]>;
-}
+export type CockpitHookSettings = ClaudeHookSettings;
 
 export const buildCockpitHookSettings = (
   sessionId: string,
@@ -21,6 +12,7 @@ export const buildCockpitHookSettings = (
   const marker = (kind: string): string => markerCommand(signalsDir, sessionId, kind);
   return {
     hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: marker("start") }] }],
       Stop: [{ hooks: [{ type: "command", command: marker("stop") }] }],
       Notification: [{ matcher: "permission_prompt", hooks: [{ type: "command", command: marker("notify") }] }],
       UserPromptSubmit: [{ hooks: [{ type: "command", command: marker("active") }] }],

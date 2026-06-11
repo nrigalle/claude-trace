@@ -109,6 +109,20 @@ vi.mock("@xterm/addon-fit", () => ({
 vi.mock("@xterm/addon-web-links", () => ({
   WebLinksAddon: class {},
 }));
+const webglInstances: { disposed: boolean }[] = [];
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: class {
+    disposed = false;
+    constructor() {
+      webglInstances.push(this);
+    }
+    onContextLoss(): void {}
+    dispose(): void {
+      this.disposed = true;
+    }
+  },
+}));
+const activeWebglCount = (): number => webglInstances.filter((i) => !i.disposed).length;
 
 const term = (
   sessionId: string,
@@ -390,6 +404,32 @@ describe("TerminalCockpit — quick launch", () => {
     expect(document.querySelector(".tc-quick")).not.toBeNull();
     (document.querySelector(".tc-quick-close") as HTMLElement).click();
     expect(document.querySelector(".tc-quick")).toBeNull();
+  });
+
+  it("a cockpitState update still applies while the launcher is open — killing a session removes its tile (regression: ghost tile)", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "A"), term("b", "b", "B")]) });
+    (document.querySelector(".tc-newsession") as HTMLElement).click();
+    expect(document.querySelector(".tc-quick")).not.toBeNull();
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "A")]) });
+    expect(visibleTiles()).toHaveLength(1);
+    expect(document.querySelector(".tc-quick"), "the launcher stays open with its form intact").not.toBeNull();
+  });
+
+  it("clicking anywhere outside the launcher light-dismisses it without swallowing the click", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "A")]) });
+    (document.querySelector(".tc-newsession") as HTMLElement).click();
+    expect(document.querySelector(".tc-quick")).not.toBeNull();
+    const tile = visibleTiles()[0]!;
+    tile.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(document.querySelector(".tc-quick")).toBeNull();
+  });
+
+  it("pointerdown inside the launcher keeps it open", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "A")]) });
+    (document.querySelector(".tc-newsession") as HTMLElement).click();
+    const nameInput = document.querySelector(".tc-quick-grid .tc-field-input") as HTMLInputElement;
+    nameInput.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(document.querySelector(".tc-quick")).not.toBeNull();
   });
 });
 
@@ -1184,5 +1224,28 @@ describe("TerminalCockpit — accessibility roles and labels", () => {
 describe("TerminalCockpit — keyboard focus is visible on the terminal tile", () => {
   it("draws a focus ring on the tile when the terminal inside takes focus (xterm clears its own outline)", () => {
     expect(COCKPIT_CSS).toMatch(/\.tc-tile:focus-within:not\(\.attention\)\s*\{/);
+  });
+});
+
+describe("TerminalCockpit — WebGL renderers are visibility-scoped (regression: browser context cap killed hidden terminals' renderers)", () => {
+  it("attaches a renderer per visible terminal, releases it when a folder switch hides the view, and reattaches on return", () => {
+    const before = activeWebglCount();
+    cockpit.receive({
+      type: "cockpitState",
+      state: state(
+        [term("a", "a", "A", { spaceId: "s1" }), term("b", "b", "B", { spaceId: "s2" })],
+        [
+          { id: "s1" as never, name: "One" },
+          { id: "s2" as never, name: "Two" },
+        ],
+      ),
+    });
+    expect(activeWebglCount() - before, "All folder shows both terminals — two live renderers").toBe(2);
+
+    (document.querySelector('.tc-folder[data-folder="s1"]') as HTMLElement).click();
+    expect(activeWebglCount() - before, "hidden terminal must release its WebGL context").toBe(1);
+
+    (document.querySelector('.tc-folder[data-folder="s2"]') as HTMLElement).click();
+    expect(activeWebglCount() - before, "switching back releases one and reattaches the other").toBe(1);
   });
 });

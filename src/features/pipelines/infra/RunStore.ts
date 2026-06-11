@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { RUNS_DIR } from "../../../shared/config";
-import { parseRunState, serializeRunState } from "../domain/parse";
+import { parseRunState, serializeRunState } from "../domain/parseRun";
 import {
   fromPipelineId,
   fromRunId,

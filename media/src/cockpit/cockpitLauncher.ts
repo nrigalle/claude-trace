@@ -59,7 +59,8 @@ export class CockpitLauncher {
     container.appendChild(this.quickForm(state, activeFolder));
   }
 
-  private close(): void {
+  close(): void {
+    if (!this.open) return;
     this.open = false;
     this.quickPrefill = null;
     this.deps.rerender();
