@@ -91,8 +91,8 @@ interface ManagedTerminal {
   readonly name: string;
   spaceId: string | null;
   readonly cwd: string | null;
-  readonly model: ModelChoice;
-  readonly effort: EffortChoice;
+  model: ModelChoice;
+  effort: EffortChoice;
   permissionMode: PermissionMode;
   readonly startedAtMs: number;
   readonly kind: TerminalKind;
@@ -156,7 +156,7 @@ export class CockpitController {
     if (prompt === undefined) return;
     this.pendingInitialPrompts.delete(sessionId);
     this.deps.terminals.write(sessionId, `\u001b[200~${prompt.replace(/\r\n/g, "\n")}\u001b[201~`);
-    setTimeout(() => this.deps.terminals.write(sessionId, "\r"), 350);
+    setTimeout(() => this.deps.terminals.write(sessionId, "\r"), Math.min(2000, 350 + Math.floor(prompt.length / 8)));
   }
 
   private persist(m: ManagedTerminal): void {
@@ -240,7 +240,7 @@ export class CockpitController {
         this.broadcast();
         return;
       case "cockpitResumeSession":
-        this.handleResume(msg.sessionId, msg.permissionMode);
+        this.handleResume(msg.sessionId, msg.permissionMode, msg.model);
         return;
       case "cockpitPauseSession":
         this.paused.add(msg.sessionId);
@@ -463,8 +463,8 @@ export class CockpitController {
     this.broadcast();
   }
 
-  private handleResume(key: string, permissionMode?: PermissionMode): void {
-    if (this.spawnResume(key, permissionMode)) this.broadcast();
+  private handleResume(key: string, permissionMode?: PermissionMode, model?: ModelChoice): void {
+    if (this.spawnResume(key, permissionMode, model)) this.broadcast();
   }
 
   private handleAdopt(
@@ -501,15 +501,22 @@ export class CockpitController {
     this.broadcast();
   }
 
-  private spawnResume(key: string, permissionMode?: PermissionMode): boolean {
+  private spawnResume(key: string, permissionMode?: PermissionMode, model?: ModelChoice): boolean {
     const managed = this.managed.get(key);
     if (!managed) return false;
     if (this.deps.terminals.isAlive(key)) return false;
     managed.exitCode = null;
+    let dirty = false;
     if (permissionMode !== undefined && permissionMode !== managed.permissionMode) {
       managed.permissionMode = permissionMode;
-      this.persist(managed);
+      dirty = true;
     }
+    if (model !== undefined && model !== managed.model) {
+      managed.model = model;
+      managed.effort = modelDefaultEffort(model);
+      dirty = true;
+    }
+    if (dirty) this.persist(managed);
     const forceInitialInput = this.paused.has(key);
     let initialInput = "";
     if (managed.kind === "claude") {
@@ -567,6 +574,7 @@ export class CockpitController {
         exitCode: m.exitCode,
         startedAtMs: m.startedAtMs,
         kind: m.kind,
+        model: m.model,
       });
     }
     return { profiles: cfg.profiles, spaces: cfg.spaces, terminals };

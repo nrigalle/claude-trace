@@ -748,27 +748,96 @@ body.tc-dragging-window * {
   z-index: 20;
   pointer-events: auto;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 22px;
-  text-align: center;
-  background: rgba(16, 15, 20, 0.94);
+  padding: 18px;
+  background: rgba(11, 11, 15, 0.64);
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
+  animation: tc-resume-fade 0.3s var(--ct-ease-out);
 }
 
-.tc-resume-permission {
-  max-width: 280px;
-  width: 100%;
-  padding: 7px 10px;
-  font-size: 12.5px;
-  font-family: var(--ct-font);
-  color: var(--ct-text-primary);
-  background: var(--ct-bg-1);
-  border: 1px solid var(--ct-border);
-  border-radius: 8px;
+@keyframes tc-resume-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
-.tc-resume-permission:focus-visible { outline: 2px solid var(--ct-focus); outline-offset: 2px; }
+
+.tc-resume-card {
+  width: 100%;
+  max-width: 280px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 22px 20px 20px;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(35, 35, 44, 0.94) 0%, rgba(24, 24, 31, 0.94) 100%);
+  border: 1px solid var(--ct-border);
+  border-radius: 18px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  animation: tc-resume-pop 0.42s var(--ct-spring);
+}
+
+@keyframes tc-resume-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.tc-resume-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(217, 119, 87, 0.14);
+  border: 1px solid rgba(217, 119, 87, 0.34);
+  color: var(--ct-claude-light);
+}
+.tc-resume-icon svg { width: 20px; height: 20px; }
+
+.tc-resume-title {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ct-text-primary);
+}
+.tc-resume-sub {
+  font-size: 12px;
+  color: var(--ct-text-muted);
+  margin-top: -4px;
+}
+
+.tc-resume-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  margin-top: 6px;
+  text-align: left;
+}
+.tc-resume-field-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ct-text-dim);
+  padding-left: 2px;
+}
+.tc-resume-field .ct-dd-btn {
+  height: 36px;
+  border-radius: 10px;
+  background-color: var(--ct-bg-1);
+}
+
+.tc-resume-btn {
+  width: 100%;
+  justify-content: center;
+  padding: 10px 16px;
+  margin-top: 6px;
+  font-size: 13.5px;
+  border-radius: 11px;
+}
 
 .tc-tile-resume.hidden {
   display: none;
@@ -852,13 +921,6 @@ body.tc-dragging-window * {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--ct-text-primary);
-}
-
-.tc-tile-resume-hint {
-  font-size: 11px;
-  color: var(--ct-text-muted);
-  max-width: 250px;
-  line-height: 1.5;
 }
 
 @property --tc-spin {
@@ -1098,13 +1160,13 @@ body.tc-dragging-window * {
 .tc-term {
   position: absolute;
   inset: 0;
+  padding: 6px 18px 6px 10px;
+  box-sizing: border-box;
 }
 .tc-term.hidden { display: none; }
 .tc-term .xterm {
   height: 100%;
   width: 100%;
-  padding: 6px 18px 6px 10px;
-  box-sizing: border-box;
 }
 .tc-term .xterm-viewport {
   overscroll-behavior: contain;

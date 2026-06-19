@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { CanvasAddon } from "@xterm/addon-canvas";
 import type { TerminalSession } from "../../../src/features/cockpit/protocol";
 import { h } from "../ui/h.js";
 
@@ -61,6 +62,7 @@ export const createCockpitTerminal = (
     altClickMovesCursor: false,
     macOptionClickForcesSelection: true,
   });
+  term.parser.registerCsiHandler({ final: "J" }, (params) => params[0] === 3);
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new Unicode11Addon());
@@ -117,6 +119,19 @@ export const attachWebglRenderer = (term: Terminal, onLost: () => void): Rendere
       try { addon.dispose(); } catch (err: unknown) { ignoreOptionalRendererFailure(err); }
       onLost();
     });
+    term.loadAddon(addon);
+    return {
+      dispose: () => { try { addon.dispose(); } catch (err: unknown) { ignoreOptionalRendererFailure(err); } },
+    };
+  } catch (err: unknown) {
+    ignoreOptionalRendererFailure(err);
+    return null;
+  }
+};
+
+export const attachCanvasRenderer = (term: Terminal): RendererHandle | null => {
+  try {
+    const addon = new CanvasAddon();
     term.loadAddon(addon);
     return {
       dispose: () => { try { addon.dispose(); } catch (err: unknown) { ignoreOptionalRendererFailure(err); } },

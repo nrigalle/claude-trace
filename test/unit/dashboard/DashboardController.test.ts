@@ -47,6 +47,11 @@ const build = (initial: SessionSummary[]): FakeWorld => {
       listCalls.push(hint ? new Set(hint) : undefined);
       return sessions;
     },
+    prepareInitialScan: () =>
+      [...sessions]
+        .sort((a, b) => b.last_modified_ms - a.last_modified_ms)
+        .map((s) => ({ ref: { sessionId: s.session_id, projectDirName: "p", filePath: "f" }, stats: { mtime: s.last_modified_ms, size: 0 } })),
+    summarizeOne: (ref: { sessionId: string }) => sessions.find((s) => s.session_id === ref.sessionId)!,
     invalidate: () => {},
     stats: () => ({}),
     detail: (id: string) => {
@@ -98,6 +103,46 @@ describe("DashboardController — delta updates keep the per-tick payload tiny w
     const updates = w.posted.filter((m) => m.type === "update");
     expect(updates).toHaveLength(1);
     expect((updates[0] as { sessions: unknown[] }).sessions).toHaveLength(2);
+    w.controller.dispose();
+  });
+
+  it("streams a large history in batches instead of one blocking scan (regression: first open froze the IDE ~3s)", () => {
+    const many = Array.from({ length: 70 }, (_, i) => summary(`s${i}`, i + 1));
+    const w = build(many);
+    const firstUpdate = w.posted.filter((m) => m.type === "update");
+    expect(firstUpdate, "exactly one authoritative update").toHaveLength(1);
+    expect((firstUpdate[0] as { sessions: unknown[] }).sessions.length, "first paint is a small recent batch, not all 70").toBeLessThanOrEqual(25);
+    expect(w.posted.some((m) => m.type === "updateDelta"), "the rest is deferred until timers run").toBe(false);
+
+    vi.advanceTimersByTime(1000);
+    const deltas = w.posted.filter((m) => m.type === "updateDelta");
+    expect(deltas.length, "remaining sessions arrive as background delta batches").toBeGreaterThanOrEqual(2);
+    const delivered = new Set<string>();
+    for (const m of w.posted) {
+      if (m.type === "update") for (const s of (m as { sessions: { session_id: string }[] }).sessions) delivered.add(s.session_id);
+      if (m.type === "updateDelta") for (const s of (m as { changed: { session_id: string }[] }).changed) delivered.add(s.session_id);
+    }
+    expect(delivered.size, "every session is eventually delivered").toBe(70);
+    w.controller.dispose();
+  });
+
+  it("never loses a watcher change that arrives while the initial scan is still running", () => {
+    const many = Array.from({ length: 70 }, (_, i) => summary(`s${i}`, i + 1));
+    const w = build(many);
+    w.setSessions([summary("s0", 999), ...many.slice(1)]);
+    w.emit({ kind: "changed", sessionId: toSessionId("s0"), projectDirName: "p" });
+    vi.advanceTimersByTime(3000);
+    let lastS0: number | undefined;
+    for (const m of w.posted) {
+      const arr =
+        m.type === "update"
+          ? (m as { sessions: { session_id: string; last_modified_ms: number }[] }).sessions
+          : m.type === "updateDelta"
+            ? (m as { changed: { session_id: string; last_modified_ms: number }[] }).changed
+            : [];
+      for (const s of arr) if (s.session_id === toSessionId("s0")) lastS0 = s.last_modified_ms;
+    }
+    expect(lastS0, "the updated s0 summary must reach the webview").toBe(999);
     w.controller.dispose();
   });
 

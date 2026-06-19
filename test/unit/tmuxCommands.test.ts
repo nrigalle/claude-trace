@@ -34,8 +34,8 @@ describe("tmux command construction (background-persistent sessions)", () => {
     expect(args[args.indexOf("-f") + 1]).toBe("/my/conf.conf");
   });
 
-  it("captures the full pane history from the private socket for scrollback replay", () => {
-    expect(tmuxCaptureArgs("ct-x")).toEqual(["-L", "claude-trace", "capture-pane", "-p", "-J", "-S", "-", "-t", "ct-x"]);
+  it("captures the full pane history with escape sequences from the private socket for color-preserving scrollback replay", () => {
+    expect(tmuxCaptureArgs("ct-x")).toEqual(["-L", "claude-trace", "capture-pane", "-e", "-p", "-J", "-S", "-", "-t", "ct-x"]);
   });
 
   it("queries alternate-screen state before replaying scrollback", () => {
@@ -46,8 +46,18 @@ describe("tmux command construction (background-persistent sessions)", () => {
     expect(tmuxConfigText()).toContain("set -g alternate-screen on");
   });
 
-  it("enables tmux mouse handling so the wheel scrolls real scrollback instead of arrow-spamming the shell (regression: wheel cycled command history and flooded sessions with key events)", () => {
-    expect(tmuxConfigText()).toContain("set -g mouse on");
-    expect(tmuxConfigText()).not.toContain("allow-passthrough");
+  it("hands the wheel and click-drag selection to xterm.js for native scroll/copy by turning tmux mouse OFF and disabling tmux's OUTER alternate screen (smcup@/rmcup@) so xterm.js stays on its main screen with a populated scrollback (regression: mouse on stole native selection and gave jumpy copy-mode scroll; mouse off without the smcup override would arrow-spam command/prompt history)", () => {
+    expect(tmuxConfigText()).toContain("set -g mouse off");
+    expect(tmuxConfigText()).not.toContain("set -g mouse on");
+    expect(tmuxConfigText()).toContain("smcup@:rmcup@");
+  });
+
+  it("keeps OSC 52 clipboard and passthrough so copy-to-clipboard and DCS-wrapped sequences reach the outer terminal", () => {
+    expect(tmuxConfigText()).toContain("set -g set-clipboard on");
+    expect(tmuxConfigText()).toContain("set -g allow-passthrough on");
+  });
+
+  it("drops the redundant Tc truecolor override (RGB is already advertised via terminal-features)", () => {
+    expect(tmuxConfigText()).not.toContain(":Tc");
   });
 });

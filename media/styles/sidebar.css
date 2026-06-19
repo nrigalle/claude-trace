@@ -229,7 +229,7 @@
 }
 
 .session-item + .session-item {
-  border-top: 1px solid color-mix(in srgb, var(--ct-border) 55%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--ct-claude) 42%, transparent);
 }
 
 .session-item:hover {

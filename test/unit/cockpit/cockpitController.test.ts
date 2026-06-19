@@ -207,6 +207,20 @@ describe("CockpitController launch", () => {
     vi.useRealTimers();
   });
 
+  it("delivers a LONG initial prompt as one atomic paste (no 4096 chunking) and waits longer before the CR (regression: long prompts arrived truncated)", () => {
+    vi.useFakeTimers();
+    const longPrompt = "x".repeat(9000);
+    host.send({ type: "cockpitLaunch", profileId: toProfileId("p1"), count: 1, promptOverride: longPrompt });
+    attentionListener!("uuid-1", "start");
+    expect(backend.writes).toHaveLength(1);
+    expect(backend.writes[0]!.data, "the whole prompt is one write, not split into 4096-byte pieces").toBe(`[200~${longPrompt}[201~`);
+    vi.advanceTimersByTime(400);
+    expect(backend.writes, "the CR must not fire yet for a long prompt").toHaveLength(1);
+    vi.advanceTimersByTime(1200);
+    expect(backend.writes).toContainEqual({ id: "uuid-1", data: "\r" });
+    vi.useRealTimers();
+  });
+
   it("warns instead of spawning when the profile is gone", () => {
     host.send({ type: "cockpitLaunch", profileId: toProfileId("ghost"), count: 1, promptOverride: null });
     expect(backend.spawns).toHaveLength(0);
@@ -721,6 +735,20 @@ describe("CockpitController adopt a resumed session into the active folder", () 
     host.send({ type: "cockpitAdoptSession", sessionId: "r6", name: "Resumed", cwd: "/repo", spaceId: null });
     host.send({ type: "cockpitResumeSession", sessionId: "r6" });
     expect(backend.spawns[0]!.initialInput).toContain("--model 'claude-opus-4-8'");
+  });
+
+  it("preserves the 1M-context variant on resume when the adopt carries a [1m] model id (regression: resume dropped to 200k)", () => {
+    host.send({ type: "cockpitAdoptSession", sessionId: "r7", name: "Resumed", cwd: "/repo", spaceId: null, modelId: "claude-opus-4-8[1m]" });
+    host.send({ type: "cockpitResumeSession", sessionId: "r7", permissionMode: "default" });
+    const cmd = backend.spawns[0]!.initialInput;
+    expect(cmd).toContain("--model 'claude-opus-4-8[1m]'");
+  });
+
+  it("lets the resume card switch the model: the chosen model is used and persisted for next time", () => {
+    host.send({ type: "cockpitAdoptSession", sessionId: "r8", name: "Resumed", cwd: "/repo", spaceId: null, modelId: "claude-opus-4-8" });
+    host.send({ type: "cockpitResumeSession", sessionId: "r8", model: "claude-sonnet-4-6[1m]" });
+    expect(backend.spawns[0]!.initialInput).toContain("--model 'claude-sonnet-4-6[1m]'");
+    expect(sessionStore.load().find((s) => s.id === "r8")!.model).toBe("claude-sonnet-4-6[1m]");
   });
 });
 

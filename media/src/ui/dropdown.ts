@@ -10,7 +10,13 @@ export interface DropdownConfig {
   readonly options: readonly DropdownOption[];
   readonly ariaLabel: string;
   readonly buttonClass?: string;
-  readonly onChange: (value: string) => void;
+  readonly wrapClass?: string;
+  readonly onChange?: (value: string) => void;
+}
+
+export interface DropdownEl extends HTMLElement {
+  setDropdownValue(value: string): void;
+  getDropdownValue(): string;
 }
 
 const CARET_SVG =
@@ -21,7 +27,7 @@ const CHECK_SVG =
   `<svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">` +
   `<path d="M2.5 6.5 5 9l4.5-5.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
-export const buildDropdown = (config: DropdownConfig): HTMLElement => {
+export const buildDropdown = (config: DropdownConfig): DropdownEl => {
   let selected = config.value;
   const initial = config.options.find((o) => o.value === selected) ?? config.options[0];
   const labelEl = h("span", { className: "ct-dd-label", textContent: initial?.label ?? "" });
@@ -30,7 +36,7 @@ export const buildDropdown = (config: DropdownConfig): HTMLElement => {
     className: `ct-dd-btn${config.buttonClass ? ` ${config.buttonClass}` : ""}`,
     attrs: { type: "button", "aria-haspopup": "listbox", "aria-expanded": "false", "aria-label": config.ariaLabel },
   }, labelEl, caretEl);
-  const wrap = h("div", { className: "ct-dd" }, btn);
+  const wrap = h("div", { className: `ct-dd${config.wrapClass ? ` ${config.wrapClass}` : ""}` }, btn) as unknown as DropdownEl;
 
   let menu: HTMLElement | null = null;
   let observer: MutationObserver | null = null;
@@ -83,7 +89,7 @@ export const buildDropdown = (config: DropdownConfig): HTMLElement => {
             selected = opt.value;
             labelEl.textContent = opt.label;
             close();
-            config.onChange(opt.value);
+            config.onChange?.(opt.value);
           },
         },
       },
@@ -109,5 +115,14 @@ export const buildDropdown = (config: DropdownConfig): HTMLElement => {
     e.preventDefault();
     if (menu) close(); else open();
   });
+
+  wrap.getDropdownValue = (): string => selected;
+  wrap.setDropdownValue = (v: string): void => {
+    const opt = config.options.find((o) => o.value === v);
+    if (!opt) return;
+    selected = v;
+    labelEl.textContent = opt.label;
+    if (menu) close();
+  };
   return wrap;
 };

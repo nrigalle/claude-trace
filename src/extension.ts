@@ -49,6 +49,7 @@ import { buildChatMarkdown, chatExportFilename } from "./features/dashboard/doma
 import { buildClaudeCommand } from "./shared/permissionModes";
 import { execFile } from "child_process";
 import { claudeCompatVerdict, TESTED_CLAUDE_MAJOR } from "./shared/claudeCompat";
+import { findClaude } from "./shared/infra/findClaude";
 import { traceLog, logInfo, logWarn, disposeTraceLog } from "./shared/infra/traceLog";
 import { computeBeforeContent } from "./features/dashboard/domain/reverseApply";
 import { buildUnifiedDiff } from "./features/dashboard/domain/unifiedDiff";
@@ -98,11 +99,11 @@ function ensureSpawnHelperExecutable(): void {
   }
 }
 
-function probeClaudeCompat(context: vscode.ExtensionContext): void {
+function probeClaudeCompat(context: vscode.ExtensionContext, claudeBin: string): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("claudeTrace.showLog", () => traceLog().show(true)),
   );
-  execFile("claude", ["--version"], { timeout: 10_000 }, (err, stdout) => {
+  execFile(claudeBin, ["--version"], { timeout: 10_000 }, (err, stdout) => {
     const verdict = claudeCompatVerdict(err ? null : stdout);
     if (verdict.kind === "tested") {
       logInfo("compat", `Claude Code ${verdict.version} detected (tested major ${TESTED_CLAUDE_MAJOR}).`);
@@ -129,7 +130,8 @@ function probeClaudeCompat(context: vscode.ExtensionContext): void {
 export function activate(context: vscode.ExtensionContext): void {
   ensureSpawnHelperExecutable();
   ensureProjectsDirExists(PROJECTS_DIR);
-  probeClaudeCompat(context);
+  const claudeBin = findClaude();
+  probeClaudeCompat(context, claudeBin ?? "claude");
 
   const nameStore = new SessionNameStore(context.globalState);
   const pinStore = new SessionPinStore(context.globalState);
@@ -428,7 +430,7 @@ export function activate(context: vscode.ExtensionContext): void {
       clock: () => Date.now(),
       newRunId: () => newRunIdFromClock(Date.now()),
       onPipelinesChanged: () => triggerScheduler.reconcile(),
-      assistant: new PipelineAssistant(),
+      assistant: new PipelineAssistant({ claudeBin: claudeBin ?? undefined }),
       assistantSessions: new AssistantSessionStore(),
       workspaceCwd: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null,
     });
@@ -535,7 +537,7 @@ export function activate(context: vscode.ExtensionContext): void {
       scanner: libraryScanner,
       importer: libraryImporter,
       actions: libraryActions,
-      assistant: new LibraryAssistant(),
+      assistant: new LibraryAssistant({ claudeBin: claudeBin ?? undefined }),
       assistantSessions: new ConversationStore(
         path.join(TRACE_DATA_DIR, "library-assistant", "sessions.json"),
       ),

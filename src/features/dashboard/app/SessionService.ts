@@ -105,6 +105,30 @@ export class SessionService {
     return summaries;
   }
 
+  prepareInitialScan(): Array<{ ref: SessionRef; stats: SessionFileStats }> {
+    ensureProjectsDirExists(PROJECTS_DIR);
+    const chosen = new Map<SessionId, { ref: SessionRef; stats: SessionFileStats }>();
+    for (const ref of discoverSessionRefs()) {
+      const stats = this.reader.statSafe(ref);
+      if (!stats) continue;
+      const existing = chosen.get(ref.sessionId);
+      if (!existing || stats.mtime > existing.stats.mtime) chosen.set(ref.sessionId, { ref, stats });
+    }
+    this.refs = new Map([...chosen].map(([id, c]) => [id, c.ref]));
+    const present = new Set(chosen.keys());
+    for (const id of [...this.summaryCache.keys()]) {
+      if (!present.has(id)) {
+        this.summaryCache.delete(id);
+        this.foldStates.delete(id);
+      }
+    }
+    return [...chosen.values()].sort((a, b) => b.stats.mtime - a.stats.mtime);
+  }
+
+  summarizeOne(ref: SessionRef, stats: SessionFileStats): SessionSummary {
+    return this.summarizeRef(ref, stats);
+  }
+
   private canFastList(changed: ReadonlySet<SessionId>): boolean {
     if (this.refs.size === 0) return false;
     for (const id of changed) {

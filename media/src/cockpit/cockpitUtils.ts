@@ -1,5 +1,11 @@
 export const ALL_FOLDER = "__all__";
 
+const TERMINAL_REPORT_SEQUENCE =
+  /\x1b\[[?>][0-9;]*c|\x1b\[[0-9]+;[0-9]+R|\x1b\[[0-9]+n|\x1bP[!>]\|[^\x1b]*\x1b\\/g;
+
+export const stripTerminalReports = (data: string): string =>
+  data.includes("\x1b") ? data.replace(TERMINAL_REPORT_SEQUENCE, "") : data;
+
 export const newId = (): string =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()

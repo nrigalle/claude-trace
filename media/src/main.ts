@@ -124,7 +124,10 @@ const boot = () => {
   const resumeInCockpit = (id: SessionId) => {
     const summary = sessionsCache.find((s) => s.session_id === id);
     const name = summary?.title && summary.title.length > 0 ? summary.title : `Session ${id.slice(0, 8)}`;
-    terminalCockpit.adopt(id, name, summary?.cwd ?? null, summary?.model?.id);
+    const baseModel = summary?.model?.id;
+    const is1m = (summary?.context_window?.context_window_size ?? 0) >= 1_000_000;
+    const modelId = baseModel && is1m && !baseModel.includes("[1m]") ? `${baseModel}[1m]` : baseModel;
+    terminalCockpit.adopt(id, name, summary?.cwd ?? null, modelId);
     setMode("sessions");
     if (store.state.selectedId !== null) {
       store.update({ selectedId: null });

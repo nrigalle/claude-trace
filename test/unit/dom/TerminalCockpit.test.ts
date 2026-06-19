@@ -23,11 +23,13 @@ interface FakeTerm {
   rows: number;
   scrolls: number;
   focuses: number;
+  refreshes: number;
   buffer: FakeBuffer;
   selection: string;
   pastes: string[];
   writes: string[];
   oscHandlers: ((data: string) => boolean)[];
+  edHandler: ((params: (number | number[])[]) => boolean) | null;
   options: FakeTermOptions;
 }
 interface FakeTermOptions {
@@ -47,16 +49,22 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     scrolls = 0;
     focuses = 0;
+    refreshes = 0;
     buffer: FakeBuffer = { active: { type: "normal", viewportY: 0, baseY: 0 } };
     selection = "";
     pastes: string[] = [];
     writes: string[] = [];
     oscHandlers: ((data: string) => boolean)[] = [];
+    edHandler: ((params: (number | number[])[]) => boolean) | null = null;
     options: FakeTermOptions;
     unicode = { activeVersion: "" };
     parser = {
       registerOscHandler: (id: number, cb: (data: string) => boolean) => {
         if (id === 52) this.oscHandlers.push(cb);
+        return { dispose: (): void => {} };
+      },
+      registerCsiHandler: (id: { final: string }, cb: (params: (number | number[])[]) => boolean) => {
+        if (id.final === "J") this.edHandler = cb;
         return { dispose: (): void => {} };
       },
     };
@@ -65,6 +73,9 @@ vi.mock("@xterm/xterm", () => ({
       terms.push(this as unknown as FakeTerm);
     }
     loadAddon(): void {}
+    refresh(): void {
+      this.refreshes += 1;
+    }
     onData(cb: (d: string) => void): void {
       this.dataCb = cb;
     }
@@ -126,6 +137,19 @@ vi.mock("@xterm/addon-webgl", () => ({
   },
 }));
 const activeWebglCount = (): number => webglInstances.filter((i) => !i.disposed).length;
+const canvasInstances: { disposed: boolean }[] = [];
+vi.mock("@xterm/addon-canvas", () => ({
+  CanvasAddon: class {
+    disposed = false;
+    constructor() {
+      canvasInstances.push(this);
+    }
+    dispose(): void {
+      this.disposed = true;
+    }
+  },
+}));
+const activeCanvasCount = (): number => canvasInstances.filter((i) => !i.disposed).length;
 
 const FAKE_HARDWARE_GL = {
   RENDERER: 0x1f01,
@@ -154,6 +178,7 @@ const term = (
   exitCode: null,
   startedAtMs: 0,
   kind: "claude",
+  model: "claude-opus-4-8",
   ...extra,
 });
 
@@ -627,10 +652,21 @@ describe("TerminalCockpit — DOM identity (mount once, mutate in place)", () =>
     const resume = tile.querySelector<HTMLButtonElement>(".tc-tile-resume .tc-launch-btn")!;
     const booting = tile.querySelector<HTMLElement>(".tc-tile-booting")!;
     resume.click();
-    expect(sent).toContainEqual({ type: "cockpitResumeSession", sessionId: "a" });
+    expect(sent).toContainEqual({ type: "cockpitResumeSession", sessionId: "a", model: "claude-opus-4-8" });
     expect(booting.classList.contains("hidden")).toBe(false);
     expect(tile.classList.contains("exited")).toBe(false);
     expect(terms[0]!.writes.join("")).toContain("\x1b[?1003l");
+  });
+
+  it("the resume card preselects the session's current model and resumes with whatever model the user picks", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "X", { alive: false, exitCode: 0, model: "claude-opus-4-7[1m]" })]) });
+    const tile = visibleTiles()[0]!;
+    const modelDd = tile.querySelector(".tc-resume-model") as unknown as { getDropdownValue(): string };
+    expect(modelDd.getDropdownValue(), "the dropdown shows the model the session was created with").toBe("claude-opus-4-7[1m]");
+    (tile.querySelector(".tc-resume-model .ct-dd-btn") as HTMLElement).click();
+    (document.querySelector('.ct-dd-menu [data-value="claude-sonnet-4-6"]') as HTMLElement).click();
+    (tile.querySelector(".tc-tile-resume .tc-launch-btn") as HTMLElement).click();
+    expect(sent).toContainEqual({ type: "cockpitResumeSession", sessionId: "a", model: "claude-sonnet-4-6" });
   });
 
   it("resets mouse-tracking modes when a session exits so a bare shell can't flood the pane", () => {
@@ -821,6 +857,29 @@ describe("TerminalCockpit — native selection and clipboard", () => {
     expect(sent.some((m) => m.type === "terminalInput")).toBe(false);
   });
 
+  it("swallows xterm device-attribute replies so tmux's reattach probe never leaks ?1;2c>0;276;0c into Claude's prompt on editor reopen", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "X")]) });
+    terms[0]!.dataCb!("\x1b[?1;2c\x1b[>0;276;0c");
+    expect(sent.some((m) => m.type === "terminalInput")).toBe(false);
+    terms[0]!.dataCb!("ls\r");
+    expect(sent).toContainEqual({ type: "terminalInput", sessionId: "a", data: "ls\r" });
+  });
+
+  it("strips an embedded device report but keeps the surrounding keystrokes", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "X")]) });
+    terms[0]!.dataCb!("a\x1b[>0;276;0cb");
+    expect(sent).toContainEqual({ type: "terminalInput", sessionId: "a", data: "ab" });
+  });
+
+  it("swallows clear-scrollback (CSI 3 J) so a TUI redraw after reattach can never wipe the replayed history, but lets normal clear-screen (CSI 2 J) through", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "X")]) });
+    const ed = terms[0]!.edHandler!;
+    expect(ed([3]), "CSI 3 J (clear scrollback) must be swallowed").toBe(true);
+    expect(ed([2]), "CSI 2 J (clear viewport) must fall through to xterm").toBe(false);
+    expect(ed([0]), "CSI 0 J must fall through").toBe(false);
+    expect(ed([]), "default CSI J must fall through").toBe(false);
+  });
+
   it("does NOT swallow Ctrl+C, so the shell's interrupt still reaches the process", () => {
     cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "X")]) });
     terms[0]!.selection = "some output";
@@ -948,6 +1007,15 @@ describe("TerminalCockpit — fit preserves scroll position", () => {
     const before = terms[0]!.scrolls;
     cockpit.fitActive();
     expect(terms[0]!.scrolls).toBe(before);
+  });
+
+  it("repaints the visible terminal on every fit even when the size is unchanged, so a canvas re-attached by a window add/remove can never stay black", () => {
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "X")]) });
+    stubLiveSize();
+    cockpit.fitActive();
+    const afterFirst = terms[0]!.refreshes;
+    cockpit.fitActive();
+    expect(terms[0]!.refreshes).toBeGreaterThan(afterFirst);
   });
 
   it("pins to the bottom on fit when the user is already at the bottom (keeps the prompt visible)", () => {
@@ -1131,12 +1199,14 @@ describe("TerminalCockpit — paused/exited/starting state copy is clear and das
     expect(booting.textContent).toBe("Starting session…");
   });
 
-  it("the resume hint and all state copy carry no em or en dash", () => {
+  it("the resume card copy and all state copy carry no em or en dash", () => {
     cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "X", { alive: false, exitCode: 0 })]) });
     const tile = visibleTiles()[0]!;
-    const hint = (tile.querySelector(".tc-tile-resume-hint") as HTMLElement).textContent ?? "";
-    expect(hint.length).toBeGreaterThan(0);
-    for (const txt of [hint, metaText()]) {
+    const title = (tile.querySelector(".tc-resume-title") as HTMLElement).textContent ?? "";
+    const sub = (tile.querySelector(".tc-resume-sub") as HTMLElement).textContent ?? "";
+    expect(title.length).toBeGreaterThan(0);
+    expect(sub.length).toBeGreaterThan(0);
+    for (const txt of [title, sub, metaText()]) {
       expect(txt).not.toMatch(/[–—]/);
     }
   });
@@ -1269,6 +1339,31 @@ describe("TerminalCockpit — WebGL renderers are visibility-scoped (regression:
     const many = Array.from({ length: 12 }, (_, i) => term(`s${i}`, `w${i}`, `T${i}`));
     cockpit.receive({ type: "cockpitState", state: state(many) });
     expect(activeWebglCount() - before, "12 visible terminals must not open 12 GL contexts").toBe(8);
+  });
+
+  it("uses WebGL (not the canvas fallback) on hardware GL", () => {
+    const canvasBefore = activeCanvasCount();
+    cockpit.receive({ type: "cockpitState", state: state([term("a", "a", "A")]) });
+    expect(activeCanvasCount() - canvasBefore, "hardware GL must keep WebGL and never attach the canvas fallback").toBe(0);
+  });
+
+  it("re-attaches the renderer for a still-visible terminal when the folder/layout changes, so a canvas reattached by the grid rebuild repaints instead of staying black (regression: black window after switching workspace)", () => {
+    cockpit.receive({
+      type: "cockpitState",
+      state: state(
+        [term("a", "a", "A", { spaceId: "s1" }), term("b", "b", "B", { spaceId: "s2" })],
+        [
+          { id: "s1" as never, name: "One" },
+          { id: "s2" as never, name: "Two" },
+        ],
+      ),
+    });
+    const createdInAll = webglInstances.length;
+    (document.querySelector('.tc-folder[data-folder="s1"]') as HTMLElement).click();
+    expect(
+      webglInstances.length,
+      "switching folder must dispose the reattached renderers and create fresh ones so the still-visible terminal repaints",
+    ).toBeGreaterThan(createdInAll);
   });
 
   it("falls back to the DOM renderer for good after a context loss instead of reattaching in a busy loop", () => {

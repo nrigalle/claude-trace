@@ -31,6 +31,8 @@ export interface DashboardActions {
 }
 
 const DETAIL_MIN_INTERVAL_MS = 2000;
+const INITIAL_FIRST_BATCH = 25;
+const INITIAL_BATCH = 20;
 
 export class DashboardController {
   private readonly disposables: { dispose(): void }[] = [];
@@ -43,6 +45,9 @@ export class DashboardController {
   private lastDetailSentMs = 0;
   private detailTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionsViewShown = true;
+  private initialScanDone = true;
+  private scanTimer: ReturnType<typeof setTimeout> | null = null;
+  private scanGeneration = 0;
 
   constructor(
     private readonly host: WebviewHost,
@@ -74,6 +79,10 @@ export class DashboardController {
     if (this.detailTimer !== null) {
       clearTimeout(this.detailTimer);
       this.detailTimer = null;
+    }
+    if (this.scanTimer !== null) {
+      clearTimeout(this.scanTimer);
+      this.scanTimer = null;
     }
     this.actions.setActiveSession(null);
     this.scheduler.dispose();
@@ -197,17 +206,65 @@ export class DashboardController {
   }
 
   private sendInitialPayload(): void {
-    const sessions = this.service.list();
-    const stats = this.service.stats(sessions);
-    const changedIds = this.diffAndRemember(sessions);
     this.host.postMessage({ type: "detailLayout", layout: this.actions.loadDetailLayout() });
-    this.host.postMessage({
-      type: "update",
-      sessions,
-      stats,
-      changedIds,
-      removedIds: [],
-    });
+    this.startInitialScan();
+  }
+
+  private startInitialScan(): void {
+    if (this.scanTimer !== null) {
+      clearTimeout(this.scanTimer);
+      this.scanTimer = null;
+    }
+    const generation = ++this.scanGeneration;
+    this.initialScanDone = false;
+    const refs = this.service.prepareInitialScan();
+    const accumulated: SessionSummary[] = [];
+    let index = 0;
+
+    const sendBatch = (first: boolean): void => {
+      const end = Math.min(index + (first ? INITIAL_FIRST_BATCH : INITIAL_BATCH), refs.length);
+      const fresh: SessionSummary[] = [];
+      for (; index < end; index++) {
+        const { ref, stats } = refs[index]!;
+        const summary = this.service.summarizeOne(ref, stats);
+        accumulated.push(summary);
+        fresh.push(summary);
+        this.lastSent.set(summary.session_id, summary.last_modified_ms);
+      }
+      const stats = this.service.stats(accumulated);
+      if (first) {
+        this.host.postMessage({
+          type: "update",
+          sessions: [...accumulated],
+          stats,
+          changedIds: accumulated.map((s) => s.session_id),
+          removedIds: [],
+        });
+      } else if (fresh.length > 0) {
+        this.host.postMessage({ type: "updateDelta", changed: fresh, stats, removedIds: [] });
+      }
+    };
+
+    sendBatch(true);
+
+    const step = (): void => {
+      if (generation !== this.scanGeneration || this.disposed) return;
+      if (index >= refs.length) {
+        this.scanTimer = null;
+        this.finishInitialScan();
+        return;
+      }
+      sendBatch(false);
+      this.scanTimer = setTimeout(step, 0);
+    };
+
+    if (index < refs.length) this.scanTimer = setTimeout(step, 0);
+    else this.finishInitialScan();
+  }
+
+  private finishInitialScan(): void {
+    this.initialScanDone = true;
+    if (this.listDirty || this.dirtySessions.size > 0) this.scheduler.schedule();
   }
 
   private sendSessionDetail(id: SessionId): void {
@@ -217,7 +274,7 @@ export class DashboardController {
   }
 
   private flush(): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.initialScanDone) return;
     const fast = !this.listDirty && this.dirtySessions.size > 0;
     const sessions = this.service.list(fast ? this.dirtySessions : undefined);
     const stats = this.service.stats(sessions);

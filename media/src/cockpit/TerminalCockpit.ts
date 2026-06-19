@@ -17,8 +17,8 @@ import type { AttentionReason, WindowTile } from "./cockpitTileTypes.js";
 import { clear, h } from "../ui/h.js";
 import { renderLayoutNode } from "./cockpitLayoutView.js";
 import { CockpitLauncher } from "./cockpitLauncher.js";
-import { createCockpitTerminal, attachWebglRenderer, type CockpitTerminalView, type RendererHandle } from "./terminalCore.js";
-import { ALL_FOLDER } from "./cockpitUtils.js";
+import { createCockpitTerminal, attachWebglRenderer, attachCanvasRenderer, webglUsable, type CockpitTerminalView, type RendererHandle } from "./terminalCore.js";
+import { ALL_FOLDER, stripTerminalReports } from "./cockpitUtils.js";
 import { wireWindowDrag, type WindowDragHost } from "./windowDrag.js";
 import { buildResumeOverlay } from "./resumeOverlay.js";
 
@@ -57,6 +57,7 @@ export class TerminalCockpit {
   private state: CockpitState = { profiles: [], spaces: [], terminals: [] };
   private loaded = false;
   private activeFolder: string = ALL_FOLDER;
+  private lastLayoutKey = "";
   private creatingFolder = false;
   private renamingFolder: string | null = null;
   private resizing = false;
@@ -285,7 +286,9 @@ export class TerminalCockpit {
     const terminal = createCockpitTerminal(session, {
       input: (data) => {
         if (this.views.get(session.sessionId)?.replaying) return;
-        this.deps.send({ type: "terminalInput", sessionId: session.sessionId, data });
+        const clean = stripTerminalReports(data);
+        if (clean.length === 0) return;
+        this.deps.send({ type: "terminalInput", sessionId: session.sessionId, data: clean });
       },
       bell: () => this.markAttention(session.sessionId, "bell"),
       focus: () => this.focusView(session.sessionId),
@@ -353,7 +356,7 @@ export class TerminalCockpit {
     const head = h("div", { className: "tc-tile-head", attrs: { title: "Drag to swap places, or drop on a workspace" } }, grip, tabStrip, pauseBtn, addTab);
     const termMount = h("div", { className: "tc-tile-termmount" });
     this.resizeObserver.observe(termMount);
-    const resumeOverlay = buildResumeOverlay((button, permissionMode) => {
+    const resume = buildResumeOverlay((button, permissionMode, model) => {
       const sessionId = this.activeSessionIdForWindow(windowId);
       if (!sessionId) return;
       button.disabled = true;
@@ -371,10 +374,11 @@ export class TerminalCockpit {
       this.pendingFocus.add(sessionId);
       this.deps.send(
         permissionMode === null
-          ? { type: "cockpitResumeSession", sessionId }
-          : { type: "cockpitResumeSession", sessionId, permissionMode },
+          ? { type: "cockpitResumeSession", sessionId, model }
+          : { type: "cockpitResumeSession", sessionId, permissionMode, model },
       );
     });
+    const resumeOverlay = resume.root;
     const bootingOverlay = h(
       "div",
       { className: "tc-tile-booting", attrs: { role: "status", "aria-live": "polite" } },
@@ -395,7 +399,7 @@ export class TerminalCockpit {
 
     wireWindowDrag(this.windowDragHost, head, tile, windowId);
 
-    this.tiles.set(windowId, { tile, tabStrip, metaBar, termMount, resumeOverlay, bootingOverlay, status, activeId: "", announced: "" });
+    this.tiles.set(windowId, { tile, tabStrip, metaBar, termMount, resumeOverlay, resumeModelDd: resume.modelDd, bootingOverlay, status, activeId: "", announced: "" });
   }
 
   private markAttention(sessionId: string, reason: AttentionReason): void {
@@ -595,6 +599,7 @@ export class TerminalCockpit {
       const active = terminals.find((t) => t.sessionId === tile.activeId)!;
       tile.tile.classList.toggle("exited", !active.alive);
       tile.resumeOverlay.classList.toggle("hidden", active.alive);
+      if (!active.alive) tile.resumeModelDd.setDropdownValue(active.model);
       const view = this.views.get(active.sessionId);
       tile.bootingOverlay.classList.toggle("hidden", !active.alive || (view?.gotData ?? false));
       this.renderTileMeta(tile, active);
@@ -640,11 +645,31 @@ export class TerminalCockpit {
         view.initialised = true;
       }
     }
+    const layoutKey = `${this.activeFolder}|${visibleIds.map((w) => `${w}:${this.tiles.get(w)?.activeId ?? ""}`).join(",")}`;
+    if (layoutKey !== this.lastLayoutKey) {
+      this.lastLayoutKey = layoutKey;
+      for (const view of this.views.values()) {
+        if (view.webgl) {
+          view.webgl.dispose();
+          view.webgl = null;
+        }
+        view.webglLost = false;
+      }
+    }
     this.syncRenderers();
     this.fitImmediate();
   }
 
   private syncRenderers(): void {
+    if (!webglUsable()) {
+      for (const view of this.views.values()) {
+        if (view.webgl !== null || view.webglLost || !view.initialised || !this.viewVisible(view)) continue;
+        const handle = attachCanvasRenderer(view.term);
+        if (handle === null) view.webglLost = true;
+        else view.webgl = handle;
+      }
+      return;
+    }
     let active = 0;
     for (const view of this.views.values()) {
       if (view.webgl === null) continue;
@@ -735,6 +760,7 @@ export class TerminalCockpit {
         continue;
       }
       if (stick) view.term.scrollToBottom();
+      view.term.refresh(0, view.term.rows - 1);
       if (view.term.cols === view.lastCols && view.term.rows === view.lastRows) continue;
       view.lastCols = view.term.cols;
       view.lastRows = view.term.rows;

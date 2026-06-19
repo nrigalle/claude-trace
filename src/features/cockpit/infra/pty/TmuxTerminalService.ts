@@ -17,15 +17,16 @@ const TMUX_CONF = [
   "set -g exit-empty off",
   "setw -g aggressive-resize on",
   "set -g window-size latest",
-  "set -g history-limit 5000",
+  "set -g history-limit 50000",
   "set -g focus-events on",
-  "set -g mouse on",
+  "set -g mouse off",
   "set -g set-clipboard on",
+  "set -g allow-passthrough on",
   "set -g extended-keys on",
   "set -g alternate-screen on",
   'set -g default-terminal "tmux-256color"',
   'set -as terminal-features ",xterm-256color:RGB,xterm-256color:clipboard,tmux-256color:RGB,tmux-256color:clipboard"',
-  'set -ga terminal-overrides ",xterm-256color:Tc"',
+  'set -ga terminal-overrides ",xterm-256color:smcup@:rmcup@"',
   "",
 ].join("\n");
 
@@ -52,6 +53,7 @@ export const tmuxAttachArgs = (
 
 const tmuxCapturePaneArgs = (name: string): string[] => [
   "capture-pane",
+  "-e",
   "-p",
   "-J",
   "-S",
@@ -74,13 +76,36 @@ export const findTmux = (): string | null => {
   return null;
 };
 
+const REDRAW_AFTER_RESIZE_MS = 140;
+
 export class TmuxTerminalService extends TerminalServiceBase {
+  private readonly redrawTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
   constructor(
     private readonly tmuxBin: string,
     private readonly confPath: string,
   ) {
     super();
     this.ensureConf();
+  }
+
+  override resize(sessionId: string, cols: number, rows: number): void {
+    super.resize(sessionId, cols, rows);
+    const prev = this.redrawTimers.get(sessionId);
+    if (prev !== undefined) clearTimeout(prev);
+    this.redrawTimers.set(
+      sessionId,
+      setTimeout(() => {
+        this.redrawTimers.delete(sessionId);
+        this.forceRedraw(sessionId);
+      }, REDRAW_AFTER_RESIZE_MS),
+    );
+  }
+
+  override dispose(): void {
+    for (const timer of this.redrawTimers.values()) clearTimeout(timer);
+    this.redrawTimers.clear();
+    super.dispose();
   }
 
   private ensureConf(): string | null {
@@ -163,6 +188,11 @@ export class TmuxTerminalService extends TerminalServiceBase {
 
   kill(sessionId: string): void {
     this.notifyExit(sessionId, 0);
+    const timer = this.redrawTimers.get(sessionId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.redrawTimers.delete(sessionId);
+    }
     const proc = this.forget(sessionId);
     try {
       this.tmux(["kill-session", "-t", tmuxSessionName(sessionId)]);
